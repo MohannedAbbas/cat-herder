@@ -32,7 +32,9 @@ pub trait AgentRuntime {
 }
 
 pub trait RunRepository {
-    async fn save(&self, run: &Run) -> DomainResult<()>;
+    /// Persist (upsert) the run, assigning an id if it is `RunId(0)`, and return the
+    /// stored run.
+    async fn save(&self, run: &Run) -> DomainResult<Run>;
     async fn get(&self, id: RunId) -> DomainResult<Option<Run>>;
     async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>>;
 }

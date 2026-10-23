@@ -159,6 +159,7 @@ dependencies = [
  "cat-herder-application",
  "cat-herder-domain",
  "cat-herder-runtime-agent-sandbox",
+ "cat-herder-store-inmemory",
  "http-body-util",
  "serde_json",
  "tokio",
@@ -170,6 +171,8 @@ name = "cat-herder-application"
 version = "0.1.0"
 dependencies = [
  "cat-herder-domain",
+ "cat-herder-store-inmemory",
+ "tokio",
 ]
 
 [[package]]
@@ -187,6 +190,14 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "cat-herder-store-inmemory"
+version = "0.1.0"
+dependencies = [
+ "cat-herder-domain",
  "tokio",
 ]
 

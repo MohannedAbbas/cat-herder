@@ -1,0 +1,9 @@
+[package]
+name = "cat-herder-store-inmemory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-herder-domain = { path = "../../domain" }
+tokio.workspace = true

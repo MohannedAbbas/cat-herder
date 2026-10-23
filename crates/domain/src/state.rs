@@ -46,6 +46,36 @@ pub fn is_terminal(state: RunState) -> bool {
     )
 }
 
+/// Error returned when an invalid lifecycle transition is attempted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransitionError {
+    pub from: RunState,
+    pub to: RunState,
+}
+
+impl std::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid state transition {:?} -> {:?}", self.from, self.to)
+    }
+}
+
+impl std::error::Error for TransitionError {}
+
+impl crate::entities::Run {
+    /// Attempt to transition this run to `to`, enforcing the lifecycle state machine.
+    pub fn transition(&mut self, to: RunState) -> Result<(), TransitionError> {
+        if can_transition(self.state, to) {
+            self.state = to;
+            Ok(())
+        } else {
+            Err(TransitionError {
+                from: self.state,
+                to,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +160,51 @@ mod tests {
         for s in [Running, AwaitingInput, BudgetPaused, Succeeded, AwaitingReview] {
             assert!(!is_terminal(s), "{s:?} should not be terminal");
         }
+    }
+
+    #[test]
+    fn transition_to_valid_state_succeeds_and_mutates() {
+        let mut run = crate::entities::Run {
+            id: crate::entities::RunId(1),
+            tenant: crate::entities::TenantId(1),
+            kind: crate::entities::RunKind::Agent,
+            state: Queued,
+            max_concurrency: 1,
+            created_at: std::time::SystemTime::now(),
+        };
+        assert!(run.transition(Scheduled).is_ok());
+        assert_eq!(run.state, Scheduled);
+    }
+
+    #[test]
+    fn transition_to_invalid_state_errors_without_mutating() {
+        let mut run = crate::entities::Run {
+            id: crate::entities::RunId(1),
+            tenant: crate::entities::TenantId(1),
+            kind: crate::entities::RunKind::Agent,
+            state: Queued,
+            max_concurrency: 1,
+            created_at: std::time::SystemTime::now(),
+        };
+        let err = run.transition(Running).unwrap_err();
+        assert_eq!(err.from, Queued);
+        assert_eq!(err.to, Running);
+        assert_eq!(run.state, Queued); // unchanged
+    }
+
+    #[test]
+    fn happy_path_walk_reaches_succeeded() {
+        let mut run = crate::entities::Run {
+            id: crate::entities::RunId(1),
+            tenant: crate::entities::TenantId(1),
+            kind: crate::entities::RunKind::Agent,
+            state: Queued,
+            max_concurrency: 1,
+            created_at: std::time::SystemTime::now(),
+        };
+        for next in [Scheduled, PodPending, Running, Succeeded] {
+            run.transition(next).expect("valid transition");
+        }
+        assert_eq!(run.state, Succeeded);
     }
 }

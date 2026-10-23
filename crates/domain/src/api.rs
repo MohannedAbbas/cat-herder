@@ -84,3 +84,13 @@ pub struct RunResponse {
     pub kind: RunKind,
     pub state: RunState,
 }
+
+impl From<&crate::entities::Run> for RunResponse {
+    fn from(run: &crate::entities::Run) -> Self {
+        RunResponse {
+            id: run.id.0,
+            kind: run.kind,
+            state: run.state,
+        }
+    }
+}

@@ -6,3 +6,7 @@ license.workspace = true
 
 [dependencies]
 cat-herder-domain = { path = "../domain" }
+
+[dev-dependencies]
+cat-herder-store-inmemory = { path = "../adapters/store-inmemory" }
+tokio.workspace = true
