@@ -4,6 +4,7 @@ members = [
     "crates/domain",
     "crates/application",
     "crates/adapters/api-http",
+    "crates/adapters/runtime-agent-sandbox",
     "crates/bin/cat-herder",
 ]
 
