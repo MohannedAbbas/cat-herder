@@ -49,7 +49,10 @@ mirrors:
 EOF
 sudo systemctl restart k3s
 
-# 4. bring it up:
+# 4. (once) install agent-sandbox (Sandbox CRDs + controller), the execution substrate:
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.8/sandbox-with-extensions.yaml
+
+# 5. bring it up:
 make tilt   # == tilt up
 ```
 

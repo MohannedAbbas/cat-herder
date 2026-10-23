@@ -11,10 +11,6 @@
 # Allow the local dev cluster context.
 allow_k8s_contexts('default')
 
-# Suppress the "unused image" warning for the harness image (it's referenced by
-# agent-sandbox's SandboxTemplate, which isn't in the chart templates yet).
-update_settings(suppress_unused_image_warnings=['cat-herder-agent-harness'])
-
 # Push built images to the local registry that k3s pulls from.
 default_registry('127.0.0.1:5000')
 
@@ -53,6 +49,6 @@ helm_resource(
     flags=['--create-namespace'],
     deps=['helm/cat-herder'],
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
-    image_keys=['controlPlane.image', 'ui.image'],
-    image_deps=['cat-herder', 'cat-herder-ui'],
+    image_keys=['controlPlane.image', 'harness.image', 'ui.image'],
+    image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui'],
 )

@@ -1,0 +1,17 @@
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: cat-herder-agent
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cat-herder-harness
+    spec:
+      containers:
+        - name: harness
+          image: "{{ .Values.harness.image }}"
