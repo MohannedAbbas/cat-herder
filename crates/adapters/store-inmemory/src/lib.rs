@@ -49,6 +49,11 @@ impl RunRepository for InMemoryRunRepository {
             .collect();
         Ok(runs)
     }
+
+    async fn list_all(&self) -> DomainResult<Vec<Run>> {
+        let runs: Vec<Run> = self.inner.read().await.values().cloned().collect();
+        Ok(runs)
+    }
 }
 
 #[cfg(test)]

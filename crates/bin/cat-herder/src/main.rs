@@ -1,10 +1,14 @@
 //! Cat Herder — control plane binary (composition root).
 //!
-//! Wires the runtime adapter into the API. Data is in-memory mock until Postgres
-//! repositories are implemented.
+//! Wires the runtime adapter and the background reconciler into the API. Data is
+//! in-memory mock until Postgres repositories are implemented.
+
+use std::time::Duration;
 
 use cat_herder_api_http::{router, AppState};
+use cat_herder_application::reconcile_once;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
+use cat_herder_store_inmemory::InMemoryRunRepository;
 
 #[tokio::main]
 async fn main() {
@@ -22,7 +26,24 @@ async fn main() {
         }
     };
 
+    let repo = InMemoryRunRepository::new();
+
+    // Background reconciler: advance active runs (PodPending -> Running, Running ->
+    // Succeeded) based on sandbox status (PLAN.md §6).
+    if let Some(rt) = runtime.clone() {
+        let repo = repo.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                if let Err(e) = reconcile_once(&rt, &repo).await {
+                    eprintln!("reconcile error: {e}");
+                }
+            }
+        });
+    }
+
     let state = AppState {
+        repo,
         runtime,
         ..AppState::default()
     };

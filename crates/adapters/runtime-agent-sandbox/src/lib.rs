@@ -6,6 +6,7 @@
 
 use cat_herder_domain::entities::{Run, RunId, RunState};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
+use cat_herder_domain::reconcile::RuntimeStatus;
 
 use kube::{
     Api, Client,
@@ -82,6 +83,25 @@ impl AgentRuntime for SandboxRuntime {
             .create(&PostParams::default(), &self.sandbox_object(run))
             .await?;
         Ok(())
+    }
+
+    async fn status(&self, id: RunId) -> DomainResult<Option<RuntimeStatus>> {
+        let name = Self::sandbox_name(id);
+        match self.api.get_opt(&name).await? {
+            None => Ok(None),
+            Some(obj) => {
+                let ready = obj.data["status"]["conditions"]
+                    .as_array()
+                    .and_then(|conds| conds.iter().find(|c| c["type"] == "Ready"))
+                    .and_then(|c| c["status"].as_str())
+                    == Some("True");
+                Ok(Some(if ready {
+                    RuntimeStatus::Ready
+                } else {
+                    RuntimeStatus::Pending
+                }))
+            }
+        }
     }
 
     async fn signal(&self, id: RunId, state: RunState) -> DomainResult<()> {

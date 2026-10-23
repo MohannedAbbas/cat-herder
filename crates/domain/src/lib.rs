@@ -13,6 +13,7 @@
 pub mod api;
 pub mod entities;
 pub mod ports;
+pub mod reconcile;
 pub mod state;
 
 pub use entities::*;

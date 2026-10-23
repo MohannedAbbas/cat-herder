@@ -5,6 +5,7 @@
 //! per `PLAN.md` §5.
 
 use crate::entities::{Run, RunId, RunState, TenantId};
+use crate::reconcile::RuntimeStatus;
 
 pub type DomainResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -27,6 +28,8 @@ pub trait TriggerSource {
 /// Outbound (driven): create/watch/signal/terminate agent executions.
 pub trait AgentRuntime {
     async fn spawn(&self, run: &Run) -> DomainResult<()>;
+    /// Report the execution's current status (`None` = gone).
+    async fn status(&self, id: RunId) -> DomainResult<Option<RuntimeStatus>>;
     async fn signal(&self, id: RunId, state: RunState) -> DomainResult<()>;
     async fn terminate(&self, id: RunId) -> DomainResult<()>;
 }
@@ -37,6 +40,8 @@ pub trait RunRepository {
     async fn save(&self, run: &Run) -> DomainResult<Run>;
     async fn get(&self, id: RunId) -> DomainResult<Option<Run>>;
     async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>>;
+    /// All runs (used by the reconciler).
+    async fn list_all(&self) -> DomainResult<Vec<Run>>;
 }
 
 pub trait EventBus {
