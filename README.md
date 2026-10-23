@@ -13,8 +13,10 @@ Kubernetes-native **control plane and governance layer** for AI coding agents.
 | `agent-harness/` | Python Deep Agents + LangGraph harness (runs inside the sandbox pod) |
 | `sandbox/` | Versioned toolchain image (git, ripgrep, runtimes, credential helper) |
 | `knowledge/` | OKF knowledge base (skills/commands), seed |
+| `ui/` | React dashboard (sessions, agents, status) — SPA served by nginx |
 | `helm/cat-herder/` | Umbrella Helm chart (control plane + dependencies + agent-sandbox) |
 | `proto/` | Harness ↔ control plane gRPC contract |
+| `Tiltfile` | Local dev: builds images and installs the chart with [Tilt](https://tilt.dev) |
 
 ## Quickstart
 
@@ -24,6 +26,35 @@ make test    # cargo test
 make run     # cargo run -p cat-herder
 make chart   # helm lint helm/cat-herder   (requires helm)
 ```
+
+## Local dev with Tilt
+
+[Tilt](https://tilt.dev) builds the images and installs the chart, hot-reloading on
+change. Images are pushed to a local registry that k3s pulls from.
+
+```sh
+# 1. (podman only) enable the Docker-compatible socket:
+systemctl --user enable --now podman.socket
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+
+# 2. start the local registry (once):
+podman run -d --name cat-herder-registry -p 127.0.0.1:5000:5000 registry:2
+
+# 3. (once, needs sudo) let k3s pull from the registry:
+sudo tee /etc/rancher/k3s/registries.yaml >/dev/null <<'EOF'
+mirrors:
+  "127.0.0.1:5000":
+    endpoint:
+      - "http://127.0.0.1:5000"
+EOF
+sudo systemctl restart k3s
+
+# 4. bring it up:
+make tilt   # == tilt up
+```
+
+Podman's insecure-registry allowlist for `127.0.0.1:5000` lives in
+`~/.config/containers/registries.conf` (already configured).
 
 ## Toolchain notes
 

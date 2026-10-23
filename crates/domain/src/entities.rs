@@ -2,6 +2,8 @@
 
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
+
 /// Opaque identifiers (newtypes so they cannot be mixed up).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TenantId(pub u64);
@@ -9,14 +11,16 @@ pub struct TenantId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RunId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunKind {
     Agent,
     Workflow,
 }
 
 /// Lifecycle state — the single source of truth (see `PLAN.md` §8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
     Scheduled,
@@ -34,7 +38,8 @@ pub enum RunState {
     Stuck,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
     Approved,
     Rejected,

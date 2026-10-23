@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cat-herder-api
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-api
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  selector:
+    app.kubernetes.io/name: cat-herder-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ .Values.controlPlane.port }}

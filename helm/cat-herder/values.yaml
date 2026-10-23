@@ -2,12 +2,20 @@
 
 namespace: cat-herder
 
+# Image refs are single strings so Tilt can inject locally-built images
+# (see Tiltfile `image_keys`).
 controlPlane:
-  image:
-    repository: ghcr.io/your-org/cat-herder
-    tag: "0.1.0"
+  image: ghcr.io/your-org/cat-herder:0.1.0
   replicas: 1
   port: 8080
+
+harness:
+  image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0
+
+ui:
+  image: ghcr.io/your-org/cat-herder-ui:0.1.0
+  replicas: 1
+  port: 80
 
 # In-cluster dependencies (subcharts: Postgres/NATS/Redis/MinIO).
 dependencies:
@@ -25,4 +33,5 @@ agentSandbox:
 
 ingress:
   enabled: false
+  className: traefik
   host: cat-herder.example.com

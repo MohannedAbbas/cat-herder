@@ -1,4 +1,4 @@
-.PHONY: build test fmt lint run chart harness-image sandbox-image
+.PHONY: build test fmt lint run chart tilt harness-image sandbox-image
 
 build:
 	cargo build
@@ -17,6 +17,9 @@ run:
 
 chart:
 	helm lint helm/cat-herder
+
+tilt:
+	tilt up
 
 harness-image:
 	podman build -t cat-herder-agent-harness:dev -f agent-harness/Containerfile agent-harness

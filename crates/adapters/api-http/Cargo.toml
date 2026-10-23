@@ -9,3 +9,8 @@ cat-herder-domain = { path = "../../domain" }
 cat-herder-application = { path = "../../application" }
 axum.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cat-herder-ui
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-ui
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cat-herder-ui
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.ui.image }}"
+          ports:
+            - containerPort: {{ .Values.ui.port }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.ui.port }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.ui.port }}

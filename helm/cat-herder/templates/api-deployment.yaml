@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          image: "{{ .Values.controlPlane.image }}"
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:

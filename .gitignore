@@ -15,6 +15,9 @@ build/
 *.tgz
 .kube/
 
+# Tilt
+.tiltbuildhistory/
+
 # IDE / OS
 .idea/
 .vscode/
