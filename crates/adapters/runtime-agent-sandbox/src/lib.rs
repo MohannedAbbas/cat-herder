@@ -68,6 +68,10 @@ impl SandboxRuntime {
                                 { "name": "RUN_ID", "value": run.id.0.to_string() },
                                 { "name": "TENANT_ID", "value": run.tenant.0.to_string() },
                             ],
+                            "ports": [{ "containerPort": 8080 }],
+                            "readinessProbe": {
+                                "httpGet": { "path": "/healthz", "port": 8080 },
+                            },
                         }],
                     },
                 },
