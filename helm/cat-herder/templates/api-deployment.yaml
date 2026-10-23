@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cat-herder-api
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-api
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cat-herder-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.controlPlane.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.controlPlane.port }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.controlPlane.port }}

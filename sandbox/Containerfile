@@ -1,0 +1,12 @@
+# Sandbox toolchain image: git, ripgrep, language runtimes, credential helper.
+# Versioned, SBOM-scanned, pinned per harness version (see PLAN.md §7/§19).
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ripgrep curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Language runtimes are added per SandboxTemplate (python3, nodejs, go, …).
+
+# Credential helper is copied from its build output (bin/credential-helper).
+# COPY bin/credential-helper /usr/local/bin/credential-helper

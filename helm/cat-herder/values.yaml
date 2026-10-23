@@ -1,0 +1,28 @@
+# Cat Herder values — see PLAN.md §13/§20.
+
+namespace: cat-herder
+
+controlPlane:
+  image:
+    repository: ghcr.io/your-org/cat-herder
+    tag: "0.1.0"
+  replicas: 1
+  port: 8080
+
+# In-cluster dependencies (subcharts: Postgres/NATS/Redis/MinIO).
+dependencies:
+  postgres:
+    enabled: true
+  nats:
+    enabled: true
+  redis:
+    enabled: true
+  minio:
+    enabled: true
+
+agentSandbox:
+  enabled: true
+
+ingress:
+  enabled: false
+  host: cat-herder.example.com

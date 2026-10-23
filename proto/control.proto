@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package cat_herder.v1;
+
+// Harness <-> control plane control channel (see PLAN.md §6/§9/§14).
+// NOTE: protoc/buf is required to generate code — not yet wired into the build.
+
+service HarnessControl {
+  rpc StartRun(StartRunRequest) returns (stream RunEvent);
+  rpc Signal(SignalRequest) returns (SignalResponse);
+}
+
+message StartRunRequest {
+  uint64 run_id = 1;
+  string task_spec = 2;
+  string kind = 3; // "agent" | "workflow"
+}
+
+message SignalRequest {
+  uint64 run_id = 1;
+  string signal = 2; // "pause" | "resume" | "cancel"
+}
+
+message SignalResponse {}
+
+message RunEvent {
+  uint64 run_id = 1;
+  uint64 seq = 2;
+  string type = 3;
+  bytes payload = 4;
+}

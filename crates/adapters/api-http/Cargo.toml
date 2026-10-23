@@ -1,0 +1,11 @@
+[package]
+name = "cat-herder-api-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-herder-domain = { path = "../../domain" }
+cat-herder-application = { path = "../../application" }
+axum.workspace = true
+tokio.workspace = true

@@ -1,0 +1,21 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# K8s / Helm
+*.tgz
+.kube/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

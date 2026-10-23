@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/application",
+    "crates/adapters/api-http",
+    "crates/bin/cat-herder",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/your-org/cat-herder"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
