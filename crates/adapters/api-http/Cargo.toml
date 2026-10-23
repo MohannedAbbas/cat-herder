@@ -10,6 +10,7 @@ cat-herder-application = { path = "../../application" }
 cat-herder-runtime-agent-sandbox = { path = "../runtime-agent-sandbox" }
 cat-herder-store-inmemory = { path = "../store-inmemory" }
 axum.workspace = true
+serde.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

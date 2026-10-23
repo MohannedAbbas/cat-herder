@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
 };
 
 use cat_herder_application::start_run;
@@ -17,6 +17,7 @@ use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::InMemoryRunRepository;
 
 mod mock;
+mod webhook;
 
 /// Application state: the data the handlers serve. In-memory mock data by default;
 /// will be backed by Postgres repositories later.
@@ -46,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run))
+        .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
@@ -96,6 +98,23 @@ async fn get_run(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(RunResponse::from(&run)))
+}
+
+/// Accept an external webhook, normalize it, and trigger a run.
+async fn webhook_generic(
+    State(state): State<AppState>,
+    Json(payload): Json<webhook::WebhookPayload>,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let runtime = state.runtime.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "execution runtime not configured".into(),
+    ))?;
+
+    let run = start_run(webhook::normalize(payload), runtime, &state.repo)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }
 
 // --- Session / agent handlers --------------------------------------------

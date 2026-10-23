@@ -161,6 +161,7 @@ dependencies = [
  "cat-herder-runtime-agent-sandbox",
  "cat-herder-store-inmemory",
  "http-body-util",
+ "serde",
  "serde_json",
  "tokio",
  "tower",

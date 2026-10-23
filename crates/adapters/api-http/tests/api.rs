@@ -122,3 +122,14 @@ async fn get_unknown_run_returns_404() {
     let (status, _) = send(app(), "/v1/runs/999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn webhook_without_runtime_returns_503() {
+    let (status, _) = post_json(
+        app(),
+        "/v1/webhooks/generic",
+        r#"{"task_spec":"from webhook","dedup_key":"delivery-1"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
