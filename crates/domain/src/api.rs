@@ -63,3 +63,24 @@ pub struct Session {
     pub updated_at: String,
     pub runs: Vec<SessionRun>,
 }
+
+/// Request body for `POST /v1/runs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRunRequest {
+    pub task_spec: String,
+    pub kind: RunKind,
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: u32,
+}
+
+fn default_max_concurrency() -> u32 {
+    1
+}
+
+/// Response body for `POST /v1/runs`.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunResponse {
+    pub id: u64,
+    pub kind: RunKind,
+    pub state: RunState,
+}

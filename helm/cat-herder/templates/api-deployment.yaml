@@ -16,9 +16,15 @@ spec:
       labels:
         app.kubernetes.io/name: cat-herder-api
     spec:
+      serviceAccountName: cat-herder-api
       containers:
         - name: api
           image: "{{ .Values.controlPlane.image }}"
+          env:
+            - name: CAT_HERDER_NAMESPACE
+              value: {{ .Values.namespace | default "cat-herder" }}
+            - name: CAT_HERDER_HARNESS_IMAGE
+              value: "{{ .Values.harness.image }}"
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:

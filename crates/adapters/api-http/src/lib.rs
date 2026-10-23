@@ -1,14 +1,21 @@
 //! HTTP adapter (Axum): exposes the control-plane REST API (see `PLAN.md` §14).
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
 };
 
-use cat_herder_domain::api::{AgentTemplate, Session, SessionRun, SessionSummary};
-use cat_herder_domain::entities::RunState;
+use cat_herder_domain::api::{
+    AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
+};
+use cat_herder_domain::entities::{Run, RunId, RunState, TenantId};
+use cat_herder_domain::ports::AgentRuntime;
+use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 mod mock;
 
@@ -18,6 +25,8 @@ mod mock;
 pub struct AppState {
     pub agents: Vec<AgentTemplate>,
     pub sessions: Vec<Session>,
+    /// Optional execution runtime (present in the real binary, absent in tests/mock).
+    pub runtime: Option<SandboxRuntime>,
 }
 
 impl Default for AppState {
@@ -25,6 +34,7 @@ impl Default for AppState {
         Self {
             agents: mock::agents(),
             sessions: mock::sessions(),
+            runtime: None,
         }
     }
 }
@@ -33,6 +43,7 @@ impl Default for AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/runs", post(create_run))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
@@ -41,6 +52,44 @@ pub fn router(state: AppState) -> Router {
 }
 
 // --- Handlers -------------------------------------------------------------
+
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Accept a task and spawn a Sandbox for it via the execution runtime.
+async fn create_run(
+    State(state): State<AppState>,
+    Json(req): Json<CreateRunRequest>,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let Some(runtime) = &state.runtime else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "execution runtime not configured".into(),
+        ));
+    };
+
+    let run = Run {
+        id: RunId(NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed)),
+        tenant: TenantId(1), // placeholder until multi-tenancy is wired
+        kind: req.kind,
+        state: RunState::Queued,
+        max_concurrency: req.max_concurrency,
+        created_at: SystemTime::now(),
+    };
+
+    runtime
+        .spawn(&run)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RunResponse {
+            id: run.id.0,
+            kind: run.kind,
+            state: run.state,
+        }),
+    ))
+}
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionSummary>> {
     Json(state.sessions.iter().map(summarize).collect())

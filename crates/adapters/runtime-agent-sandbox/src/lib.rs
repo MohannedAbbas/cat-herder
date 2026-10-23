@@ -14,6 +14,7 @@ use kube::{
 };
 
 /// Creates and manages agent-sandbox `Sandbox` resources.
+#[derive(Clone)]
 pub struct SandboxRuntime {
     api: Api<DynamicObject>,
     harness_image: String,

@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 cat-herder-api-http = { path = "../../adapters/api-http" }
+cat-herder-runtime-agent-sandbox = { path = "../../adapters/runtime-agent-sandbox" }
 axum.workspace = true
 tokio.workspace = true

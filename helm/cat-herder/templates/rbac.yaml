@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cat-herder-api
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-api
+    app.kubernetes.io/part-of: cat-herder
+rules:
+  # The control plane creates/manages agent sandboxes (execution substrate).
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxclaims"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cat-herder-api
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-api
+    app.kubernetes.io/part-of: cat-herder
+subjects:
+  - kind: ServiceAccount
+    name: cat-herder-api
+    namespace: {{ .Values.namespace | default "cat-herder" }}
+roleRef:
+  kind: Role
+  name: cat-herder-api
+  apiGroup: rbac.authorization.k8s.io

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 cat-herder-domain = { path = "../../domain" }
 cat-herder-application = { path = "../../application" }
+cat-herder-runtime-agent-sandbox = { path = "../runtime-agent-sandbox" }
 axum.workspace = true
 tokio.workspace = true
 
