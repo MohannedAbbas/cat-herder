@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 
 use cat_herder_application::{Outcome, complete_run, start_run};
@@ -15,19 +15,26 @@ use cat_herder_domain::entities::{RunId, RunState, TenantId};
 use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, SessionRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
-pub use repo::{AgentRepo, RunRepo, SessionRepo};
+pub use auth::Auth;
+pub use repo::{AgentRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo};
 
+mod admin;
+mod auth;
 mod mcp;
 mod repo;
 mod webhook;
 
-/// Application state: the data the handlers serve. Runs, agents, and sessions are
-/// backed by their repositories (Postgres in production, in-memory fallback).
+/// Application state: the data the handlers serve. Runs, agents, sessions,
+/// providers, and models are backed by their repositories (Postgres in production,
+/// in-memory fallback).
 #[derive(Clone)]
 pub struct AppState {
     pub agents: AgentRepo,
+    pub providers: ProviderRepo,
+    pub models: ModelRepo,
     pub sessions: SessionRepo,
     pub repo: RunRepo,
+    pub auth: Auth,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
 }
@@ -36,8 +43,11 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             agents: AgentRepo::InMemory(Default::default()),
+            providers: ProviderRepo::InMemory(Default::default()),
+            models: ModelRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
+            auth: Auth::new("admin", "admin"),
             runtime: None,
         }
     }
@@ -56,6 +66,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
         .route("/v1/agents/{id}", get(get_agent))
+        // auth
+        .route("/v1/auth/login", post(admin::login))
+        .route("/v1/auth/logout", post(admin::logout))
+        .route("/v1/auth/me", get(admin::me))
+        // admin
+        .route("/v1/admin/agents/{id}", put(admin::upsert_agent).delete(admin::delete_agent))
+        .route("/v1/admin/providers", get(admin::list_providers))
+        .route(
+            "/v1/admin/providers/{id}",
+            put(admin::upsert_provider).delete(admin::delete_provider),
+        )
+        .route("/v1/admin/models", get(admin::list_models))
+        .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
         .with_state(state)
 }
 

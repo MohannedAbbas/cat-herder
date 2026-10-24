@@ -5,10 +5,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cat_herder_domain::api::{AgentTemplate, Session, SessionRun, now_iso};
+use cat_herder_domain::api::{AgentTemplate, Model, Provider, Session, SessionRun, now_iso};
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
-use cat_herder_domain::ports::{AgentRepository, DomainResult, RunRepository, SessionRepository};
+use cat_herder_domain::ports::{
+    AgentRepository, DomainResult, ModelRepository, ProviderRepository, RunRepository,
+    SessionRepository,
+};
 use tokio::sync::RwLock;
 
 /// A process-local, `Arc`-shared run store.
@@ -62,13 +65,13 @@ impl RunRepository for InMemoryRunRepository {
 /// In-memory agent catalog, seeded from the domain's default reference data.
 #[derive(Clone)]
 pub struct InMemoryAgentRepository {
-    agents: Arc<Vec<AgentTemplate>>,
+    agents: Arc<RwLock<Vec<AgentTemplate>>>,
 }
 
 impl InMemoryAgentRepository {
     pub fn new(model_overrides: &HashMap<String, String>) -> Self {
         Self {
-            agents: Arc::new(catalog::default_agents(model_overrides)),
+            agents: Arc::new(RwLock::new(catalog::default_agents(model_overrides))),
         }
     }
 }
@@ -81,11 +84,104 @@ impl Default for InMemoryAgentRepository {
 
 impl AgentRepository for InMemoryAgentRepository {
     async fn list(&self) -> DomainResult<Vec<AgentTemplate>> {
-        Ok(self.agents.as_ref().clone())
+        Ok(self.agents.read().await.clone())
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>> {
-        Ok(self.agents.iter().find(|a| a.id == id).cloned())
+        Ok(self.agents.read().await.iter().find(|a| a.id == id).cloned())
+    }
+
+    async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate> {
+        let mut agents = self.agents.write().await;
+        if let Some(existing) = agents.iter_mut().find(|a| a.id == agent.id) {
+            *existing = agent.clone();
+        } else {
+            agents.push(agent.clone());
+        }
+        Ok(agent.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.agents.write().await.retain(|a| a.id != id);
+        Ok(())
+    }
+}
+
+/// In-memory provider registry, seeded from the domain's defaults.
+#[derive(Clone)]
+pub struct InMemoryProviderRepository {
+    providers: Arc<RwLock<Vec<Provider>>>,
+}
+
+impl Default for InMemoryProviderRepository {
+    fn default() -> Self {
+        Self {
+            providers: Arc::new(RwLock::new(catalog::default_providers())),
+        }
+    }
+}
+
+impl ProviderRepository for InMemoryProviderRepository {
+    async fn list(&self) -> DomainResult<Vec<Provider>> {
+        Ok(self.providers.read().await.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Provider>> {
+        Ok(self.providers.read().await.iter().find(|p| p.id == id).cloned())
+    }
+
+    async fn save(&self, provider: &Provider) -> DomainResult<Provider> {
+        let mut providers = self.providers.write().await;
+        if let Some(existing) = providers.iter_mut().find(|p| p.id == provider.id) {
+            *existing = provider.clone();
+        } else {
+            providers.push(provider.clone());
+        }
+        Ok(provider.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.providers.write().await.retain(|p| p.id != id);
+        Ok(())
+    }
+}
+
+/// In-memory model registry, seeded from the domain's defaults.
+#[derive(Clone)]
+pub struct InMemoryModelRepository {
+    models: Arc<RwLock<Vec<Model>>>,
+}
+
+impl Default for InMemoryModelRepository {
+    fn default() -> Self {
+        Self {
+            models: Arc::new(RwLock::new(catalog::default_models())),
+        }
+    }
+}
+
+impl ModelRepository for InMemoryModelRepository {
+    async fn list(&self) -> DomainResult<Vec<Model>> {
+        Ok(self.models.read().await.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Model>> {
+        Ok(self.models.read().await.iter().find(|m| m.id == id).cloned())
+    }
+
+    async fn save(&self, model: &Model) -> DomainResult<Model> {
+        let mut models = self.models.write().await;
+        if let Some(existing) = models.iter_mut().find(|m| m.id == model.id) {
+            *existing = model.clone();
+        } else {
+            models.push(model.clone());
+        }
+        Ok(model.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.models.write().await.retain(|m| m.id != id);
+        Ok(())
     }
 }
 

@@ -5,7 +5,7 @@ use cat_herder_domain::ports::{AgentRepository, DomainResult};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use crate::codec::{decode_tier, decode_tools};
+use crate::codec::{decode_tier, decode_tools, encode_tier, encode_tools};
 use crate::schema::PostgresStore;
 
 #[derive(Clone)]
@@ -35,6 +35,36 @@ impl AgentRepository for PostgresAgentRepository {
             .fetch_optional(&self.pool)
             .await?;
         row.as_ref().map(agent_from_row).transpose().map_err(Into::into)
+    }
+
+    async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate> {
+        sqlx::query(
+            "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO UPDATE SET \
+               name = EXCLUDED.name, description = EXCLUDED.description, image = EXCLUDED.image, \
+               runtime_tier = EXCLUDED.runtime_tier, model = EXCLUDED.model, tools = EXCLUDED.tools, \
+               max_concurrency = EXCLUDED.max_concurrency",
+        )
+        .bind(agent.id.as_str())
+        .bind(agent.name.as_str())
+        .bind(agent.description.as_str())
+        .bind(agent.image.as_str())
+        .bind(encode_tier(agent.runtime_tier))
+        .bind(agent.model.as_str())
+        .bind(encode_tools(&agent.tools))
+        .bind(agent.max_concurrency as i32)
+        .execute(&self.pool)
+        .await?;
+        Ok(agent.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        sqlx::query("DELETE FROM agents WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

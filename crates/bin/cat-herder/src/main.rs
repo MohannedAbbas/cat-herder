@@ -6,12 +6,15 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use cat_herder_api_http::{router, AppState, AgentRepo, RunRepo, SessionRepo};
+use cat_herder_api_http::{
+    router, AppState, AgentRepo, Auth, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
+};
 use cat_herder_application::reconcile_once;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
-use cat_herder_store_inmemory::InMemoryAgentRepository;
+use cat_herder_store_inmemory::{InMemoryAgentRepository, InMemoryModelRepository, InMemoryProviderRepository};
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresRunRepository, PostgresSessionRepository, PostgresStore,
+    PostgresAgentRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository, PostgresStore,
 };
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -23,10 +26,12 @@ fn agent_models() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// The three repositories (run/agent/session), all in-memory or all Postgres.
+/// The repositories (run/agent/session/provider/model), all in-memory or all Postgres.
 struct Repos {
     run: RunRepo,
     agents: AgentRepo,
+    providers: ProviderRepo,
+    models: ModelRepo,
     sessions: SessionRepo,
 }
 
@@ -35,6 +40,8 @@ impl Repos {
         Self {
             run: RunRepo::InMemory(Default::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
+            providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
+            models: ModelRepo::InMemory(InMemoryModelRepository::default()),
             sessions: SessionRepo::InMemory(Default::default()),
         }
     }
@@ -59,6 +66,8 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                 return Repos {
                     run: RunRepo::Postgres(PostgresRunRepository::new(&store)),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
+                    providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
+                    models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
                     sessions: SessionRepo::Postgres(PostgresSessionRepository::new(&store)),
                 };
             }
@@ -112,10 +121,20 @@ async fn main() {
         });
     }
 
+    // Admin credentials (seeded via the chart's Secret; "admin"/"admin" fallback for
+    // local dev).
+    let admin_user = std::env::var("CAT_HERDER_ADMIN_USER").unwrap_or_else(|_| "admin".into());
+    let admin_password =
+        std::env::var("CAT_HERDER_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
+    let auth = Auth::new(admin_user, &admin_password);
+
     let state = AppState {
         repo: repos.run,
         agents: repos.agents,
+        providers: repos.providers,
+        models: repos.models,
         sessions: repos.sessions,
+        auth,
         runtime,
     };
 

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::{AgentTemplate, RuntimeTier, Session, SessionRun};
+use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun};
 use crate::entities::{RunKind, RunState};
 
 /// Build the default agent catalog, applying per-agent model overrides (id → model)
@@ -76,6 +76,49 @@ mod tests {
         assert_eq!(agents.len(), 3);
         assert!(agents.iter().all(|a| a.model.contains(':')));
     }
+}
+
+/// Default LLM providers. The API key is referenced by a Kubernetes Secret name
+/// (`api_key_secret`), never stored or returned here.
+pub fn default_providers() -> Vec<Provider> {
+    vec![
+        Provider {
+            id: "deepseek".into(),
+            name: "DeepSeek".into(),
+            base_url: "https://api.deepseek.com".into(),
+            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret_key: "api-key".into(),
+            enabled: true,
+        },
+        Provider {
+            id: "openai".into(),
+            name: "OpenAI".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret_key: "api-key".into(),
+            enabled: true,
+        },
+        Provider {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            base_url: "https://api.anthropic.com".into(),
+            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret_key: "api-key".into(),
+            enabled: true,
+        },
+    ]
+}
+
+/// Default models, grouped by provider. A full model string is
+/// `{provider_id}:{model_id}`.
+pub fn default_models() -> Vec<Model> {
+    vec![
+        Model { id: "deepseek-chat".into(), provider_id: "deepseek".into(), display_name: "DeepSeek Chat (V3)".into() },
+        Model { id: "deepseek-reasoner".into(), provider_id: "deepseek".into(), display_name: "DeepSeek Reasoner (R1)".into() },
+        Model { id: "gpt-5.5".into(), provider_id: "openai".into(), display_name: "GPT-5.5".into() },
+        Model { id: "gpt-4o".into(), provider_id: "openai".into(), display_name: "GPT-4o".into() },
+        Model { id: "claude-sonnet-4-6".into(), provider_id: "anthropic".into(), display_name: "Claude Sonnet 4.6".into() },
+    ]
 }
 
 pub fn default_sessions() -> Vec<Session> {

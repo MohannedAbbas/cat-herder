@@ -6,11 +6,15 @@
 
 mod agent;
 mod codec;
+mod model;
+mod provider;
 mod run;
 mod schema;
 mod session;
 
 pub use agent::PostgresAgentRepository;
+pub use model::PostgresModelRepository;
+pub use provider::PostgresProviderRepository;
 pub use run::PostgresRunRepository;
 pub use schema::PostgresStore;
 pub use session::PostgresSessionRepository;

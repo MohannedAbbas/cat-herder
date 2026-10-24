@@ -4,7 +4,7 @@
 //! `dyn`-object-safe, so application services use generics (not `Box<dyn …>`),
 //! per `PLAN.md` §5.
 
-use crate::api::{AgentTemplate, Session, SessionRun};
+use crate::api::{AgentTemplate, Model, Provider, Session, SessionRun};
 use crate::entities::{Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
@@ -56,6 +56,26 @@ pub trait RunRepository {
 pub trait AgentRepository {
     async fn list(&self) -> DomainResult<Vec<AgentTemplate>>;
     async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>>;
+    /// Upsert an agent template.
+    async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate>;
+    /// Delete an agent template.
+    async fn delete(&self, id: &str) -> DomainResult<()>;
+}
+
+/// LLM provider registry.
+pub trait ProviderRepository {
+    async fn list(&self) -> DomainResult<Vec<Provider>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<Provider>>;
+    async fn save(&self, provider: &Provider) -> DomainResult<Provider>;
+    async fn delete(&self, id: &str) -> DomainResult<()>;
+}
+
+/// Model registry (models belong to a provider).
+pub trait ModelRepository {
+    async fn list(&self) -> DomainResult<Vec<Model>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<Model>>;
+    async fn save(&self, model: &Model) -> DomainResult<Model>;
+    async fn delete(&self, id: &str) -> DomainResult<()>;
 }
 
 /// Read-only session store (runs grouped into sessions, `PLAN.md` §12).

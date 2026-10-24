@@ -18,6 +18,12 @@ agents:
     agent-reviewer: "deepseek:deepseek-chat"
     agent-docs: "deepseek:deepseek-reasoner"
 
+# Admin login (local auth). The control plane bcrypt-hashes `password` at startup;
+# it lives only in a Secret. Override in production.
+admin:
+  username: admin
+  password: admin-change-me
+
 # Image refs are single strings so Tilt can inject locally-built images
 # (see Tiltfile `image_keys`).
 controlPlane:

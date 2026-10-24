@@ -29,6 +29,16 @@ spec:
               value: {{ .Values.model | quote }}
             - name: CAT_HERDER_AGENT_MODELS
               value: {{ .Values.agents.models | toJson | quote }}
+            - name: CAT_HERDER_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cat-herder-admin
+                  key: username
+            - name: CAT_HERDER_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cat-herder-admin
+                  key: password
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:

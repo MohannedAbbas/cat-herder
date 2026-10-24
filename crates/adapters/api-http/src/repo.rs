@@ -2,16 +2,19 @@
 //! aggregate: in-memory for tests/single-replica dev fallback, Postgres for
 //! production persistence (wired in `crates/bin/cat-herder`).
 
-use cat_herder_domain::api::{AgentTemplate, Session, SessionRun};
+use cat_herder_domain::api::{AgentTemplate, Model, Provider, Session, SessionRun};
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, DomainResult, RunRepository, SessionRepository,
+    AgentRepository, DomainResult, ModelRepository, ProviderRepository, RunRepository,
+    SessionRepository,
 };
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryRunRepository, InMemorySessionRepository,
+    InMemoryAgentRepository, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySessionRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresAgentRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository,
 };
 
 #[derive(Clone)]
@@ -68,6 +71,92 @@ impl AgentRepository for AgentRepo {
         match self {
             AgentRepo::InMemory(r) => r.get(id).await,
             AgentRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate> {
+        match self {
+            AgentRepo::InMemory(r) => r.save(agent).await,
+            AgentRepo::Postgres(p) => p.save(agent).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            AgentRepo::InMemory(r) => r.delete(id).await,
+            AgentRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ProviderRepo {
+    InMemory(InMemoryProviderRepository),
+    Postgres(PostgresProviderRepository),
+}
+
+impl ProviderRepository for ProviderRepo {
+    async fn list(&self) -> DomainResult<Vec<Provider>> {
+        match self {
+            ProviderRepo::InMemory(r) => r.list().await,
+            ProviderRepo::Postgres(p) => p.list().await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Provider>> {
+        match self {
+            ProviderRepo::InMemory(r) => r.get(id).await,
+            ProviderRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, provider: &Provider) -> DomainResult<Provider> {
+        match self {
+            ProviderRepo::InMemory(r) => r.save(provider).await,
+            ProviderRepo::Postgres(p) => p.save(provider).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            ProviderRepo::InMemory(r) => r.delete(id).await,
+            ProviderRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ModelRepo {
+    InMemory(InMemoryModelRepository),
+    Postgres(PostgresModelRepository),
+}
+
+impl ModelRepository for ModelRepo {
+    async fn list(&self) -> DomainResult<Vec<Model>> {
+        match self {
+            ModelRepo::InMemory(r) => r.list().await,
+            ModelRepo::Postgres(p) => p.list().await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Model>> {
+        match self {
+            ModelRepo::InMemory(r) => r.get(id).await,
+            ModelRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, model: &Model) -> DomainResult<Model> {
+        match self {
+            ModelRepo::InMemory(r) => r.save(model).await,
+            ModelRepo::Postgres(p) => p.save(model).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            ModelRepo::InMemory(r) => r.delete(id).await,
+            ModelRepo::Postgres(p) => p.delete(id).await,
         }
     }
 }

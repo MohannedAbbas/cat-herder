@@ -31,26 +31,58 @@ impl PostgresStore {
 }
 
 async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainResult<()> {
-    // Reference agent catalog (idempotent upsert so model overrides apply on redeploy).
-    for agent in catalog::default_agents(agent_models) {
-        sqlx::query(
-            "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (id) DO UPDATE SET \
-               name = EXCLUDED.name, description = EXCLUDED.description, image = EXCLUDED.image, \
-               runtime_tier = EXCLUDED.runtime_tier, model = EXCLUDED.model, tools = EXCLUDED.tools, \
-               max_concurrency = EXCLUDED.max_concurrency",
-        )
-        .bind(agent.id.as_str())
-        .bind(agent.name.as_str())
-        .bind(agent.description.as_str())
-        .bind(agent.image.as_str())
-        .bind(encode_tier(agent.runtime_tier))
-        .bind(agent.model.as_str())
-        .bind(encode_tools(&agent.tools))
-        .bind(agent.max_concurrency as i32)
-        .execute(pool)
-        .await?;
+    // Reference data is seeded only when its table is empty, so admin edits (via the
+    // admin UI) persist across restarts instead of being overwritten.
+    let agents: i64 = sqlx::query_scalar("SELECT count(*) FROM agents").fetch_one(pool).await?;
+    if agents == 0 {
+        for agent in catalog::default_agents(agent_models) {
+            sqlx::query(
+                "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(agent.id.as_str())
+            .bind(agent.name.as_str())
+            .bind(agent.description.as_str())
+            .bind(agent.image.as_str())
+            .bind(encode_tier(agent.runtime_tier))
+            .bind(agent.model.as_str())
+            .bind(encode_tools(&agent.tools))
+            .bind(agent.max_concurrency as i32)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    let providers: i64 = sqlx::query_scalar("SELECT count(*) FROM providers").fetch_one(pool).await?;
+    if providers == 0 {
+        for provider in catalog::default_providers() {
+            sqlx::query(
+                "INSERT INTO providers (id, name, base_url, api_key_secret, api_key_secret_key, enabled) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(provider.id.as_str())
+            .bind(provider.name.as_str())
+            .bind(provider.base_url.as_str())
+            .bind(provider.api_key_secret.as_str())
+            .bind(provider.api_key_secret_key.as_str())
+            .bind(provider.enabled)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    let models: i64 = sqlx::query_scalar("SELECT count(*) FROM models").fetch_one(pool).await?;
+    if models == 0 {
+        for model in catalog::default_models() {
+            sqlx::query(
+                "INSERT INTO models (id, provider_id, display_name) VALUES ($1, $2, $3)",
+            )
+            .bind(model.id.as_str())
+            .bind(model.provider_id.as_str())
+            .bind(model.display_name.as_str())
+            .execute(pool)
+            .await?;
+        }
     }
 
     // Demo sessions + their runs (idempotent).

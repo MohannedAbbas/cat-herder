@@ -316,3 +316,90 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
     let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert_eq!(v["state"], "running");
 }
+
+// --- auth / admin ----------------------------------------------------------
+
+async fn login(app: Router) -> (StatusCode, String) {
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"admin","password":"admin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let cookie = res
+        .headers()
+        .get("set-cookie")
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    (status, cookie)
+}
+
+#[tokio::test]
+async fn login_returns_session_cookie() {
+    let (status, cookie) = login(app()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cookie.contains("session="), "cookie was: {cookie}");
+}
+
+#[tokio::test]
+async fn login_rejects_bad_credentials() {
+    let res = app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"admin","password":"wrong"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_endpoint_requires_auth() {
+    let res = app()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/admin/providers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_upsert_provider_with_session() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/admin/providers/deepseek")
+                .header("content-type", "application/json")
+                .header("cookie", cookie)
+                .body(Body::from(
+                    r#"{"id":"deepseek","name":"DeepSeek","baseUrl":"https://api.deepseek.com","apiKeySecret":"cat-herder-deepseek","apiKeySecretKey":"api-key","enabled":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["id"], "deepseek");
+    assert_eq!(v["apiKeySecret"], "cat-herder-deepseek");
+}

@@ -68,6 +68,28 @@ pub struct Session {
     pub runs: Vec<SessionRun>,
 }
 
+/// An LLM provider (e.g. "deepseek", "openai"). The API key is referenced by a
+/// Kubernetes Secret name/key and is never returned by the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Provider {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub api_key_secret: String,
+    pub api_key_secret_key: String,
+    pub enabled: bool,
+}
+
+/// A model within a provider. A full model string is `{provider_id}:{model_id}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub id: String,
+    pub provider_id: String,
+    pub display_name: String,
+}
+
 /// Request body for `POST /v1/runs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRunRequest {
