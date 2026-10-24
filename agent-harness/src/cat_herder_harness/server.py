@@ -146,8 +146,15 @@ def main() -> None:
     task_spec = os.environ.get("TASK_SPEC", "").strip()
     model = os.environ.get("MODEL", "").strip()
 
-    if not task_spec or not model:
-        print("no TASK_SPEC/MODEL configured; idling (health only)", flush=True)
+    if not task_spec:
+        print("no TASK_SPEC configured; idling (health only)", flush=True)
+        threading.Event().wait()
+        return
+
+    if not model:
+        # A run with no agent/model selected — fail cleanly instead of hanging.
+        print("no MODEL configured for this run; reporting failure", flush=True)
+        report_event("finished", status="failed")
         threading.Event().wait()
         return
 

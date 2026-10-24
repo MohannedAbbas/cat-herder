@@ -101,6 +101,30 @@ pub fn router(state: AppState) -> Router {
 
 // --- Run handlers ---------------------------------------------------------
 
+/// Resolve the model for a run: an explicit `model` wins, else the selected agent's
+/// model. Returns `None` when neither is provided (models are agent-specific).
+async fn resolve_model(
+    state: &AppState,
+    explicit: Option<String>,
+    agent_id: Option<String>,
+) -> Result<Option<String>, (StatusCode, String)> {
+    match explicit {
+        Some(m) => Ok(Some(m)),
+        None => match agent_id {
+            Some(id) => {
+                let agent = state
+                    .agents
+                    .get(&id)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .ok_or((StatusCode::NOT_FOUND, format!("agent '{id}' not found")))?;
+                Ok(Some(agent.model).filter(|m| !m.is_empty()))
+            }
+            None => Ok(None),
+        },
+    }
+}
+
 /// Accept a task, orchestrate it through the lifecycle, and spawn a Sandbox.
 async fn create_run(
     State(state): State<AppState>,
@@ -111,19 +135,10 @@ async fn create_run(
         "execution runtime not configured".into(),
     ))?;
 
-    // Resolve the model: explicit `model` wins, else the selected agent's model.
-    let model = match req.model {
-        Some(m) => Some(m),
-        None => match req.agent_id {
-            Some(agent_id) => state
-                .agents
-                .get(&agent_id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .map(|a| a.model),
-            None => None,
-        },
-    };
+    // Models are agent-specific; a run needs a resolvable model.
+    let model = resolve_model(&state, req.model, req.agent_id)
+        .await?
+        .ok_or((StatusCode::BAD_REQUEST, "agent_id or model is required".to_string()))?;
 
     let run_req = RunRequest {
         tenant: TenantId(1), // placeholder until multi-tenancy is wired
@@ -133,7 +148,7 @@ async fn create_run(
         max_concurrency: req.max_concurrency,
         trigger: "api".into(),
         actor: req.actor,
-        model,
+        model: Some(model),
         repo: req.repo,
         language: req.language,
     };
@@ -235,7 +250,15 @@ async fn webhook_generic(
         "execution runtime not configured".into(),
     ))?;
 
-    let run = start_run(webhook::normalize(payload), runtime, &state.repo, &state.sessions)
+    let agent_id = payload.agent_id.clone();
+    let mut req = webhook::normalize(payload);
+    // Models are agent-specific: resolve from agent_id or the payload's explicit model.
+    let model = resolve_model(&state, req.model.take(), agent_id)
+        .await?
+        .ok_or((StatusCode::BAD_REQUEST, "agent_id or model is required".to_string()))?;
+    req.model = Some(model);
+
+    let run = start_run(req, runtime, &state.repo, &state.sessions)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

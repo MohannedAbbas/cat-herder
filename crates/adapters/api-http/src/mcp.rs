@@ -84,6 +84,7 @@ fn tools() -> Vec<Value> {
                     "max_concurrency": { "type": "integer" },
                     "actor": { "type": "string", "description": "Who triggered the run" },
                     "model": { "type": "string", "description": "Agent model" },
+                    "agent_id": { "type": "string", "description": "Agent template to use (its model applies)" },
                     "repo": { "type": "string", "description": "Repository" },
                     "language": { "type": "string", "description": "Primary coding language" }
                 },
@@ -126,6 +127,13 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 return ("execution runtime not configured".into(), true);
             };
 
+            // Models are agent-specific: resolve from agent_id or the explicit model.
+            let model = match super::resolve_model(state, opt("model"), opt("agent_id")).await {
+                Ok(Some(m)) => m,
+                Ok(None) => return ("agent_id or model is required".into(), true),
+                Err((_, msg)) => return (msg, true),
+            };
+
             let req = RunRequest {
                 tenant: TenantId(1),
                 kind,
@@ -134,7 +142,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 max_concurrency,
                 trigger: "mcp".into(),
                 actor: opt("actor"),
-                model: opt("model"),
+                model: Some(model),
                 repo: opt("repo"),
                 language: opt("language"),
             };

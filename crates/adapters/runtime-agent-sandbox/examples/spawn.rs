@@ -15,7 +15,7 @@ const HARNESS_IMAGE: &str = "127.0.0.1:5000/cat-herder-agent-harness:tilt-480160
 
 #[tokio::main]
 async fn main() -> DomainResult<()> {
-    let rt = SandboxRuntime::new("cat-herder", HARNESS_IMAGE, "").await?;
+    let rt = SandboxRuntime::new("cat-herder", HARNESS_IMAGE).await?;
 
     let run = Run {
         id: RunId(999),

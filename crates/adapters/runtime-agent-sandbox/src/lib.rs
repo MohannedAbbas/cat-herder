@@ -27,7 +27,6 @@ pub struct SandboxRuntime {
     secrets: Api<Secret>,
     namespace: String,
     harness_image: String,
-    model: String,
     /// Provider id → (Secret name, Secret key) — refreshed from the provider registry.
     provider_secrets: Arc<RwLock<HashMap<String, (String, String)>>>,
 }
@@ -37,10 +36,9 @@ impl SandboxRuntime {
     pub async fn new(
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
-        model: impl Into<String>,
     ) -> DomainResult<Self> {
         let client = Client::try_default().await?;
-        Self::new_with_client(client, namespace, harness_image, model)
+        Self::new_with_client(client, namespace, harness_image)
     }
 
     /// Build from an existing client (testable / injectable).
@@ -48,7 +46,6 @@ impl SandboxRuntime {
         client: Client,
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
-        model: impl Into<String>,
     ) -> DomainResult<Self> {
         let namespace = namespace.into();
         let api = Api::namespaced_with(client.clone(), &namespace, &Self::api_resource());
@@ -58,7 +55,6 @@ impl SandboxRuntime {
             secrets,
             namespace,
             harness_image: harness_image.into(),
-            model: model.into(),
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -96,16 +92,17 @@ impl SandboxRuntime {
     }
 
     fn sandbox_object(&self, run: &Run, api_key: Option<&str>) -> DynamicObject {
-        // A run's model (from agent selection or the request) wins; otherwise the
-        // global default (`CAT_HERDER_MODEL`) applies.
-        let model = run.model.clone().unwrap_or_else(|| self.model.clone());
-
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
             serde_json::json!({ "name": "TENANT_ID", "value": run.tenant.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
-            serde_json::json!({ "name": "MODEL", "value": model }),
         ];
+        // The model is agent-specific (from the run's `model`); no global fallback.
+        if let Some(model) = run.model.as_deref() {
+            if !model.is_empty() {
+                env.push(serde_json::json!({ "name": "MODEL", "value": model }));
+            }
+        }
         // The repo to clone and work on (from the run's `repo` field).
         if let Some(repo) = run.repo.as_deref() {
             if !repo.is_empty() {

@@ -3,14 +3,14 @@
 namespace: cat-herder
 
 # LLM configuration for the harness.
-# `model` is the fallback model (provider-qualified, e.g. "deepseek:deepseek-chat").
+# Models are agent-specific — each agent template carries its own `model` (see the
+# Agents admin tab / `agents.models` below); there is no global fallback model.
 # Each provider uses its OWN Secret (see the Providers admin tab): by convention
 # `cat-herder-<provider-id>` with key `api-key`, e.g.
 #   kubectl -n cat-herder create secret generic cat-herder-deepseek --from-literal=api-key=sk-...
 #   kubectl -n cat-herder create secret generic cat-herder-openai   --from-literal=api-key=sk-...
-# The global `llmApiKeySecret` below is only a fallback when a run's model has no
-# matching provider.
-model: "deepseek:deepseek-reasoner"
+# `llmApiKeySecret` below is only a fallback when a run's model has no matching
+# provider.
 llmApiKeySecret: cat-herder-llm
 
 # Per-agent model overrides (agent id -> model). Leave empty to use the built-in

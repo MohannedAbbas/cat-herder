@@ -24,6 +24,8 @@ pub struct WebhookPayload {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
@@ -65,6 +67,7 @@ mod tests {
             dedup_key: "delivery-42".into(),
             actor: Some("octocat".into()),
             model: Some("openai/gpt-5.5".into()),
+            agent_id: None,
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
         }
