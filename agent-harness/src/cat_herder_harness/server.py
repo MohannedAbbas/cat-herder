@@ -78,11 +78,29 @@ def set_provider_key(model: str) -> None:
     # add more providers as needed
 
 
+# Only allow explicit, safe git URL schemes. This blocks git's `ext::` transport
+# (arbitrary command execution), `file://`, `git://`, and any leading-`-` option
+# injection.
+ALLOWED_REPO_SCHEMES = {"https", "ssh"}
+
+
+def is_safe_repo_url(url: str) -> bool:
+    if not url or url.startswith("-"):
+        return False
+    if "::" in url or url.startswith("file:"):
+        return False
+    scheme = url.split(":", 1)[0].lower()
+    return scheme in ALLOWED_REPO_SCHEMES
+
+
 def clone_repo(repo_url: str) -> bool:
     """Clone the target repo into /repo. Returns True on success."""
+    if not is_safe_repo_url(repo_url):
+        print(f"refusing to clone unsafe repo URL: {repo_url}", flush=True)
+        return False
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, "/repo"],
+            ["git", "clone", "--depth", "1", "--", repo_url, "/repo"],
             check=True,
             capture_output=True,
             text=True,

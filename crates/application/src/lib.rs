@@ -4,7 +4,7 @@
 
 use std::time::SystemTime;
 
-use cat_herder_domain::api::{SessionRun, new_session_id};
+use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
 use cat_herder_domain::entities::{Run, RunId, RunState};
 use cat_herder_domain::ports::{
     AgentRuntime, DomainResult, RunRepository, RunRequest, SessionRepository,
@@ -41,7 +41,7 @@ where
         trigger: req.trigger,
         actor: req.actor,
         model: req.model,
-        repo: req.repo,
+        repo: req.repo.filter(|r| is_safe_repo_url(r)),
         language: req.language,
         started_at: None,
         finished_at: None,

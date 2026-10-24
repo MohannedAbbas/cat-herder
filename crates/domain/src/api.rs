@@ -209,3 +209,35 @@ pub fn now_iso() -> String {
 pub fn new_session_id() -> String {
     format!("sess-{}", uuid::Uuid::new_v4())
 }
+
+/// Whether a repository URL is safe to `git clone` (https/ssh only). Rejects git's
+/// `ext::` transport (arbitrary command execution), `file://`, `git://`, and any
+/// leading-`-` option injection. Mirrors the harness's `is_safe_repo_url`.
+pub fn is_safe_repo_url(url: &str) -> bool {
+    if url.is_empty() || url.starts_with('-') {
+        return false;
+    }
+    if url.contains("::") || url.starts_with("file:") {
+        return false;
+    }
+    let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+    scheme == "https" || scheme == "ssh"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_repo_url;
+
+    #[test]
+    fn repo_url_scheme_validation() {
+        assert!(is_safe_repo_url("https://github.com/org/repo.git"));
+        assert!(is_safe_repo_url("ssh://git@github.com:org/repo.git"));
+        // dangerous transports / option injection
+        assert!(!is_safe_repo_url("ext::sh -c 'id' dummy"));
+        assert!(!is_safe_repo_url("file:///etc/passwd"));
+        assert!(!is_safe_repo_url("git://host/repo"));
+        assert!(!is_safe_repo_url("-oProxyCommand=sh"));
+        assert!(!is_safe_repo_url("http://host/repo"));
+        assert!(!is_safe_repo_url(""));
+    }
+}
