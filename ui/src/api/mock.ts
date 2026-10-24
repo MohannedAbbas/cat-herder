@@ -246,7 +246,7 @@ const runs: RunRecord[] = [
     kind: 'workflow',
     state: 'failed',
     trigger: 'mcp',
-    actor: 'mohanned',
+    actor: 'alice',
     model: 'openai/gpt-5.5',
     repo: 'org/release-tooling',
     language: 'python',

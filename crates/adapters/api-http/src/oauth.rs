@@ -23,9 +23,17 @@ pub struct OAuthProvider {
     /// Name used in env var prefixes (`GITHUB_` / `GITLAB_`), route paths, cookies,
     /// and log messages. Upper-case.
     pub name: &'static str,
+    /// Default public-cloud OAuth endpoints. Overridable at runtime via
+    /// `<NAME>_OAUTH_BASE_URL` (see [`OAuthConfig::authorize_url`] /
+    /// [`OAuthClient::exchange_code`]).
     pub authorize_url: &'static str,
     pub token_url: &'static str,
     pub user_url: &'static str,
+    /// Path segments appended to the base-URL override to rebuild each endpoint.
+    /// Defaults match the public-cloud URLs above.
+    pub authorize_path: &'static str,
+    pub token_path: &'static str,
+    pub user_path: &'static str,
     /// Space-separated OAuth scopes requested at authorize time.
     pub scope: &'static str,
     /// Router path of the callback endpoint (also appended to the redirect base).
@@ -44,6 +52,9 @@ pub const GITHUB: OAuthProvider = OAuthProvider {
     authorize_url: GITHUB_AUTHORIZE_URL,
     token_url: GITHUB_TOKEN_URL,
     user_url: GITHUB_USER_URL,
+    authorize_path: "/login/oauth/authorize",
+    token_path: "/login/oauth/access_token",
+    user_path: "/user",
     scope: "read:user",
     callback_path: "/v1/auth/github/callback",
     state_cookie: "gh_oauth_state",
@@ -59,6 +70,11 @@ pub const GITLAB: OAuthProvider = OAuthProvider {
     authorize_url: GITLAB_AUTHORIZE_URL,
     token_url: GITLAB_TOKEN_URL,
     user_url: GITLAB_USER_URL,
+    authorize_path: "/oauth/authorize",
+    token_path: "/oauth/token",
+    // GitLab's API base differs from the web/oauth base; a self-managed instance
+    // served from `<base>` exposes the API under `<base>/api/v4`.
+    user_path: "/api/v4/user",
     scope: "read_user",
     callback_path: "/v1/auth/gitlab/callback",
     state_cookie: "gl_oauth_state",
@@ -68,6 +84,11 @@ impl OAuthProvider {
     /// Env var name for the given suffix (e.g. `GITHUB_OAUTH_CLIENT_ID`).
     fn env_key(&self, suffix: &str) -> String {
         format!("{}_OAUTH_{}", self.name, suffix)
+    }
+
+    /// Env var name for the base-URL override (e.g. `GITHUB_OAUTH_BASE_URL`).
+    fn base_url_env_key(&self) -> String {
+        format!("{}_OAUTH_BASE_URL", self.name)
     }
 }
 
@@ -84,9 +105,28 @@ pub struct OAuthConfig {
     pub allowed_users: Vec<String>,
     /// Which provider this config belongs to.
     pub provider: &'static OAuthProvider,
+    /// Optional base-URL override (e.g. a self-managed GitLab or GitHub Enterprise
+    /// host). When set, each endpoint is rebuilt as `<base><path>`; when `None`, the
+    /// provider's public-cloud URLs are used. Populated from `<NAME>_OAUTH_BASE_URL`.
+    pub base_url: Option<String>,
 }
 
 impl OAuthConfig {
+    /// The authorize endpoint, honouring [`Self::base_url`] if set.
+    fn resolved_authorize_url(&self) -> String {
+        resolve_url(self.base_url.as_deref(), self.provider.authorize_path, self.provider.authorize_url)
+    }
+
+    /// The token endpoint, honouring [`Self::base_url`] if set.
+    pub fn token_url(&self) -> String {
+        resolve_url(self.base_url.as_deref(), self.provider.token_path, self.provider.token_url)
+    }
+
+    /// The user endpoint, honouring [`Self::base_url`] if set.
+    pub fn user_url(&self) -> String {
+        resolve_url(self.base_url.as_deref(), self.provider.user_path, self.provider.user_url)
+    }
+
     /// Load GitHub config from `GITHUB_OAUTH_*`.
     pub fn from_env() -> Option<Self> {
         Self::from_env_for(&GITHUB)
@@ -125,12 +165,16 @@ impl OAuthConfig {
         };
         let allowed_users =
             parse_allowed_users(lookup(&provider.env_key("ALLOWED_USERS")).as_deref());
+        let base_url = lookup(&provider.base_url_env_key())
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty());
         Some(Self {
             client_id: required(&provider.env_key("CLIENT_ID"))?,
             client_secret: required(&provider.env_key("CLIENT_SECRET"))?,
             redirect_url: required(&provider.env_key("REDIRECT_URL"))?,
             allowed_users,
             provider,
+            base_url,
         })
     }
 
@@ -155,11 +199,20 @@ impl OAuthConfig {
     pub fn authorize_url(&self) -> String {
         format!(
             "{}?client_id={}&redirect_uri={}&scope={}",
-            self.provider.authorize_url,
+            self.resolved_authorize_url(),
             urlencode(&self.client_id),
             urlencode(&self.callback_url()),
             self.provider.scope,
         )
+    }
+}
+
+/// Resolve an endpoint: `<base><path>` when a base URL override is configured,
+/// otherwise the provider's default absolute URL.
+fn resolve_url(base: Option<&str>, path: &str, default_url: &str) -> String {
+    match base {
+        Some(base) => format!("{}{}", base.trim_end_matches('/'), path),
+        None => default_url.to_string(),
     }
 }
 
@@ -268,7 +321,7 @@ impl OAuthClient {
         ];
         let resp = self
             .http
-            .post(self.config.provider.token_url)
+            .post(self.config.token_url())
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&params)
             .send()
@@ -292,7 +345,7 @@ impl OAuthClient {
     pub async fn fetch_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
         let resp = self
             .http
-            .get(self.config.provider.user_url)
+            .get(self.config.user_url())
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::USER_AGENT, "cat-herder")
             .bearer_auth(access_token)
@@ -431,6 +484,7 @@ mod tests {
             redirect_url: "https://cat-herder.example.com".into(),
             allowed_users: allowed.iter().map(|s| s.to_string()).collect(),
             provider: &GITHUB,
+            base_url: None,
         }
     }
 
@@ -441,6 +495,7 @@ mod tests {
             redirect_url: "https://cat-herder.example.com".into(),
             allowed_users: allowed.iter().map(|s| s.to_string()).collect(),
             provider: &GITLAB,
+            base_url: None,
         }
     }
 
@@ -516,6 +571,39 @@ mod tests {
 
         // Missing client secret => SSO disabled.
         assert!(OAuthConfig::from_lookup(|k| (k != "GITHUB_OAUTH_CLIENT_SECRET").then(|| "x".into())).is_none());
+    }
+
+    #[test]
+    fn base_url_override_rebuilds_endpoints() {
+        // Defaults when no override is set.
+        let c = cfg(&[]);
+        assert_eq!(c.token_url(), GITHUB_TOKEN_URL);
+        assert_eq!(c.user_url(), GITHUB_USER_URL);
+        assert!(c.authorize_url().starts_with(GITHUB_AUTHORIZE_URL));
+
+        // With GITHUB_OAUTH_BASE_URL set, each endpoint is rebuilt against it.
+        let lookup = |k: &str| -> Option<String> {
+            match k {
+                "GITHUB_OAUTH_CLIENT_ID" => Some("cid".into()),
+                "GITHUB_OAUTH_CLIENT_SECRET" => Some("sec".into()),
+                "GITHUB_OAUTH_REDIRECT_URL" => Some("https://x.example".into()),
+                "GITHUB_OAUTH_BASE_URL" => Some("https://ghe.example.com/".into()),
+                _ => None,
+            }
+        };
+        let c = OAuthConfig::from_lookup(lookup).expect("configured");
+        assert_eq!(c.base_url.as_deref(), Some("https://ghe.example.com"));
+        assert_eq!(c.token_url(), "https://ghe.example.com/login/oauth/access_token");
+        assert_eq!(c.user_url(), "https://ghe.example.com/user");
+        assert!(c.authorize_url().starts_with("https://ghe.example.com/login/oauth/authorize"));
+
+        // GitLab override keeps the /api/v4 user path.
+        let gl = OAuthConfig {
+            base_url: Some("https://gitlab.example.com".into()),
+            ..gl_cfg(&[])
+        };
+        assert_eq!(gl.token_url(), "https://gitlab.example.com/oauth/token");
+        assert_eq!(gl.user_url(), "https://gitlab.example.com/api/v4/user");
     }
 
     #[test]

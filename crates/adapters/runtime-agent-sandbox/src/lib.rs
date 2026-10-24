@@ -20,6 +20,57 @@ use kube::{
 };
 use tokio::sync::RwLock;
 
+/// Tunables for the `Sandbox` pod template, sourced from the environment (with the
+/// historical values as defaults). The chart can template these through so they
+/// don't drift from the harness's actual port/probe path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SandboxPodConfig {
+    /// Container port the harness listens on.
+    pub container_port: i32,
+    /// HTTP readiness-probe path.
+    pub readiness_path: String,
+    /// Ephemeral-storage request (e.g. `2Gi`) — scheduling-time guarantee.
+    pub ephemeral_storage_request: String,
+    /// Ephemeral-storage limit (e.g. `10Gi`) — bounds one run's disk use.
+    pub ephemeral_storage_limit: String,
+}
+
+impl Default for SandboxPodConfig {
+    fn default() -> Self {
+        Self {
+            container_port: 8080,
+            readiness_path: "/healthz".into(),
+            ephemeral_storage_request: "2Gi".into(),
+            ephemeral_storage_limit: "10Gi".into(),
+        }
+    }
+}
+
+impl SandboxPodConfig {
+    /// Load from env, falling back to [`Default`] for any unset/blank/invalid value.
+    ///
+    /// Recognised vars:
+    ///   - `CAT_HERDER_HARNESS_PORT` (container port; also the readiness-probe port)
+    ///   - `CAT_HERDER_READINESS_PATH`
+    ///   - `CAT_HERDER_EPHEMERAL_STORAGE_REQUEST`
+    ///   - `CAT_HERDER_EPHEMERAL_STORAGE_LIMIT`
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        let non_blank = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+        Self {
+            container_port: non_blank("CAT_HERDER_HARNESS_PORT")
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(defaults.container_port),
+            readiness_path: non_blank("CAT_HERDER_READINESS_PATH")
+                .unwrap_or(defaults.readiness_path),
+            ephemeral_storage_request: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_REQUEST")
+                .unwrap_or(defaults.ephemeral_storage_request),
+            ephemeral_storage_limit: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_LIMIT")
+                .unwrap_or(defaults.ephemeral_storage_limit),
+        }
+    }
+}
+
 /// Creates and manages agent-sandbox `Sandbox` resources.
 #[derive(Clone)]
 pub struct SandboxRuntime {
@@ -27,6 +78,8 @@ pub struct SandboxRuntime {
     secrets: Api<Secret>,
     namespace: String,
     harness_image: String,
+    /// Pod-template tunables (port/probe/storage), configurable via env.
+    pod: SandboxPodConfig,
     /// Provider id → (Secret name, Secret key) — refreshed from the provider registry.
     provider_secrets: Arc<RwLock<HashMap<String, (String, String)>>>,
     /// Repo id (host/path) → decrypted access token — refreshed by the control plane
@@ -44,11 +97,22 @@ impl SandboxRuntime {
         Self::new_with_client(client, namespace, harness_image)
     }
 
-    /// Build from an existing client (testable / injectable).
+    /// Build from an existing client (testable / injectable). Pod-template tunables
+    /// are read from the environment (see [`SandboxPodConfig::from_env`]).
     pub fn new_with_client(
         client: Client,
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
+    ) -> DomainResult<Self> {
+        Self::new_with_client_config(client, namespace, harness_image, SandboxPodConfig::from_env())
+    }
+
+    /// Build from an existing client with an explicit pod-template config.
+    pub fn new_with_client_config(
+        client: Client,
+        namespace: impl Into<String>,
+        harness_image: impl Into<String>,
+        pod: SandboxPodConfig,
     ) -> DomainResult<Self> {
         let namespace = namespace.into();
         let api = Api::namespaced_with(client.clone(), &namespace, &Self::api_resource());
@@ -58,6 +122,7 @@ impl SandboxRuntime {
             secrets,
             namespace,
             harness_image: harness_image.into(),
+            pod,
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
             git_tokens: Arc::new(RwLock::new(HashMap::new())),
         })
@@ -174,17 +239,17 @@ impl SandboxRuntime {
                             "name": "harness",
                             "image": self.harness_image,
                             "env": env,
-                            "ports": [{ "containerPort": 8080 }],
+                            "ports": [{ "containerPort": self.pod.container_port }],
                             // Disk budget: a `cargo build` in the sandbox can write a
                             // multi-GiB target/ + registry cache. A request accounts for it
                             // at scheduling time; a limit bounds it so one run can't fill
                             // the node's ephemeral storage and evict itself/everything.
                             "resources": {
-                                "requests": { "ephemeral-storage": "2Gi" },
-                                "limits": { "ephemeral-storage": "10Gi" },
+                                "requests": { "ephemeral-storage": self.pod.ephemeral_storage_request },
+                                "limits": { "ephemeral-storage": self.pod.ephemeral_storage_limit },
                             },
                             "readinessProbe": {
-                                "httpGet": { "path": "/healthz", "port": 8080 },
+                                "httpGet": { "path": self.pod.readiness_path, "port": self.pod.container_port },
                             },
                         }],
                     },
@@ -250,5 +315,19 @@ impl AgentRuntime for SandboxRuntime {
             .delete(&Self::sandbox_name(id), &DeleteParams::default())
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pod_config_defaults_match_historical_values() {
+        let c = SandboxPodConfig::default();
+        assert_eq!(c.container_port, 8080);
+        assert_eq!(c.readiness_path, "/healthz");
+        assert_eq!(c.ephemeral_storage_request, "2Gi");
+        assert_eq!(c.ephemeral_storage_limit, "10Gi");
     }
 }

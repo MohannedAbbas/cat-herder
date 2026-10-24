@@ -72,16 +72,68 @@ struct GitDataCtx<'a> {
 }
 
 /// Creates branches + PRs/MRs against GitHub, GitLab, or Codeberg.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PrClient {
     http: reqwest::Client,
+    /// git host → API base URL (e.g. `github.com` → `https://api.github.com`).
+    /// Defaults to the public-cloud endpoints; overridable via
+    /// [`PrClient::from_env`] (env) or [`PrClient::with_host_api_base`] (tests/settings).
+    host_api_bases: std::collections::HashMap<String, String>,
+}
+
+impl Default for PrClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Public-cloud default API base URLs, keyed by git host.
+pub fn default_host_api_bases() -> std::collections::HashMap<String, String> {
+    [
+        ("github.com", "https://api.github.com"),
+        ("codeberg.org", "https://codeberg.org/api/v1"),
+        ("gitlab.com", "https://gitlab.com/api/v4"),
+    ]
+    .iter()
+    .map(|(h, u)| (h.to_string(), u.to_string()))
+    .collect()
 }
 
 impl PrClient {
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::new(),
+            host_api_bases: default_host_api_bases(),
         }
+    }
+
+    /// Build a client whose host→base-URL map is augmented from the environment.
+    ///
+    /// `CAT_HERDER_GIT_API_BASES` holds a JSON object of `{host: base_url}` (e.g.
+    /// `{"github.example.com":"https://github.example.com/api/v3"}`) which is merged
+    /// over the public-cloud defaults. Malformed JSON is ignored (defaults kept).
+    pub fn from_env() -> Self {
+        let mut client = Self::new();
+        if let Ok(raw) = std::env::var("CAT_HERDER_GIT_API_BASES")
+            && let Ok(overrides) = serde_json::from_str::<std::collections::HashMap<String, String>>(&raw)
+        {
+            for (host, base) in overrides {
+                let base = base.trim().trim_end_matches('/').to_string();
+                if !host.trim().is_empty() && !base.is_empty() {
+                    client.host_api_bases.insert(host.trim().to_lowercase(), base);
+                }
+            }
+        }
+        client
+    }
+
+    /// Override (or add) the API base URL for a specific git host.
+    pub fn with_host_api_base(mut self, host: &str, base_url: &str) -> Self {
+        self.host_api_bases.insert(
+            host.trim().to_lowercase(),
+            base_url.trim().trim_end_matches('/').to_string(),
+        );
+        self
     }
 
     /// Open a PR/MR on the repo's host. `path` is the identity path (`owner/repo` for
@@ -93,11 +145,19 @@ impl PrClient {
         path: &str,
         spec: &PrSpec<'_>,
     ) -> Result<String, String> {
-        match host {
-            "github.com" => self.git_data_flow("https://api.github.com", true, path, token, spec).await,
-            "codeberg.org" => self.git_data_flow("https://codeberg.org/api/v1", false, path, token, spec).await,
-            "gitlab.com" => self.gitlab_flow(path, token, spec).await,
-            other => Err(format!("PR creation unsupported for host: {other}")),
+        let host = host.to_lowercase();
+        let base = self
+            .host_api_bases
+            .get(&host)
+            .ok_or_else(|| format!("PR creation unsupported for host: {host}"))?
+            .clone();
+        if host_is_gitlab(&host, &base) {
+            self.gitlab_flow(&base, path, token, spec).await
+        } else {
+            // GitHub and Codeberg (Gitea/Forgejo) share the Git-Data API flow; the
+            // auth scheme differs (bearer for GitHub, `token` for Gitea/Forgejo).
+            let bearer = host == "github.com" || host.contains("github");
+            self.git_data_flow(&base, bearer, path, token, spec).await
         }
     }
 
@@ -243,10 +303,10 @@ impl PrClient {
 
     // --- GitLab (commits-with-actions flow) --------------------------------
 
-    async fn gitlab_flow(&self, path: &str, token: &str, spec: &PrSpec<'_>) -> Result<String, String> {
+    async fn gitlab_flow(&self, base: &str, path: &str, token: &str, spec: &PrSpec<'_>) -> Result<String, String> {
         // GitLab project id = URL-encoded path (group/subgroup/repo).
         let project: String = form_urlencode_path(path);
-        let default_branch = self.gitlab_default_branch(&project, token).await?;
+        let default_branch = self.gitlab_default_branch(base, &project, token).await?;
 
         let mut actions = Vec::new();
         for change in spec.changes {
@@ -268,7 +328,7 @@ impl PrClient {
 
         // Create the branch + commit with all file actions in one call.
         let resp = self
-            .gitlab_req(token, self.http.post(format!("https://gitlab.com/api/v4/projects/{project}/repository/commits")))
+            .gitlab_req(token, self.http.post(format!("{base}/projects/{project}/repository/commits")))
             .json(&serde_json::json!({
                 "branch": spec.head,
                 "start_branch": default_branch,
@@ -280,7 +340,7 @@ impl PrClient {
 
         // Open the merge request.
         let resp = self
-            .gitlab_req(token, self.http.post(format!("https://gitlab.com/api/v4/projects/{project}/merge_requests")))
+            .gitlab_req(token, self.http.post(format!("{base}/projects/{project}/merge_requests")))
             .json(&serde_json::json!({
                 "source_branch": spec.head,
                 "target_branch": default_branch,
@@ -299,12 +359,19 @@ impl PrClient {
             .header(reqwest::header::USER_AGENT, "cat-herder")
     }
 
-    async fn gitlab_default_branch(&self, project: &str, token: &str) -> Result<String, String> {
+    async fn gitlab_default_branch(&self, base: &str, project: &str, token: &str) -> Result<String, String> {
         let resp = self
-            .gitlab_req(token, self.http.get(format!("https://gitlab.com/api/v4/projects/{project}")))
+            .gitlab_req(token, self.http.get(format!("{base}/projects/{project}")))
             .send().await.map_err(|e| e.to_string())?;
         self.expect_ok(resp).await?.json::<DefaultBranchResponse>().await.map(|r| r.default_branch).map_err(|e| e.to_string())
     }
+}
+
+/// Whether a host should use GitLab's flow. GitLab is identified by a
+/// `gitlab` substring in the host, or (for self-managed instances without
+/// "gitlab" in the name) an API base that ends in `/api/v4`.
+fn host_is_gitlab(host: &str, base: &str) -> bool {
+    host.contains("gitlab") || base.trim_end_matches('/').ends_with("/api/v4")
 }
 
 /// Percent-encode a GitLab project path (`group/subgroup/repo` → `group%2Fsubgroup%2Frepo`).
@@ -352,5 +419,30 @@ mod tests {
     fn gitlab_project_path_is_percent_encoded() {
         assert_eq!(form_urlencode_path("group/subgroup/repo"), "group%2Fsubgroup%2Frepo");
         assert_eq!(form_urlencode_path("owner/repo"), "owner%2Frepo");
+    }
+
+    #[test]
+    fn default_host_api_bases_match_public_cloud() {
+        let bases = default_host_api_bases();
+        assert_eq!(bases.get("github.com").map(String::as_str), Some("https://api.github.com"));
+        assert_eq!(bases.get("gitlab.com").map(String::as_str), Some("https://gitlab.com/api/v4"));
+        assert_eq!(bases.get("codeberg.org").map(String::as_str), Some("https://codeberg.org/api/v1"));
+    }
+
+    #[test]
+    fn with_host_api_base_overrides_and_strips_trailing_slash() {
+        let c = PrClient::new().with_host_api_base("GitHub.Example.com", "https://ghe.example.com/api/v3/");
+        assert_eq!(
+            c.host_api_bases.get("github.example.com").map(String::as_str),
+            Some("https://ghe.example.com/api/v3")
+        );
+    }
+
+    #[test]
+    fn host_is_gitlab_detects_by_host_or_base() {
+        assert!(host_is_gitlab("gitlab.com", "https://gitlab.com/api/v4"));
+        assert!(host_is_gitlab("git.example.com", "https://git.example.com/api/v4"));
+        assert!(!host_is_gitlab("github.com", "https://api.github.com"));
+        assert!(!host_is_gitlab("codeberg.org", "https://codeberg.org/api/v1"));
     }
 }

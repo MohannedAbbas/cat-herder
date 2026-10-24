@@ -23,6 +23,8 @@ spec:
           env:
             - name: CAT_HERDER_NAMESPACE
               value: {{ .Values.namespace | default "cat-herder" }}
+            - name: PORT
+              value: {{ .Values.controlPlane.port | quote }}
             - name: CAT_HERDER_HARNESS_IMAGE
               value: "{{ .Values.harness.image }}"
             - name: CAT_HERDER_AGENT_MODELS

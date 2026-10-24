@@ -144,8 +144,13 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
 #[tokio::main]
 async fn main() {
     let namespace = std::env::var("CAT_HERDER_NAMESPACE").unwrap_or_else(|_| "cat-herder".into());
+    // Stable, non-dev default matching the chart's `harness.image` placeholder. The
+    // chart always injects CAT_HERDER_HARNESS_IMAGE, so this only applies when running
+    // the binary standalone; override it locally to point at your built image.
     let harness_image = std::env::var("CAT_HERDER_HARNESS_IMAGE")
-        .unwrap_or_else(|_| "127.0.0.1:5000/cat-herder-agent-harness".into());
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "ghcr.io/your-org/cat-herder-agent-harness:0.1.0".into());
 
     // The runtime is optional at startup — if the cluster/client is unavailable we
     // still serve read endpoints (POST /v1/runs will return 503).
@@ -238,11 +243,23 @@ async fn main() {
         });
     }
 
-    // Admin credentials (seeded via the chart's Secret; "admin"/"admin" fallback for
-    // local dev).
-    let admin_user = std::env::var("CAT_HERDER_ADMIN_USER").unwrap_or_else(|_| "admin".into());
-    let admin_password =
-        std::env::var("CAT_HERDER_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
+    // Admin credentials (injected by the chart from the `cat-herder-admin` Secret).
+    // Required: refuse to boot with a weak/blank fallback so a misconfigured deploy
+    // can never come up with default `admin`/`admin` credentials.
+    let admin_user = std::env::var("CAT_HERDER_ADMIN_USER")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .expect("CAT_HERDER_ADMIN_USER must be set (injected from the cat-herder-admin Secret)");
+    let admin_password = std::env::var("CAT_HERDER_ADMIN_PASSWORD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .expect("CAT_HERDER_ADMIN_PASSWORD must be set (injected from the cat-herder-admin Secret)");
+    if admin_user == "admin" && admin_password == "admin" {
+        eprintln!(
+            "warning: CAT_HERDER_ADMIN_USER/PASSWORD are the weak defaults admin/admin — \
+             set strong credentials for any non-local deployment"
+        );
+    }
     let auth = Auth::new(admin_user, &admin_password);
 
     // Optional GitHub OAuth SSO. Enabled only when the client id/secret and the
@@ -289,14 +306,20 @@ async fn main() {
         runtime,
         cipher,
         key_store: Some(key_store),
-        pr_client: Arc::new(PrClient::new()),
+        pr_client: Arc::new(PrClient::from_env()),
     };
 
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    // Bind address. `PORT` is injected by the chart from `controlPlane.port` so the
+    // listen port and the Service/probe targets can't drift; 8080 is the default.
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(8080);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
-        .expect("bind :8080");
+        .unwrap_or_else(|e| panic!("bind 0.0.0.0:{port}: {e}"));
 
     axum::serve(listener, app).await.expect("serve");
 }

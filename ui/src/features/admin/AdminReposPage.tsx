@@ -194,7 +194,7 @@ export default function AdminReposPage() {
                     className={inputCls}
                   />
                   <span className="mt-1 block text-xs text-slate-400">
-                    e.g. <code className="font-mono">MohannedAbbas/cat-herder</code> — the URL and
+                    e.g. <code className="font-mono">octocat/hello-world</code> — the URL and
                     identifier are derived for you.
                   </span>
                 </Field>

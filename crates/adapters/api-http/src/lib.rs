@@ -26,7 +26,7 @@ pub use auth::Auth;
 pub use crypto::AesGcmCipher;
 pub use key_store::KeySecretStore;
 pub use oauth::{GitHubOAuth, GitLabOAuth, OAuthConfig, GITLAB, GITHUB};
-pub use pr::{FileChange, PrClient, PrSpec};
+pub use pr::{default_host_api_bases, FileChange, PrClient, PrSpec};
 pub use repo::{
     AgentRepo, AuditRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
     ToolRepo,
@@ -97,7 +97,7 @@ impl Default for AppState {
             runtime: None,
             cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
             key_store: None,
-            pr_client: Arc::new(PrClient::new()),
+            pr_client: Arc::new(PrClient::from_env()),
         }
     }
 }

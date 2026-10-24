@@ -39,13 +39,13 @@ It uses Deep Agents + LangGraph (`deepagents`, `langgraph`, `langchain`,
 
 `clone_repo` rejects unsafe URLs with `is_safe_repo_url` (https/ssh only; blocks git
 `ext::` transport, `file://`, `git://`, leading `-`). For a token it writes a **git
-askpass** script (`/tmp/cat-herder-git-askpass.sh`, mode 0700) and sets `GIT_ASKPASS` +
-`GIT_TERMINAL_PROMPT=0`, so the token never appears in argv/logs. Clone is
-`git clone --depth 1 -- <url> /repo`.
+askpass** script (in a fresh per-process `tempfile.mkdtemp()` directory, mode 0700) and
+sets `GIT_ASKPASS` + `GIT_TERMINAL_PROMPT=0`, so the token never appears in argv/logs.
+Clone is `git clone --depth 1 -- <url> $REPO_DIR` (the `REPO_DIR` constant, default `/repo`).
 
 ## Running the agent
 
-`run_agent` builds a `create_deep_agent` agent with a **`LocalShellBackend(root_dir="/repo",
+`run_agent` builds a `create_deep_agent` agent with a **`LocalShellBackend(root_dir=REPO_DIR,
 env=shell_env)`** — this gives one backend that is both a real filesystem rooted at
 `/repo` and an `execute` shell running in `/repo` (so the agent can build/test; the
 harness image ships Rust + build tooling). `shell_env` is the process env **minus**

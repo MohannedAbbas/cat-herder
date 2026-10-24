@@ -410,9 +410,9 @@ mod tests {
 
     #[test]
     fn repo_identity_builds_id_and_url() {
-        let id = repo_identity("GitHub.com", "MohannedAbbas/cat-herder").unwrap();
-        assert_eq!(id.id(), "github.com/mohannedabbas/cat-herder");
-        assert_eq!(id.url(), "https://github.com/mohannedabbas/cat-herder");
+        let id = repo_identity("GitHub.com", "Octocat/Hello-World").unwrap();
+        assert_eq!(id.id(), "github.com/octocat/hello-world");
+        assert_eq!(id.url(), "https://github.com/octocat/hello-world");
     }
 
     #[test]

@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,9 @@ PORT = int(os.environ.get("PORT", "8080"))
 CONTROL_URL = os.environ.get("CAT_HERDER_CONTROL_URL", "").rstrip("/")
 # The repository to clone and work on (injected from the run's `repo` field).
 REPO_URL = os.environ.get("REPO_URL", "").strip()
+# Working directory the repo is cloned into and the agent is rooted at. Overridable
+# via REPO_DIR so the harness isn't tied to a fixed absolute path.
+REPO_DIR = os.environ.get("REPO_DIR", "/repo").strip() or "/repo"
 # Git token for private-repo clones (optional). Used only via a git askpass
 # helper so the credential never appears in argv or logs.
 GIT_TOKEN = os.environ.get("GIT_TOKEN", "").strip()
@@ -124,8 +128,12 @@ def write_git_askpass() -> str:
     text as the first argument. We answer the username prompt with a placeholder
     and the password prompt with the token, keeping the token out of the clone
     argv (and therefore out of `ps` and process logs).
+
+    The script lives in a fresh per-process temp directory (mode 0700) rather than a
+    fixed absolute path, so concurrent harness instances can't collide.
     """
-    path = "/tmp/cat-herder-git-askpass.sh"
+    askpass_dir = tempfile.mkdtemp(prefix=f"cat-herder-git-{RUN_ID}-")
+    path = os.path.join(askpass_dir, "cat-herder-git-askpass.sh")
     script = (
         "#!/bin/sh\n"
         "case \"$1\" in\n"
@@ -140,7 +148,7 @@ def write_git_askpass() -> str:
 
 
 def clone_repo(repo_url: str) -> bool:
-    """Clone the target repo into /repo. Returns True on success."""
+    """Clone the target repo into REPO_DIR. Returns True on success."""
     if not is_safe_repo_url(repo_url):
         print(f"refusing to clone unsafe repo URL: {repo_url}", flush=True)
         return False
@@ -153,13 +161,13 @@ def clone_repo(repo_url: str) -> bool:
 
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--", repo_url, "/repo"],
+            ["git", "clone", "--depth", "1", "--", repo_url, REPO_DIR],
             check=True,
             capture_output=True,
             text=True,
             env=env,
         )
-        print(f"cloned {repo_url} into /repo", flush=True)
+        print(f"cloned {repo_url} into {REPO_DIR}", flush=True)
         return True
     except subprocess.CalledProcessError as exc:
         print(f"git clone failed: {exc.stderr.strip()}", flush=True)
@@ -171,19 +179,19 @@ def run_agent(task_spec: str, model: str) -> str:
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
 
-    # A single LocalShellBackend gives the agent a real filesystem rooted at /repo
-    # PLUS a shell (`execute`) that runs in /repo, so it can build/test. The shell
+    # A single LocalShellBackend gives the agent a real filesystem rooted at REPO_DIR
+    # PLUS a shell (`execute`) that runs in REPO_DIR, so it can build/test. The shell
     # inherits the harness environment minus the secrets, so tokens aren't exposed
     # via `env`. (The `execute` tool binds to the *default* backend, hence no
     # StateBackend default here.)
     #
     # `virtual_mode=False` makes the filesystem tools (read_file/write_file/ls/glob)
-    # resolve absolute paths against the REAL /repo, matching the shell's working
+    # resolve absolute paths against the REAL REPO_DIR, matching the shell's working
     # directory. With the default virtual_mode=True, an absolute path like
-    # `/repo/foo` is re-anchored under root_dir and lands at `/repo/repo/foo`,
+    # `<REPO_DIR>/foo` is re-anchored under root_dir and lands at `<REPO_DIR>/<REPO_DIR>/foo`,
     # silently splitting the agent's edits between two locations.
     shell_env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV_KEYS}
-    backend = LocalShellBackend(root_dir="/repo", virtual_mode=False, env=shell_env)
+    backend = LocalShellBackend(root_dir=REPO_DIR, virtual_mode=False, env=shell_env)
 
     agent = create_deep_agent(
         model=model,
@@ -199,8 +207,8 @@ def run_agent(task_spec: str, model: str) -> str:
 
 
 def _file_change(path: str) -> dict:
-    """Build a change entry for an added/modified file (content read from /repo)."""
-    full = os.path.join("/repo", path)
+    """Build a change entry for an added/modified file (content read from REPO_DIR)."""
+    full = os.path.join(REPO_DIR, path)
     try:
         with open(full, "rb") as f:
             content = f.read()
@@ -215,11 +223,11 @@ def _file_change(path: str) -> dict:
 
 def collect_changes() -> list[dict]:
     """Collect the agent's repo changes as a list of change entries."""
-    if not os.path.isdir("/repo/.git"):
+    if not os.path.isdir(os.path.join(REPO_DIR, ".git")):
         return []
     try:
         subprocess.run(
-            ["git", "-C", "/repo", "add", "-A"],
+            ["git", "-C", REPO_DIR, "add", "-A"],
             check=True,
             capture_output=True,
             text=True,
@@ -228,7 +236,7 @@ def collect_changes() -> list[dict]:
         return []
 
     proc = subprocess.run(
-        ["git", "-C", "/repo", "diff", "--cached", "--name-status"],
+        ["git", "-C", REPO_DIR, "diff", "--cached", "--name-status"],
         capture_output=True,
         text=True,
     )

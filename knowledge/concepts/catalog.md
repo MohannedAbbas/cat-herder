@@ -48,6 +48,11 @@ openai:gpt-5.5), `agent-docs` (default, openai:gpt-5.5). **Models are agent-spec
 `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}` map injected by the Helm chart from
 `agents.models`) overrides each agent's default at seed time.
 
+The harness `image` and each agent's `max_concurrency` come from `CatalogDefaults`
+(`default_agents_with`); `CatalogDefaults::from_env` reads `CAT_HERDER_HARNESS_IMAGE`
+for the image (default `cat-herder-agent-harness:0.1.0`), and the per-agent concurrency
+defaults are 8 / 4 / 4 for codeact / reviewer / docs.
+
 ## Tools
 
 `Tool { id, description }` (`default_tools`): `filesystem`, `execute`, `git`, `github`,

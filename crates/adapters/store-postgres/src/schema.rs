@@ -35,7 +35,7 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
     // admin UI) persist across restarts instead of being overwritten.
     let agents: i64 = sqlx::query_scalar("SELECT count(*) FROM agents").fetch_one(pool).await?;
     if agents == 0 {
-        for agent in catalog::default_agents(agent_models) {
+        for agent in catalog::default_agents_with(&catalog::CatalogDefaults::from_env(), agent_models) {
             sqlx::query(
                 "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",

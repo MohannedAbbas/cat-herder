@@ -72,8 +72,16 @@ pub struct InMemoryAgentRepository {
 
 impl InMemoryAgentRepository {
     pub fn new(model_overrides: &HashMap<String, String>) -> Self {
+        Self::with_defaults(&catalog::CatalogDefaults::from_env(), model_overrides)
+    }
+
+    /// Build with explicit catalog defaults (harness image / concurrency caps).
+    pub fn with_defaults(
+        defaults: &catalog::CatalogDefaults,
+        model_overrides: &HashMap<String, String>,
+    ) -> Self {
         Self {
-            agents: Arc::new(RwLock::new(catalog::default_agents(model_overrides))),
+            agents: Arc::new(RwLock::new(catalog::default_agents_with(defaults, model_overrides))),
         }
     }
 }

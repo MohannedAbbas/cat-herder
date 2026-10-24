@@ -9,13 +9,21 @@ use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
-// Update to the current harness image ref in the local registry
-// (`kubectl get sandboxtemplate cat-herder-agent -n cat-herder -o jsonpath='{.spec.podTemplate.spec.containers[0].image}'`).
-const HARNESS_IMAGE: &str = "127.0.0.1:5000/cat-herder-agent-harness:tilt-480160faff370ca0";
+/// Stable, non-dev fallback matching the chart's harness-image placeholder.
+const DEFAULT_HARNESS_IMAGE: &str = "ghcr.io/your-org/cat-herder-agent-harness:0.1.0";
 
 #[tokio::main]
 async fn main() -> DomainResult<()> {
-    let rt = SandboxRuntime::new("cat-herder", HARNESS_IMAGE).await?;
+    // Point this at whatever harness image your cluster serves. In a dev cluster
+    // that's typically the locally-built image (e.g. a Tilt-injected local-registry
+    // tag); export it rather than hardcoding a machine-specific value here.
+    let harness_image = std::env::var("CAT_HERDER_HARNESS_IMAGE")
+        .unwrap_or_else(|_| DEFAULT_HARNESS_IMAGE.to_string());
+    // TODO: set CAT_HERDER_HARNESS_IMAGE to your deployed harness image if the
+    // fallback above isn't built/pushed to a registry your cluster can pull from.
+    println!("using harness image: {harness_image}");
+
+    let rt = SandboxRuntime::new("cat-herder", harness_image).await?;
 
     let run = Run {
         id: RunId(999),

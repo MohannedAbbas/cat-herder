@@ -690,6 +690,7 @@ fn oauth_app() -> Router {
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
         provider: &GITHUB,
+        base_url: None,
     };
     let mut state = AppState::default();
     state.github_oauth = Some(GitHubOAuth::new(cfg));
@@ -756,6 +757,7 @@ fn gitlab_oauth_app() -> Router {
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
         provider: &GITLAB,
+        base_url: None,
     };
     let mut state = AppState::default();
     state.gitlab_oauth = Some(GitLabOAuth::new(cfg));

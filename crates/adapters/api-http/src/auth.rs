@@ -11,23 +11,47 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Session lifetime, overridable via `CAT_HERDER_SESSION_TTL_SECS` (e.g. `3600`).
+/// Falls back to the 24h default when unset, blank, or unparsable.
+fn session_ttl_from_env() -> Duration {
+    std::env::var("CAT_HERDER_SESSION_TTL_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SESSION_TTL)
+}
 
 #[derive(Clone)]
 pub struct Auth {
     admin_username: String,
     admin_password_hash: String,
     sessions: Arc<RwLock<HashMap<String, Instant>>>,
+    /// How long an issued session token stays valid.
+    session_ttl: Duration,
 }
 
 impl Auth {
     /// Build from the seeded admin username + plaintext password (bcrypt-hashed here).
+    /// The session TTL is read from `CAT_HERDER_SESSION_TTL_SECS` (default 24h).
     pub fn new(username: impl Into<String>, password: &str) -> Self {
+        Self::with_session_ttl(username, password, session_ttl_from_env())
+    }
+
+    /// Build with an explicit session TTL (lets tests avoid the process environment).
+    pub fn with_session_ttl(
+        username: impl Into<String>,
+        password: &str,
+        session_ttl: Duration,
+    ) -> Self {
         let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).unwrap_or_default();
         Self {
             admin_username: username.into(),
             admin_password_hash: hash,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            session_ttl,
         }
     }
 
@@ -53,7 +77,7 @@ impl Auth {
         self.sessions
             .write()
             .await
-            .insert(token.clone(), Instant::now() + SESSION_TTL);
+            .insert(token.clone(), Instant::now() + self.session_ttl);
         token
     }
 

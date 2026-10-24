@@ -7,9 +7,71 @@ use std::collections::HashMap;
 use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun, Tool};
 use crate::entities::{RunKind, RunState};
 
+/// Built-in catalog defaults that operators may override via the environment:
+/// the harness image used by every seeded agent, and each agent's
+/// `max_concurrency`. Unset/blank values fall back to the constants below, so a
+/// bare deployment still gets the historical defaults.
+#[derive(Debug, Clone)]
+pub struct CatalogDefaults {
+    /// Harness image reference seeded into every agent template.
+    pub harness_image: String,
+    /// Per-agent concurrency caps (agent id → max concurrent runs).
+    pub max_concurrency: HashMap<String, u32>,
+}
+
+/// Default harness image (matches the chart's `harness.image` placeholder).
+pub const DEFAULT_HARNESS_IMAGE: &str = "cat-herder-agent-harness:0.1.0";
+
+impl Default for CatalogDefaults {
+    fn default() -> Self {
+        let max_concurrency = [
+            ("agent-codeact", 8u32),
+            ("agent-reviewer", 4u32),
+            ("agent-docs", 4u32),
+        ]
+        .iter()
+        .map(|(id, n)| (id.to_string(), *n))
+        .collect();
+        Self {
+            harness_image: DEFAULT_HARNESS_IMAGE.to_string(),
+            max_concurrency,
+        }
+    }
+}
+
+impl CatalogDefaults {
+    /// Read the harness-image override from `CAT_HERDER_HARNESS_IMAGE` (blank/unset
+    /// falls back to [`DEFAULT_HARNESS_IMAGE`]). Per-agent concurrency keeps its
+    /// built-in defaults; callers that need different caps adjust
+    /// [`Self::max_concurrency`] on the returned value.
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(image) = std::env::var("CAT_HERDER_HARNESS_IMAGE")
+            && !image.trim().is_empty()
+        {
+            cfg.harness_image = image.trim().to_string();
+        }
+        cfg
+    }
+
+    /// The concurrency cap for `agent_id` (falls back to 1 when unknown).
+    fn concurrency(&self, agent_id: &str) -> u32 {
+        self.max_concurrency.get(agent_id).copied().unwrap_or(1)
+    }
+}
+
 /// Build the default agent catalog, applying per-agent model overrides (id → model)
-/// from configuration (see the Helm chart's `agents.models`).
+/// from configuration (see the Helm chart's `agents.models`). Image and
+/// concurrency come from [`CatalogDefaults::from_env`].
 pub fn default_agents(model_overrides: &HashMap<String, String>) -> Vec<AgentTemplate> {
+    default_agents_with(&CatalogDefaults::from_env(), model_overrides)
+}
+
+/// Build the default agent catalog with explicit [`CatalogDefaults`].
+pub fn default_agents_with(
+    defaults: &CatalogDefaults,
+    model_overrides: &HashMap<String, String>,
+) -> Vec<AgentTemplate> {
     let model = |id: &str, default: &str| -> String {
         model_overrides.get(id).cloned().unwrap_or_else(|| default.to_string())
     };
@@ -19,7 +81,7 @@ pub fn default_agents(model_overrides: &HashMap<String, String>) -> Vec<AgentTem
             id: "agent-codeact".into(),
             name: "CodeAct coding agent".into(),
             description: "General-purpose coding agent: plans, edits, tests, and opens PRs.".into(),
-            image: "cat-herder-agent-harness:0.1.0".into(),
+            image: defaults.harness_image.clone(),
             runtime_tier: RuntimeTier::Default,
             model: model("agent-codeact", "anthropic:claude-sonnet-4-6"),
             tools: vec![
@@ -29,27 +91,27 @@ pub fn default_agents(model_overrides: &HashMap<String, String>) -> Vec<AgentTem
                 "github".into(),
                 "credential".into(),
             ],
-            max_concurrency: 8,
+            max_concurrency: defaults.concurrency("agent-codeact"),
         },
         AgentTemplate {
             id: "agent-reviewer".into(),
             name: "Code review agent".into(),
             description: "Reviews diffs for correctness, security, and style.".into(),
-            image: "cat-herder-agent-harness:0.1.0".into(),
+            image: defaults.harness_image.clone(),
             runtime_tier: RuntimeTier::Gvisor,
             model: model("agent-reviewer", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "git".into(), "github".into()],
-            max_concurrency: 4,
+            max_concurrency: defaults.concurrency("agent-reviewer"),
         },
         AgentTemplate {
             id: "agent-docs".into(),
             name: "Documentation agent".into(),
             description: "Generates changelogs and API docs from the codebase.".into(),
-            image: "cat-herder-agent-harness:0.1.0".into(),
+            image: defaults.harness_image.clone(),
             runtime_tier: RuntimeTier::Default,
             model: model("agent-docs", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "web_search".into()],
-            max_concurrency: 4,
+            max_concurrency: defaults.concurrency("agent-docs"),
         },
     ]
 }
@@ -75,6 +137,28 @@ mod tests {
         let agents = default_agents(&HashMap::new());
         assert_eq!(agents.len(), 3);
         assert!(agents.iter().all(|a| a.model.contains(':')));
+    }
+
+    #[test]
+    fn catalog_defaults_match_historical_values() {
+        let d = CatalogDefaults::default();
+        assert_eq!(d.harness_image, DEFAULT_HARNESS_IMAGE);
+        assert_eq!(d.concurrency("agent-codeact"), 8);
+        assert_eq!(d.concurrency("agent-reviewer"), 4);
+        assert_eq!(d.concurrency("agent-docs"), 4);
+        // Unknown agent → safe fallback.
+        assert_eq!(d.concurrency("agent-unknown"), 1);
+    }
+
+    #[test]
+    fn default_agents_with_applies_harness_image_and_concurrency() {
+        let mut d = CatalogDefaults::default();
+        d.harness_image = "ghcr.io/acme/harness:9.9.9".into();
+        d.max_concurrency.insert("agent-codeact".into(), 16);
+        let agents = default_agents_with(&d, &HashMap::new());
+        assert!(agents.iter().all(|a| a.image == "ghcr.io/acme/harness:9.9.9"));
+        let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
+        assert_eq!(codeact.max_concurrency, 16);
     }
 }
 
