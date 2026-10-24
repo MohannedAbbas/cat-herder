@@ -169,6 +169,7 @@ mod tests {
             tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
+            task_spec: "test".into(),
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };
@@ -183,6 +184,7 @@ mod tests {
             tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
+            task_spec: "test".into(),
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };
@@ -199,6 +201,7 @@ mod tests {
             tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
+            task_spec: "test".into(),
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };

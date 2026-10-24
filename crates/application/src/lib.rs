@@ -21,6 +21,7 @@ where
         tenant: req.tenant,
         kind: req.kind,
         state: RunState::Queued,
+        task_spec: req.task_spec,
         max_concurrency: req.max_concurrency,
         created_at: SystemTime::now(),
     };

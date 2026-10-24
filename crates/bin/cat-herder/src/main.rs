@@ -15,10 +15,11 @@ async fn main() {
     let namespace = std::env::var("CAT_HERDER_NAMESPACE").unwrap_or_else(|_| "cat-herder".into());
     let harness_image = std::env::var("CAT_HERDER_HARNESS_IMAGE")
         .unwrap_or_else(|_| "127.0.0.1:5000/cat-herder-agent-harness".into());
+    let model = std::env::var("CAT_HERDER_MODEL").unwrap_or_default();
 
     // The runtime is optional at startup — if the cluster/client is unavailable we
     // still serve read endpoints (POST /v1/runs will return 503).
-    let runtime = match SandboxRuntime::new(namespace, harness_image).await {
+    let runtime = match SandboxRuntime::new(namespace, harness_image, model).await {
         Ok(rt) => Some(rt),
         Err(e) => {
             eprintln!("warning: execution runtime unavailable: {e}");

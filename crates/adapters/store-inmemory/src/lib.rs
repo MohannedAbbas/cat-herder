@@ -68,6 +68,7 @@ mod tests {
             tenant,
             kind: RunKind::Agent,
             state: RunState::Queued,
+            task_spec: "test".into(),
             max_concurrency: 1,
             created_at: SystemTime::now(),
         }

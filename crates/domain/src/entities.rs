@@ -53,6 +53,7 @@ pub struct Run {
     pub tenant: TenantId,
     pub kind: RunKind,
     pub state: RunState,
+    pub task_spec: String,
     pub max_concurrency: u32,
     pub created_at: SystemTime,
 }

@@ -2,6 +2,14 @@
 
 namespace: cat-herder
 
+# LLM configuration for the harness.
+# `model` is provider-qualified (e.g. "anthropic:claude-sonnet-4-6"). The API key is
+# provided via a Secret named `llmApiKeySecret` (create it with:
+#   kubectl -n cat-herder create secret generic cat-herder-llm --from-literal=api-key=...
+# ). The control plane passes it through to the sandbox pod env.
+model: ""
+llmApiKeySecret: cat-herder-llm
+
 # Image refs are single strings so Tilt can inject locally-built images
 # (see Tiltfile `image_keys`).
 controlPlane:

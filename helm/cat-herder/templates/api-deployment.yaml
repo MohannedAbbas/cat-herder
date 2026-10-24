@@ -25,6 +25,14 @@ spec:
               value: {{ .Values.namespace | default "cat-herder" }}
             - name: CAT_HERDER_HARNESS_IMAGE
               value: "{{ .Values.harness.image }}"
+            - name: CAT_HERDER_MODEL
+              value: {{ .Values.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmApiKeySecret }}
+                  key: api-key
+                  optional: true
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:

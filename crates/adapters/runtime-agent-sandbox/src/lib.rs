@@ -19,6 +19,7 @@ use kube::{
 pub struct SandboxRuntime {
     api: Api<DynamicObject>,
     harness_image: String,
+    model: String,
 }
 
 impl SandboxRuntime {
@@ -26,9 +27,10 @@ impl SandboxRuntime {
     pub async fn new(
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
+        model: impl Into<String>,
     ) -> DomainResult<Self> {
         let client = Client::try_default().await?;
-        Self::new_with_client(client, namespace, harness_image)
+        Self::new_with_client(client, namespace, harness_image, model)
     }
 
     /// Build from an existing client (testable / injectable).
@@ -36,12 +38,14 @@ impl SandboxRuntime {
         client: Client,
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
+        model: impl Into<String>,
     ) -> DomainResult<Self> {
         let namespace = namespace.into();
         let api = Api::namespaced_with(client, &namespace, &Self::api_resource());
         Ok(Self {
             api,
             harness_image: harness_image.into(),
+            model: model.into(),
         })
     }
 
@@ -56,6 +60,19 @@ impl SandboxRuntime {
     }
 
     fn sandbox_object(&self, run: &Run) -> DynamicObject {
+        let mut env = vec![
+            serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
+            serde_json::json!({ "name": "TENANT_ID", "value": run.tenant.0.to_string() }),
+            serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
+            serde_json::json!({ "name": "MODEL", "value": self.model }),
+        ];
+        // Pass the LLM key through if it's present in the control plane's env
+        // (sourced from a Kubernetes Secret in the chart). PLAN.md §11.3 will replace
+        // this with brokered credentials.
+        if let Ok(key) = std::env::var("LLM_API_KEY") {
+            env.push(serde_json::json!({ "name": "LLM_API_KEY", "value": key }));
+        }
+
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
         obj.data = serde_json::json!({
             "spec": {
@@ -64,10 +81,7 @@ impl SandboxRuntime {
                         "containers": [{
                             "name": "harness",
                             "image": self.harness_image,
-                            "env": [
-                                { "name": "RUN_ID", "value": run.id.0.to_string() },
-                                { "name": "TENANT_ID", "value": run.tenant.0.to_string() },
-                            ],
+                            "env": env,
                             "ports": [{ "containerPort": 8080 }],
                             "readinessProbe": {
                                 "httpGet": { "path": "/healthz", "port": 8080 },
