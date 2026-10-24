@@ -10,6 +10,7 @@ use cat_herder_domain::ports::{
     AgentRuntime, DomainResult, RunRepository, RunRequest, SessionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
+use cat_herder_domain::state::is_terminal;
 
 /// Use case: accept a trigger's request, persist it, spawn the agent, and advance the
 /// lifecycle state machine through to `PodPending`. The reconciler (`reconcile_once`)
@@ -105,6 +106,61 @@ where
     }
 
     Ok(advanced)
+}
+
+/// Outcome reported by the harness when an agent completes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Succeeded,
+    Failed,
+}
+
+/// Use case: record the harness's completion of a run, advancing it to `Succeeded`
+/// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
+/// for runs that already reached a final state. Also syncs the session display row.
+pub async fn complete_run<P, S>(
+    run_id: RunId,
+    outcome: Outcome,
+    repo: &P,
+    sessions: &S,
+) -> DomainResult<Run>
+where
+    P: RunRepository,
+    S: SessionRepository,
+{
+    let run = repo.get(run_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run {} not found", run_id.0),
+        )
+    })?;
+
+    let target = match outcome {
+        Outcome::Succeeded => RunState::Succeeded,
+        Outcome::Failed => RunState::Failed,
+    };
+
+    // Idempotent: don't overwrite a run that already reached a final state.
+    if run.state == RunState::Succeeded || is_terminal(run.state) {
+        return Ok(run);
+    }
+
+    let mut run = run;
+    match run.state {
+        RunState::Running => {
+            run.transition(target)?;
+        }
+        RunState::PodPending => {
+            run.transition(RunState::Running)?;
+            run.transition(target)?;
+        }
+        // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
+        _ => return Ok(run),
+    }
+
+    let run = repo.save(&run).await?;
+    sessions.sync_run(&run).await?;
+    Ok(run)
 }
 
 #[cfg(test)]
@@ -218,5 +274,65 @@ mod tests {
             .unwrap();
         assert_eq!(n, 0);
         assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::PodPending);
+    }
+
+    #[tokio::test]
+    async fn complete_run_marks_succeeded_and_syncs_display() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let session_id = run.session_id.clone().unwrap();
+
+        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
+            .await
+            .unwrap();
+        assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Running);
+
+        let done = complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap();
+        assert_eq!(done.state, RunState::Succeeded);
+        assert!(done.finished_at.is_some());
+        assert_eq!(
+            sessions.get(&session_id).await.unwrap().unwrap().runs[0].state,
+            RunState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_run_marks_failed() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
+            .await
+            .unwrap();
+
+        let done = complete_run(run.id, Outcome::Failed, &repo, &sessions).await.unwrap();
+        assert_eq!(done.state, RunState::Failed);
+    }
+
+    #[tokio::test]
+    async fn complete_run_is_idempotent() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap().state,
+            RunState::Succeeded
+        );
+        assert_eq!(
+            complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap().state,
+            RunState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_run_unknown_run_errors() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        assert!(complete_run(RunId(999), Outcome::Succeeded, &repo, &sessions).await.is_err());
     }
 }

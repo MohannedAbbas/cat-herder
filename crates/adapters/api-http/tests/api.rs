@@ -179,3 +179,140 @@ async fn mcp_list_agents_tool_works() {
     let agents: serde_json::Value = serde_json::from_str(text).unwrap();
     assert!(agents.as_array().unwrap().len() >= 3);
 }
+
+// --- run events ------------------------------------------------------------
+
+#[tokio::test]
+async fn post_finished_event_marks_run_succeeded() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let seeded = state
+        .repo
+        .save(&Run {
+            id: RunId(0),
+            tenant: TenantId(1),
+            kind: RunKind::Agent,
+            state: RunState::Running,
+            task_spec: "event test".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let (status, body) = post_json(
+        app,
+        &format!("/v1/runs/{}/events", seeded.id.0),
+        r#"{"type":"finished","status":"succeeded"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["state"], "succeeded");
+    assert!(v["finishedAt"].is_string());
+}
+
+#[tokio::test]
+async fn post_finished_event_failed_marks_run_failed() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let seeded = state
+        .repo
+        .save(&Run {
+            id: RunId(0),
+            tenant: TenantId(1),
+            kind: RunKind::Agent,
+            state: RunState::Running,
+            task_spec: "event test".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let (status, body) = post_json(
+        app,
+        &format!("/v1/runs/{}/events", seeded.id.0),
+        r#"{"type":"finished","status":"failed"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["state"], "failed");
+}
+
+#[tokio::test]
+async fn post_event_unknown_run_returns_404() {
+    let (status, _) = post_json(
+        app(),
+        "/v1/runs/999/events",
+        r#"{"type":"finished","status":"succeeded"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn post_nonterminal_event_is_acknowledged_without_state_change() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let seeded = state
+        .repo
+        .save(&Run {
+            id: RunId(0),
+            tenant: TenantId(1),
+            kind: RunKind::Agent,
+            state: RunState::Running,
+            task_spec: "event test".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let (status, body) = post_json(
+        app,
+        &format!("/v1/runs/{}/events", seeded.id.0),
+        r#"{"type":"started"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["state"], "running");
+}

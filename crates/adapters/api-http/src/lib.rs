@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 
-use cat_herder_application::start_run;
+use cat_herder_application::{Outcome, complete_run, start_run};
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
 };
@@ -49,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run))
+        .route("/v1/runs/{id}/events", post(post_run_event))
         .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
@@ -106,6 +107,46 @@ async fn get_run(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(RunResponse::from(&run)))
+}
+
+/// A harness-reported event (see `PLAN.md` §9). The only state-changing event today
+/// is `finished` (advances the run to `succeeded`/`failed`); others are acknowledged.
+#[derive(Debug, serde::Deserialize)]
+pub struct RunEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Ingest a harness-reported event for a run.
+async fn post_run_event(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(event): Json<RunEvent>,
+) -> Result<Json<RunResponse>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    let exists = state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    match event.event_type.as_str() {
+        "finished" => {
+            let outcome = match event.status.as_deref() {
+                Some("failed") => Outcome::Failed,
+                _ => Outcome::Succeeded,
+            };
+            let run = complete_run(run_id, outcome, &state.repo, &state.sessions)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(RunResponse::from(&run)))
+        }
+        // "started" and any other event type: acknowledged without a state change.
+        _ => Ok(Json(RunResponse::from(&exists))),
+    }
 }
 
 /// Accept an external webhook, normalize it, and trigger a run.

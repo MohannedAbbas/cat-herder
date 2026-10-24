@@ -18,6 +18,7 @@ use kube::{
 #[derive(Clone)]
 pub struct SandboxRuntime {
     api: Api<DynamicObject>,
+    namespace: String,
     harness_image: String,
     model: String,
 }
@@ -44,6 +45,7 @@ impl SandboxRuntime {
         let api = Api::namespaced_with(client, &namespace, &Self::api_resource());
         Ok(Self {
             api,
+            namespace,
             harness_image: harness_image.into(),
             model: model.into(),
         })
@@ -66,6 +68,11 @@ impl SandboxRuntime {
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
             serde_json::json!({ "name": "MODEL", "value": self.model }),
         ];
+        // The control plane's in-cluster URL, so the harness can report events back.
+        // Overridable via the control plane's own env.
+        let control_url = std::env::var("CAT_HERDER_CONTROL_URL")
+            .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));
+        env.push(serde_json::json!({ "name": "CAT_HERDER_CONTROL_URL", "value": control_url }));
         // Pass the LLM key through if it's present in the control plane's env
         // (sourced from a Kubernetes Secret in the chart). PLAN.md §11.3 will replace
         // this with brokered credentials.

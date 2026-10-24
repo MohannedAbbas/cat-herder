@@ -9,12 +9,36 @@ Kubernetes Secret); it is mapped to the provider's own env var that LangChain re
 
 from __future__ import annotations
 
+import json
 import os
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RUN_ID = os.environ.get("RUN_ID", "unknown")
 PORT = int(os.environ.get("PORT", "8080"))
+# Control-plane URL used to report run events (injected by the control plane).
+CONTROL_URL = os.environ.get("CAT_HERDER_CONTROL_URL", "").rstrip("/")
+
+
+def report_event(event_type: str, status: str | None = None) -> None:
+    """Report a run event back to the control plane (best-effort, non-fatal)."""
+    if not CONTROL_URL:
+        return
+    payload: dict = {"type": event_type}
+    if status:
+        payload["status"] = status
+    req = urllib.request.Request(
+        f"{CONTROL_URL}/v1/runs/{RUN_ID}/events",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except Exception as exc:  # noqa: BLE001 — reporting is best-effort
+        print(f"failed to report {event_type} event: {exc}", flush=True)
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -76,11 +100,14 @@ def main() -> None:
         return
 
     set_provider_key(model)
+    report_event("started")
     try:
         result = run_agent(task_spec, model)
         print(f"agent completed: {result}", flush=True)
+        report_event("finished", status="succeeded")
     except Exception as exc:  # noqa: BLE001 — keep the pod alive and log
         print(f"agent failed: {exc}", flush=True)
+        report_event("finished", status="failed")
 
     # Keep the health server alive after the agent finishes.
     threading.Event().wait()
