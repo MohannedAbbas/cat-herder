@@ -86,6 +86,11 @@ oauth:
     secret: cat-herder-github-oauth
     redirectUrl: ""
     allowedUsers: []
+  gitlab:
+    enabled: false
+    secret: cat-herder-gitlab-oauth
+    redirectUrl: ""
+    allowedUsers: []
 
 ingress:
   enabled: false

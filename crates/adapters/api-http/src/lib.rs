@@ -25,7 +25,7 @@ use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 pub use auth::Auth;
 pub use crypto::AesGcmCipher;
 pub use key_store::KeySecretStore;
-pub use oauth::{GitHubOAuth, OAuthConfig};
+pub use oauth::{GitHubOAuth, GitLabOAuth, OAuthConfig, GITLAB, GITHUB};
 pub use pr::{FileChange, PrClient, PrSpec};
 pub use repo::{
     AgentRepo, AuditRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
@@ -65,6 +65,8 @@ pub struct AppState {
     pub auth: Auth,
     /// Optional GitHub OAuth SSO provider (present when its env vars are set).
     pub github_oauth: Option<GitHubOAuth>,
+    /// Optional GitLab OAuth SSO provider (present when its env vars are set).
+    pub gitlab_oauth: Option<GitLabOAuth>,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
@@ -91,6 +93,7 @@ impl Default for AppState {
             settings: SettingRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
             github_oauth: None,
+            gitlab_oauth: None,
             runtime: None,
             cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
             key_store: None,
@@ -118,6 +121,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/me", get(admin::me))
         .route("/v1/auth/github/login", get(admin::github_login))
         .route("/v1/auth/github/callback", get(admin::github_callback))
+        .route("/v1/auth/gitlab/login", get(admin::gitlab_login))
+        .route("/v1/auth/gitlab/callback", get(admin::gitlab_callback))
         // admin
         .route("/v1/admin/agents/{id}", put(admin::upsert_agent).delete(admin::delete_agent))
         .route("/v1/admin/providers", get(admin::list_providers))

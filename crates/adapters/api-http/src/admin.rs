@@ -151,6 +151,70 @@ pub async fn github_callback(
     }
 }
 
+// --- GitLab OAuth SSO ------------------------------------------------------
+
+/// Query params on the GitLab OAuth callback (`?code=...&state=...`).
+#[derive(Debug, Deserialize)]
+pub struct GitLabCallback {
+    pub code: String,
+    /// CSRF token that `gitlab_login` stashed in a short-lived cookie.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// Begin the GitLab OAuth flow: set a CSRF `state` cookie and redirect to GitLab.
+pub async fn gitlab_login(State(state): State<AppState>, jar: CookieJar) -> Response {
+    match state.gitlab_oauth.as_ref() {
+        Some(oauth) => {
+            let csrf = uuid::Uuid::new_v4().to_string();
+            let cookie = Cookie::build((super::oauth::GITLAB.state_cookie, csrf.clone()))
+                .http_only(true)
+                .same_site(axum_extra::extract::cookie::SameSite::Lax)
+                .path("/")
+                .build();
+            // Append the CSRF state to GitLab's authorize URL.
+            let url = format!("{}&state={}", oauth.config().authorize_url(), csrf);
+            (jar.add(cookie), Redirect::temporary(url.as_str())).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "GitLab OAuth not configured").into_response(),
+    }
+}
+
+/// Complete the GitLab OAuth flow: verify `state`, exchange the code, fetch the
+/// user, enforce the allow-list, then issue a normal admin session.
+pub async fn gitlab_callback(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(params): axum::extract::Query<GitLabCallback>,
+) -> Response {
+    let Some(oauth) = state.gitlab_oauth.as_ref() else {
+        return (StatusCode::NOT_FOUND, "GitLab OAuth not configured").into_response();
+    };
+
+    // CSRF check: the callback state must match the cookie set at login.
+    let expected = jar
+        .get(super::oauth::GITLAB.state_cookie)
+        .map(|c| c.value().to_string());
+    if expected.is_none() || expected.as_deref() != params.state.as_deref() {
+        return (StatusCode::BAD_REQUEST, "invalid OAuth state").into_response();
+    }
+    let clear_state = Cookie::build((super::oauth::GITLAB.state_cookie, ""))
+        .path("/")
+        .build();
+
+    match oauth.authenticate(&params.code).await {
+        Ok(_login) => {
+            let token = state.auth.create_session().await;
+            let response = Redirect::to("/").into_response();
+            (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
+        }
+        Err(super::oauth::AuthOutcome::NotAllowed) => {
+            (StatusCode::FORBIDDEN, "GitLab user not authorized").into_response()
+        }
+        Err(_) => (StatusCode::BAD_GATEWAY, "GitLab authentication failed").into_response(),
+    }
+}
+
 // --- agents ----------------------------------------------------------------
 
 pub async fn upsert_agent(

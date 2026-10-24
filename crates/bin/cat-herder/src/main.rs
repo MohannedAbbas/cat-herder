@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     router, AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, GIT_HOSTS_SETTING, GitHubOAuth,
-    GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo,
-    SessionRepo, SettingRepo, ToolRepo,
+    GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo,
+    RunRepo, SessionRepo, SettingRepo, ToolRepo,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
@@ -259,6 +259,20 @@ async fn main() {
         eprintln!("GitHub OAuth SSO disabled (GITHUB_OAUTH_* not fully configured)");
     }
 
+    // Optional GitLab OAuth SSO, configured independently of GitHub via
+    // GITLAB_OAUTH_*. Both may be enabled simultaneously; password login is always
+    // available.
+    let gitlab_oauth = OAuthConfig::from_env_gitlab().map(|cfg| {
+        eprintln!(
+            "GitLab OAuth SSO enabled ({} allowed user(s))",
+            cfg.allowed_users.len()
+        );
+        GitLabOAuth::new(cfg)
+    });
+    if gitlab_oauth.is_none() {
+        eprintln!("GitLab OAuth SSO disabled (GITLAB_OAUTH_* not fully configured)");
+    }
+
     let state = AppState {
         repo: repos.run,
         agents: repos.agents,
@@ -271,6 +285,7 @@ async fn main() {
         settings: repos.settings,
         auth,
         github_oauth,
+        gitlab_oauth,
         runtime,
         cipher,
         key_store: Some(key_store),

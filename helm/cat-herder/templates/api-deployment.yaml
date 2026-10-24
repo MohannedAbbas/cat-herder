@@ -71,6 +71,22 @@ spec:
             - name: GITHUB_OAUTH_ALLOWED_USERS
               value: {{ join "," .Values.oauth.github.allowedUsers | quote }}
             {{- end }}
+            {{- if and .Values.oauth.gitlab .Values.oauth.gitlab.enabled }}
+            - name: GITLAB_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth.gitlab.secret }}
+                  key: client-id
+            - name: GITLAB_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth.gitlab.secret }}
+                  key: client-secret
+            - name: GITLAB_OAUTH_REDIRECT_URL
+              value: {{ .Values.oauth.gitlab.redirectUrl | quote }}
+            - name: GITLAB_OAUTH_ALLOWED_USERS
+              value: {{ join "," .Values.oauth.gitlab.allowedUsers | quote }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:

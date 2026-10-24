@@ -69,6 +69,9 @@ The control plane is configured via environment variables:
 | `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App credentials. |
 | `GITHUB_OAUTH_REDIRECT_URL` | Public base URL of the control plane; the callback path `/v1/auth/github/callback` is appended. |
 | `GITHUB_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to become admin. |
+| `GITLAB_OAUTH_CLIENT_ID` / `GITLAB_OAUTH_CLIENT_SECRET` | GitLab OAuth application credentials. |
+| `GITLAB_OAUTH_REDIRECT_URL` | Public base URL of the control plane; the callback path `/v1/auth/gitlab/callback` is appended. |
+| `GITLAB_OAUTH_ALLOWED_USERS` | Comma-separated GitLab usernames allowed to become admin. |
 
 ### GitHub OAuth SSO
 
@@ -85,6 +88,24 @@ Register the OAuth App callback URL as
 `<GITHUB_OAUTH_REDIRECT_URL>/v1/auth/github/callback`. With Helm, set
 `oauth.github.enabled=true` (see `values.yaml`); client id/secret are read from a
 Secret with keys `client-id` / `client-secret`.
+
+### GitLab OAuth SSO
+
+GitLab SSO is a second, independent provider that mirrors GitHub SSO and can be
+enabled alongside it (and alongside password login). When all of
+`GITLAB_OAUTH_CLIENT_ID`, `GITLAB_OAUTH_CLIENT_SECRET`, and
+`GITLAB_OAUTH_REDIRECT_URL` are set, GitLab SSO is enabled:
+
+- `GET /v1/auth/gitlab/login` redirects to GitLab (`https://gitlab.com/oauth/authorize`,
+  scope `read_user`).
+- `GET /v1/auth/gitlab/callback?code=…&state=…` exchanges the code at
+  `https://gitlab.com/oauth/token`, loads the authenticated user from
+  `https://gitlab.com/api/v4/user`, and — **only if that user's `username` is in
+  `GITLAB_OAUTH_ALLOWED_USERS`** — issues a normal admin session.
+
+Register the GitLab application callback URL as
+`<GITLAB_OAUTH_REDIRECT_URL>/v1/auth/gitlab/callback`. When the variables are not
+fully configured, the GitLab routes return `404` and password login still works.
 
 ## Toolchain notes
 

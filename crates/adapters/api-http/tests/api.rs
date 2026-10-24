@@ -6,7 +6,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use cat_herder_api_http::{router, AppState, GitHubOAuth, OAuthConfig};
+use cat_herder_api_http::{router, AppState, GitHubOAuth, GitLabOAuth, OAuthConfig, GITLAB, GITHUB};
 use cat_herder_domain::api::{AgentTemplate, Session, SessionSummary};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -689,6 +689,7 @@ fn oauth_app() -> Router {
         client_secret: "test-secret".into(),
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
+        provider: &GITHUB,
     };
     let mut state = AppState::default();
     state.github_oauth = Some(GitHubOAuth::new(cfg));
@@ -743,5 +744,70 @@ async fn github_callback_rejects_missing_state_cookie() {
 #[tokio::test]
 async fn github_callback_unconfigured_returns_404() {
     let (status, _body) = send(app(), "/v1/auth/github/callback?code=abc&state=xyz").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// --- GitLab OAuth SSO ------------------------------------------------------
+
+fn gitlab_oauth_app() -> Router {
+    let cfg = OAuthConfig {
+        client_id: "test-client".into(),
+        client_secret: "test-secret".into(),
+        redirect_url: "https://cat.example.com".into(),
+        allowed_users: vec!["octocat".into()],
+        provider: &GITLAB,
+    };
+    let mut state = AppState::default();
+    state.gitlab_oauth = Some(GitLabOAuth::new(cfg));
+    router(state)
+}
+
+#[tokio::test]
+async fn gitlab_login_redirects_to_gitlab_and_sets_state_cookie() {
+    let res = gitlab_oauth_app()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/gitlab/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    let location = res
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .expect("Location header");
+    assert!(location.starts_with("https://gitlab.com/oauth/authorize"));
+    assert!(location.contains("client_id=test-client"));
+    assert!(location.contains("scope=read_user"));
+    assert!(location.contains("state="));
+
+    let set_cookie = res
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("gl_oauth_state="), "missing CSRF cookie");
+    assert!(set_cookie.to_lowercase().contains("httponly"));
+}
+
+#[tokio::test]
+async fn gitlab_login_unconfigured_returns_404() {
+    let (status, _body) = send(app(), "/v1/auth/gitlab/login").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn gitlab_callback_rejects_missing_state_cookie() {
+    let (status, _body) =
+        send(gitlab_oauth_app(), "/v1/auth/gitlab/callback?code=abc&state=xyz").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn gitlab_callback_unconfigured_returns_404() {
+    let (status, _body) = send(app(), "/v1/auth/gitlab/callback?code=abc&state=xyz").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
