@@ -66,6 +66,9 @@ pub trait SessionRepository {
     async fn create(&self, id: &str, title: &str) -> DomainResult<()>;
     /// Append a display run to an existing session.
     async fn add_run(&self, session_id: &str, run: &SessionRun) -> DomainResult<()>;
+    /// Update a session's display run (keyed `run-{id}`) to match the lifecycle
+    /// run's current state and timing (called by the reconciler as it advances).
+    async fn sync_run(&self, run: &Run) -> DomainResult<()>;
 }
 
 pub trait EventBus {

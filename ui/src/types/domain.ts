@@ -75,6 +75,7 @@ export interface RunRecord {
   model: string | null
   repo: string | null
   language: string | null
+  sessionId: string | null
   taskSpec: string
   createdAt: string
   startedAt: string | null

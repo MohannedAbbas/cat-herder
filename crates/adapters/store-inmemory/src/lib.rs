@@ -128,6 +128,19 @@ impl SessionRepository for InMemorySessionRepository {
         }
         Ok(())
     }
+
+    async fn sync_run(&self, run: &Run) -> DomainResult<()> {
+        let projected = SessionRun::from(run);
+        let mut sessions = self.sessions.write().await;
+        for s in sessions.iter_mut() {
+            if let Some(r) = s.runs.iter_mut().find(|r| r.id == projected.id) {
+                r.state = projected.state;
+                r.started_at = projected.started_at.clone();
+                r.finished_at = projected.finished_at.clone();
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

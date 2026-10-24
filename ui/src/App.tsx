@@ -5,6 +5,7 @@ import SessionDetailPage from './features/sessions/SessionDetailPage'
 import AgentListPage from './features/agents/AgentListPage'
 import AgentDetailPage from './features/agents/AgentDetailPage'
 import RunListPage from './features/runs/RunListPage'
+import RunDetailPage from './features/runs/RunDetailPage'
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<Navigate to="/runs" replace />} />
         <Route path="/runs" element={<RunListPage />} />
+        <Route path="/runs/:id" element={<RunDetailPage />} />
         <Route path="/sessions" element={<SessionListPage />} />
         <Route path="/sessions/:id" element={<SessionDetailPage />} />
         <Route path="/agents" element={<AgentListPage />} />

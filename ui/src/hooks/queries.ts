@@ -28,3 +28,11 @@ export function useAgent(id: string | undefined) {
 export function useRuns() {
   return useQuery({ queryKey: ['runs'], queryFn: () => api.listRuns() })
 }
+
+export function useRun(id: string | undefined) {
+  return useQuery({
+    queryKey: ['runs', id],
+    queryFn: () => api.getRun(Number(id)),
+    enabled: id != null,
+  })
+}

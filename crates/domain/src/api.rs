@@ -101,6 +101,7 @@ pub struct RunResponse {
     pub model: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
+    pub session_id: Option<String>,
     pub task_spec: String,
     pub created_at: String,
     pub started_at: Option<String>,
@@ -118,6 +119,7 @@ impl From<&crate::entities::Run> for RunResponse {
             model: run.model.clone(),
             repo: run.repo.clone(),
             language: run.language.clone(),
+            session_id: run.session_id.clone(),
             task_spec: run.task_spec.clone(),
             created_at: to_iso(run.created_at),
             started_at: run.started_at.map(to_iso),
@@ -127,8 +129,9 @@ impl From<&crate::entities::Run> for RunResponse {
 }
 
 /// Project a lifecycle run into the session detail's display row. Fields that a
-/// bare run doesn't carry (agent identity, timing, cost) are left as placeholders;
-/// they'll be populated as the harness reports events (PLAN.md §9).
+/// bare run doesn't carry (agent identity, cost) are left as placeholders; they'll
+/// be populated as the harness reports events (PLAN.md §9). Lifecycle timing is
+/// carried through so the display row can be kept in sync.
 impl From<&crate::entities::Run> for SessionRun {
     fn from(run: &crate::entities::Run) -> Self {
         SessionRun {
@@ -139,8 +142,8 @@ impl From<&crate::entities::Run> for SessionRun {
             agent_name: "Default agent".into(),
             task_spec: run.task_spec.clone(),
             created_at: to_iso(run.created_at),
-            started_at: None,
-            finished_at: None,
+            started_at: run.started_at.map(to_iso),
+            finished_at: run.finished_at.map(to_iso),
             cost_usd: None,
         }
     }

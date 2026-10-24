@@ -183,6 +183,7 @@ const runs: RunRecord[] = [
     model: 'anthropic/claude-sonnet-4-6',
     repo: 'org/auth-service',
     language: 'rust',
+    sessionId: 'sess-01',
     taskSpec: 'Investigate and fix the token refresh race in auth middleware.',
     createdAt: '2026-10-23T09:15:00Z',
     startedAt: '2026-10-23T09:16:00Z',
@@ -197,6 +198,7 @@ const runs: RunRecord[] = [
     model: 'openai/gpt-5.5',
     repo: 'org/web-app',
     language: 'typescript',
+    sessionId: 'sess-02',
     taskSpec: 'Migrate the HTTP adapter from axum 0.7 to 0.8.',
     createdAt: '2026-10-22T15:31:00Z',
     startedAt: '2026-10-22T15:32:00Z',
@@ -211,6 +213,7 @@ const runs: RunRecord[] = [
     model: 'openai/gpt-5.5',
     repo: 'org/release-tooling',
     language: 'python',
+    sessionId: 'sess-03',
     taskSpec: 'Generate release notes from merged PRs since v0.0.9.',
     createdAt: '2026-10-21T11:01:00Z',
     startedAt: '2026-10-21T11:02:00Z',
@@ -225,6 +228,7 @@ const runs: RunRecord[] = [
     model: null,
     repo: 'org/infra',
     language: 'go',
+    sessionId: 'sess-04',
     taskSpec: 'Reproduce and diagnose the flaky workspace snapshot test.',
     createdAt: '2026-10-20T08:05:00Z',
     startedAt: null,
@@ -283,4 +287,8 @@ export const mockApi: CatHerderApi = {
     return a ? delay(a) : Promise.reject(new Error(`agent ${id} not found`))
   },
   listRuns: () => delay(runs),
+  getRun: (id) => {
+    const r = runs.find((x) => x.id === id)
+    return r ? delay(r) : Promise.reject(new Error(`run ${id} not found`))
+  },
 }

@@ -54,14 +54,14 @@ where
     run.session_id = Some(session_id.clone());
     run = repo.save(&run).await?;
 
-    // Project the run into the session's display rows.
-    sessions.add_run(&session_id, &SessionRun::from(&run)).await?;
-
     run.transition(RunState::Scheduled)?;
     run = repo.save(&run).await?;
 
     run.transition(RunState::PodPending)?;
     run = repo.save(&run).await?;
+
+    // Project the run into the session's display rows (now `PodPending`).
+    sessions.add_run(&session_id, &SessionRun::from(&run)).await?;
 
     runtime.spawn(&run).await?;
 
@@ -80,10 +80,11 @@ fn session_title(task_spec: &str) -> String {
 
 /// Reconcile all active runs against their execution status, advancing the lifecycle
 /// state machine where possible. Returns the number of runs advanced.
-pub async fn reconcile_once<R, P>(runtime: &R, repo: &P) -> DomainResult<usize>
+pub async fn reconcile_once<R, P, S>(runtime: &R, repo: &P, sessions: &S) -> DomainResult<usize>
 where
     R: AgentRuntime,
     P: RunRepository,
+    S: SessionRepository,
 {
     let mut advanced = 0;
 
@@ -95,6 +96,7 @@ where
                     let mut updated = run.clone();
                     updated.transition(next)?;
                     repo.save(&updated).await?;
+                    sessions.sync_run(&updated).await?;
                     advanced += 1;
                 }
             }
@@ -171,12 +173,14 @@ mod tests {
         let sessions = InMemorySessionRepository::default();
         let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
 
-        // The run is linked to a session, and that session has the run's display row.
+        // The run is linked to a session, and that session has the run's display row
+        // (projected at the final pre-reconcile state, PodPending).
         let session_id = run.session_id.as_deref().expect("run linked to a session");
         let session = sessions.get(session_id).await.unwrap().expect("session exists");
         assert_eq!(session.runs.len(), 1);
         assert_eq!(session.runs[0].id, format!("run-{}", run.id.0));
         assert_eq!(session.runs[0].task_spec, "test");
+        assert_eq!(session.runs[0].state, RunState::PodPending);
     }
 
     #[tokio::test]
@@ -185,18 +189,21 @@ mod tests {
         let sessions = InMemorySessionRepository::default();
         let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
         assert_eq!(run.state, RunState::PodPending);
+        let session_id = run.session_id.clone().unwrap();
 
-        // ready -> running
-        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo)
+        // ready -> running (display row synced)
+        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
             .await
             .unwrap();
         assert_eq!(n, 1);
         assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Running);
+        assert_eq!(sessions.get(&session_id).await.unwrap().unwrap().runs[0].state, RunState::Running);
 
-        // gone -> succeeded
-        let n = reconcile_once(&StubRuntime::new(None), &repo).await.unwrap();
+        // gone -> succeeded (display row synced)
+        let n = reconcile_once(&StubRuntime::new(None), &repo, &sessions).await.unwrap();
         assert_eq!(n, 1);
         assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Succeeded);
+        assert_eq!(sessions.get(&session_id).await.unwrap().unwrap().runs[0].state, RunState::Succeeded);
     }
 
     #[tokio::test]
@@ -206,7 +213,7 @@ mod tests {
         let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
 
         // still pending (not ready yet) -> no change
-        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Pending)), &repo)
+        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Pending)), &repo, &sessions)
             .await
             .unwrap();
         assert_eq!(n, 0);

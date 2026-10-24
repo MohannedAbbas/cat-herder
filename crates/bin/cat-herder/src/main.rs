@@ -84,16 +84,17 @@ async fn main() {
     };
 
     let repos = build_repos().await;
-    let repo = repos.run;
 
     // Background reconciler: advance active runs (PodPending -> Running, Running ->
-    // Succeeded) based on sandbox status (PLAN.md §6).
+    // Succeeded) based on sandbox status (PLAN.md §6), and keep the session display
+    // rows in sync.
     if let Some(rt) = runtime.clone() {
-        let repo = repo.clone();
+        let repo = repos.run.clone();
+        let sessions = repos.sessions.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                if let Err(e) = reconcile_once(&rt, &repo).await {
+                if let Err(e) = reconcile_once(&rt, &repo, &sessions).await {
                     eprintln!("reconcile error: {e}");
                 }
             }
@@ -101,7 +102,7 @@ async fn main() {
     }
 
     let state = AppState {
-        repo,
+        repo: repos.run,
         agents: repos.agents,
         sessions: repos.sessions,
         runtime,

@@ -10,6 +10,7 @@ export interface CatHerderApi {
   listAgents(): Promise<AgentTemplate[]>
   getAgent(id: string): Promise<AgentTemplate>
   listRuns(): Promise<RunRecord[]>
+  getRun(id: number): Promise<RunRecord>
 }
 
 /**

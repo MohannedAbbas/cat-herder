@@ -17,4 +17,5 @@ export const httpApi: CatHerderApi = {
   listAgents: () => get<AgentTemplate[]>('/v1/agents'),
   getAgent: (id) => get<AgentTemplate>(`/v1/agents/${id}`),
   listRuns: () => get<RunRecord[]>('/v1/runs'),
+  getRun: (id) => get<RunRecord>(`/v1/runs/${id}`),
 }

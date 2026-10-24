@@ -2,6 +2,7 @@
 //! `session_runs` tables.
 
 use cat_herder_domain::api::{Session, SessionRun, now_iso};
+use cat_herder_domain::entities::Run;
 use cat_herder_domain::ports::{DomainResult, SessionRepository};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
@@ -96,6 +97,18 @@ impl SessionRepository for PostgresSessionRepository {
         .await?;
         Ok(())
     }
+
+    async fn sync_run(&self, run: &Run) -> DomainResult<()> {
+        let projected = SessionRun::from(run);
+        sqlx::query("UPDATE session_runs SET state = $1, started_at = $2, finished_at = $3 WHERE id = $4")
+            .bind(encode_state(projected.state))
+            .bind(projected.started_at.as_deref())
+            .bind(projected.finished_at.as_deref())
+            .bind(projected.id.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 async fn runs_for(pool: &PgPool, session_id: &str) -> Result<Vec<SessionRun>, sqlx::Error> {
@@ -125,6 +138,8 @@ fn run_from_row(row: &PgRow) -> Result<SessionRun, sqlx::Error> {
 mod tests {
     use super::*;
     use cat_herder_domain::ports::SessionRepository;
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use std::time::SystemTime;
 
     // Live test against a real Postgres; skipped unless CAT_HERDER_TEST_DATABASE_URL set.
     #[tokio::test]
@@ -176,5 +191,57 @@ mod tests {
         assert_eq!(s.runs.len(), 1);
         assert_eq!(s.runs[0].id, run_id);
         assert_eq!(s.runs[0].cost_usd, Some(1.5));
+    }
+
+    // Live test for sync_run: the display row follows the lifecycle run's state/timing.
+    #[tokio::test]
+    async fn postgres_sync_run() {
+        let Some(url) = std::env::var("CAT_HERDER_TEST_DATABASE_URL").ok() else {
+            eprintln!("skipping postgres_sync_run: CAT_HERDER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let store = PostgresStore::connect(&url).await.expect("connect");
+        let repo = PostgresSessionRepository::new(&store);
+
+        let id = cat_herder_domain::api::new_session_id();
+        repo.create(&id, "sync test").await.expect("create");
+
+        let projected = SessionRun {
+            id: "run-777".into(),
+            kind: RunKind::Agent,
+            state: RunState::PodPending,
+            agent_id: String::new(),
+            agent_name: "Default agent".into(),
+            task_spec: "sync me".into(),
+            created_at: cat_herder_domain::api::now_iso(),
+            started_at: None,
+            finished_at: None,
+            cost_usd: None,
+        };
+        repo.add_run(&id, &projected).await.expect("add_run");
+
+        let lifecycle = Run {
+            id: RunId(777),
+            tenant: TenantId(1),
+            kind: RunKind::Agent,
+            state: RunState::Succeeded,
+            task_spec: "sync me".into(),
+            session_id: Some(id.clone()),
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: Some(SystemTime::now()),
+            finished_at: Some(SystemTime::now()),
+        };
+        repo.sync_run(&lifecycle).await.expect("sync_run");
+
+        let s = repo.get(&id).await.expect("get").expect("session");
+        assert_eq!(s.runs[0].state, RunState::Succeeded);
+        assert!(s.runs[0].started_at.is_some());
+        assert!(s.runs[0].finished_at.is_some());
     }
 }

@@ -106,6 +106,13 @@ impl SessionRepository for SessionRepo {
             SessionRepo::Postgres(p) => p.add_run(session_id, run).await,
         }
     }
+
+    async fn sync_run(&self, run: &Run) -> DomainResult<()> {
+        match self {
+            SessionRepo::InMemory(r) => r.sync_run(run).await,
+            SessionRepo::Postgres(p) => p.sync_run(run).await,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useRuns } from '@/hooks/queries'
 import StatusBadge from '@/components/StatusBadge'
 import PageHeader from '@/components/PageHeader'
@@ -49,9 +50,13 @@ export default function RunListPage() {
                 <tr key={run.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-slate-400">#{run.id}</td>
                   <td className="max-w-xs px-4 py-3">
-                    <div className="truncate font-medium text-slate-900" title={run.taskSpec}>
-                      {run.taskSpec}
-                    </div>
+                    <Link
+                      to={`/runs/${run.id}`}
+                      className="font-medium text-slate-900 hover:underline"
+                      title={run.taskSpec}
+                    >
+                      <span className="block truncate">{run.taskSpec}</span>
+                    </Link>
                     <div className="text-xs uppercase tracking-wide text-slate-400">
                       {run.kind}
                     </div>
