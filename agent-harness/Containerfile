@@ -1,16 +1,19 @@
 # Cat Herder agent harness image (runs inside the sandbox pod).
-# Build context is the repo root (see Tiltfile) so we can bake in the source for
-# local review.
 FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY agent-harness/pyproject.toml ./
-COPY agent-harness/src ./src
+COPY pyproject.toml ./
+COPY src ./src
+
+# git is needed to clone the target repo; ca-certificates for HTTPS clones.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir .
 
-# Bake in the repo source (read-only review) for local dev — the agent reads /repo.
-COPY . /repo
+# Working directory the target repo is cloned into (empty by default).
+RUN mkdir -p /repo
 
 CMD ["python", "-m", "cat_herder_harness.server"]

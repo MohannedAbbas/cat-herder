@@ -106,6 +106,12 @@ impl SandboxRuntime {
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
             serde_json::json!({ "name": "MODEL", "value": model }),
         ];
+        // The repo to clone and work on (from the run's `repo` field).
+        if let Some(repo) = run.repo.as_deref() {
+            if !repo.is_empty() {
+                env.push(serde_json::json!({ "name": "REPO_URL", "value": repo }));
+            }
+        }
         // The control plane's in-cluster URL, so the harness can report events back.
         let control_url = std::env::var("CAT_HERDER_CONTROL_URL")
             .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));

@@ -25,11 +25,10 @@ custom_build(
 
 # Agent harness (used by agent-sandbox SandboxTemplate at runtime; not yet wired
 # into the chart's templates, but built here so it's available in the registry).
-# Build context is the repo root so the harness can bake in the source (local dev).
 custom_build(
     'cat-herder-agent-harness',
-    'podman build -t $EXPECTED_REF -f agent-harness/Containerfile . && podman push $EXPECTED_REF',
-    ['./agent-harness', 'crates', 'helm', 'ui', 'proto', 'PLAN.md', 'PLAN_REVIEW.md', 'Cargo.toml', '.dockerignore'],
+    'podman build -t $EXPECTED_REF -f agent-harness/Containerfile agent-harness && podman push $EXPECTED_REF',
+    ['./agent-harness'],
 )
 
 # UI (React SPA served by nginx).
