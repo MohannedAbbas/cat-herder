@@ -10,16 +10,19 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 
-# git is needed to clone the target repo; ca-certificates for HTTPS clones.
+# git (clone), curl + build-essential + perl (Rust/ring build), ca-certificates (HTTPS).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates curl build-essential perl \
     && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain (cargo/rustc) so the agent can build/test the target repo.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 
 # Install deps + the project into a venv, frozen to the lockfile.
 RUN uv sync --frozen --no-dev --no-editable --no-cache
 
-# Make the venv's interpreter the default python on PATH.
-ENV PATH="/app/.venv/bin:$PATH"
+# Make the venv's python and the Rust toolchain available on PATH.
+ENV PATH="/app/.venv/bin:/root/.cargo/bin:$PATH"
 
 # Working directory the target repo is cloned into (empty by default).
 RUN mkdir -p /repo

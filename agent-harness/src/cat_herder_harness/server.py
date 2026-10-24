@@ -27,6 +27,17 @@ REPO_URL = os.environ.get("REPO_URL", "").strip()
 # helper so the credential never appears in argv or logs.
 GIT_TOKEN = os.environ.get("GIT_TOKEN", "").strip()
 
+# Env vars the agent's shell must NOT inherit — keeps tokens out of the reach of
+# the agent's `env`/shell commands.
+SECRET_ENV_KEYS = {
+    "GIT_TOKEN",
+    "LLM_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+}
+
 
 def report_event(
     event_type: str,
@@ -158,16 +169,16 @@ def clone_repo(repo_url: str) -> bool:
 def run_agent(task_spec: str, model: str) -> str:
     """Run a Deep Agents agent on the task and return its final message."""
     from deepagents import create_deep_agent
-    from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+    from deepagents.backends import LocalShellBackend
 
-    # Route /repo/* to the real filesystem (the cloned repo), while agent-internal
-    # state (memories, offloaded tool results) stays in the ephemeral StateBackend.
-    # This lets the agent read AND modify the repo. Without a FilesystemBackend,
-    # Deep Agents' tools only see an empty virtual FS.
-    backend = CompositeBackend(
-        default=StateBackend(),
-        routes={"/repo/": FilesystemBackend(root_dir="/repo")},
-    )
+    # A single LocalShellBackend gives the agent a real filesystem rooted at /repo
+    # PLUS a shell (`execute`) that runs in /repo, so it can build/test. The shell
+    # inherits the harness environment minus the secrets, so tokens aren't exposed
+    # via `env`. (The `execute` tool binds to the *default* backend, hence no
+    # StateBackend default here.)
+    shell_env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV_KEYS}
+    backend = LocalShellBackend(root_dir="/repo", env=shell_env)
+
     agent = create_deep_agent(
         model=model,
         system_prompt="You are a coding agent.",
