@@ -99,6 +99,12 @@ pub trait ToolRepository {
     async fn delete(&self, id: &str) -> DomainResult<()>;
 }
 
+/// Key-value settings (e.g. the webhook secret).
+pub trait SettingRepository {
+    async fn get(&self, key: &str) -> DomainResult<Option<String>>;
+    async fn set(&self, key: &str, value: &str) -> DomainResult<()>;
+}
+
 /// Read-only session store (runs grouped into sessions, `PLAN.md` §12).
 pub trait SessionRepository {
     async fn list(&self) -> DomainResult<Vec<Session>>;

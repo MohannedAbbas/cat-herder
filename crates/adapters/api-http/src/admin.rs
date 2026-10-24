@@ -7,9 +7,10 @@ use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 
-use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Tool};
+use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Tool, new_webhook_secret};
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, ModelRepository, ProviderRepository, ToolRepository,
+    AgentRepository, AuditRepository, ModelRepository, ProviderRepository, SettingRepository,
+    ToolRepository,
 };
 
 use super::AppState;
@@ -271,4 +272,34 @@ pub async fn delete_tool(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     audit(&state, &actor, "tool.delete", "tool", &id).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- webhook secret --------------------------------------------------------
+
+pub async fn get_webhook_secret(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    let secret = state
+        .settings
+        .get(super::WEBHOOK_SECRET_KEY)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "secret": secret })))
+}
+
+pub async fn regenerate_webhook_secret(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    let secret = new_webhook_secret();
+    state
+        .settings
+        .set(super::WEBHOOK_SECRET_KEY, &secret)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "webhook-secret.regenerate", "settings", "webhook_secret").await;
+    Ok(Json(serde_json::json!({ "secret": secret })))
 }

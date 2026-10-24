@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, post, put},
 };
 
@@ -12,17 +12,24 @@ use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
 };
 use cat_herder_domain::entities::{RunId, RunState, TenantId};
-use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, SessionRepository};
+use cat_herder_domain::ports::{
+    AgentRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
+};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
-pub use repo::{AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, ToolRepo};
+pub use repo::{
+    AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+};
 
 mod admin;
 mod auth;
 mod mcp;
 mod repo;
 mod webhook;
+
+/// Settings key for the shared webhook secret.
+pub const WEBHOOK_SECRET_KEY: &str = "webhook_secret";
 
 /// Application state: the data the handlers serve. Runs, agents, sessions,
 /// providers, and models are backed by their repositories (Postgres in production,
@@ -36,6 +43,7 @@ pub struct AppState {
     pub sessions: SessionRepo,
     pub repo: RunRepo,
     pub audit: AuditRepo,
+    pub settings: SettingRepo,
     pub auth: Auth,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
@@ -51,6 +59,7 @@ impl Default for AppState {
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(Default::default()),
+            settings: SettingRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
             runtime: None,
         }
@@ -85,6 +94,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
         .route("/v1/admin/tools", get(admin::list_tools))
         .route("/v1/admin/tools/{id}", put(admin::upsert_tool).delete(admin::delete_tool))
+        .route("/v1/admin/settings/webhook-secret", get(admin::get_webhook_secret).post(admin::regenerate_webhook_secret))
         .route("/v1/admin/audit", get(admin::list_audit))
         .with_state(state)
 }
@@ -193,11 +203,33 @@ async fn post_run_event(
     }
 }
 
-/// Accept an external webhook, normalize it, and trigger a run.
+/// Accept an external webhook, normalize it, and trigger a run. Requires the
+/// configured webhook secret in the `X-Webhook-Secret` header.
 async fn webhook_generic(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<webhook::WebhookPayload>,
 ) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let secret = state
+        .settings
+        .get(WEBHOOK_SECRET_KEY)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_default();
+    if secret.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "webhook secret not configured".into(),
+        ));
+    }
+    let provided = headers
+        .get("x-webhook-secret")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(provided.as_bytes(), secret.as_bytes()) {
+        return Err((StatusCode::UNAUTHORIZED, "invalid webhook secret".into()));
+    }
+
     let runtime = state.runtime.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "execution runtime not configured".into(),
@@ -208,6 +240,14 @@ async fn webhook_generic(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
+}
+
+/// Constant-time byte comparison (avoids timing side channels on the secret).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// MCP endpoint (Streamable HTTP): JSON-RPC 2.0 in, JSON-RPC response out.

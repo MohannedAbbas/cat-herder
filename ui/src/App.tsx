@@ -13,6 +13,7 @@ import AdminProvidersPage from './features/admin/AdminProvidersPage'
 import AdminModelsPage from './features/admin/AdminModelsPage'
 import AdminToolsPage from './features/admin/AdminToolsPage'
 import AdminAuditPage from './features/admin/AdminAuditPage'
+import AdminWebhooksPage from './features/admin/AdminWebhooksPage'
 
 function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { authenticated, loading } = useAuth()
@@ -71,6 +72,14 @@ export default function App() {
             element={
               <RequireAdmin>
                 <AdminToolsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/webhooks"
+            element={
+              <RequireAdmin>
+                <AdminWebhooksPage />
               </RequireAdmin>
             }
           />

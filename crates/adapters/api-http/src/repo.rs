@@ -6,17 +6,17 @@ use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository, ToolRepository,
+    RunRepository, SessionRepository, SettingRepository, ToolRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
     InMemoryProviderRepository, InMemoryRunRepository, InMemorySessionRepository,
-    InMemoryToolRepository,
+    InMemorySettingRepository, InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
     PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresToolRepository,
+    PostgresSettingRepository, PostgresToolRepository,
 };
 
 #[derive(Clone)]
@@ -223,6 +223,28 @@ impl ToolRepository for ToolRepo {
         match self {
             ToolRepo::InMemory(r) => r.delete(id).await,
             ToolRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum SettingRepo {
+    InMemory(InMemorySettingRepository),
+    Postgres(PostgresSettingRepository),
+}
+
+impl SettingRepository for SettingRepo {
+    async fn get(&self, key: &str) -> DomainResult<Option<String>> {
+        match self {
+            SettingRepo::InMemory(r) => r.get(key).await,
+            SettingRepo::Postgres(p) => p.get(key).await,
+        }
+    }
+
+    async fn set(&self, key: &str, value: &str) -> DomainResult<()> {
+        match self {
+            SettingRepo::InMemory(r) => r.set(key, value).await,
+            SettingRepo::Postgres(p) => p.set(key, value).await,
         }
     }
 }

@@ -8,19 +8,19 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     router, AppState, AgentRepo, AuditRepo, Auth, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
-    ToolRepo,
+    SettingRepo, ToolRepo,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::ports::ProviderRepository;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
-    InMemoryProviderRepository, InMemoryToolRepository,
+    InMemoryProviderRepository, InMemorySettingRepository, InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository, PostgresStore,
-    PostgresToolRepository,
+    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresSettingRepository, PostgresStore, PostgresToolRepository,
 };
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -41,6 +41,7 @@ struct Repos {
     tools: ToolRepo,
     sessions: SessionRepo,
     audit: AuditRepo,
+    settings: SettingRepo,
 }
 
 impl Repos {
@@ -53,6 +54,7 @@ impl Repos {
             tools: ToolRepo::InMemory(InMemoryToolRepository::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(InMemoryAuditRepository::default()),
+            settings: SettingRepo::InMemory(InMemorySettingRepository::default()),
         }
     }
 }
@@ -81,6 +83,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     tools: ToolRepo::Postgres(PostgresToolRepository::new(&store)),
                     sessions: SessionRepo::Postgres(PostgresSessionRepository::new(&store)),
                     audit: AuditRepo::Postgres(PostgresAuditRepository::new(&store)),
+                    settings: SettingRepo::Postgres(PostgresSettingRepository::new(&store)),
                 };
             }
             Err(e) => {
@@ -165,6 +168,7 @@ async fn main() {
         tools: repos.tools,
         sessions: repos.sessions,
         audit: repos.audit,
+        settings: repos.settings,
         auth,
         runtime,
     };

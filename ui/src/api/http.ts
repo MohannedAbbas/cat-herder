@@ -61,5 +61,10 @@ export const httpApi: CatHerderApi = {
   saveTool: (id, tool) => request<Tool>(`/v1/admin/tools/${id}`, json('PUT', tool)),
   deleteTool: (id) => request<void>(`/v1/admin/tools/${id}`, { method: 'DELETE' }),
 
+  getWebhookSecret: () =>
+    request<{ secret: string | null }>('/v1/admin/settings/webhook-secret'),
+  regenerateWebhookSecret: () =>
+    request<{ secret: string }>('/v1/admin/settings/webhook-secret', { method: 'POST' }),
+
   listAudit: () => request<AuditEntry[]>('/v1/admin/audit'),
 }

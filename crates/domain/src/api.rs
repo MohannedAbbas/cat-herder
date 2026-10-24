@@ -210,6 +210,11 @@ pub fn new_session_id() -> String {
     format!("sess-{}", uuid::Uuid::new_v4())
 }
 
+/// A fresh, random webhook secret (122 bits).
+pub fn new_webhook_secret() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 /// Whether a repository URL is safe to `git clone` (https/ssh only). Rejects git's
 /// `ext::` transport (arbitrary command execution), `file://`, `git://`, and any
 /// leading-`-` option injection. Mirrors the harness's `is_safe_repo_url`.

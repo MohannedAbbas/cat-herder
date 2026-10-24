@@ -12,7 +12,7 @@ use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository, ToolRepository,
+    RunRepository, SessionRepository, SettingRepository, ToolRepository,
 };
 use tokio::sync::RwLock;
 
@@ -265,6 +265,31 @@ impl ToolRepository for InMemoryToolRepository {
 
     async fn delete(&self, id: &str) -> DomainResult<()> {
         self.tools.write().await.retain(|t| t.id != id);
+        Ok(())
+    }
+}
+
+/// In-memory key-value settings.
+#[derive(Clone)]
+pub struct InMemorySettingRepository {
+    settings: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl Default for InMemorySettingRepository {
+    fn default() -> Self {
+        Self {
+            settings: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl SettingRepository for InMemorySettingRepository {
+    async fn get(&self, key: &str) -> DomainResult<Option<String>> {
+        Ok(self.settings.read().await.get(key).cloned())
+    }
+
+    async fn set(&self, key: &str, value: &str) -> DomainResult<()> {
+        self.settings.write().await.insert(key.to_string(), value.to_string());
         Ok(())
     }
 }

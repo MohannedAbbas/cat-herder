@@ -14,6 +14,8 @@ import type { CatHerderApi, AuthInfo } from './client'
 
 let authenticated = false
 
+let webhookSecret: string | null = null
+
 let auditLog: AuditEntry[] = []
 
 let auditSeq = 0
@@ -415,4 +417,10 @@ export const mockApi: CatHerderApi = {
   },
 
   listAudit: () => delay(auditLog),
+  getWebhookSecret: () => delay({ secret: webhookSecret }),
+  regenerateWebhookSecret: () => {
+    webhookSecret = crypto.randomUUID()
+    recordAudit('webhook-secret.regenerate', 'settings', 'webhook_secret')
+    return delay({ secret: webhookSecret })
+  },
 }

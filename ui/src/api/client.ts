@@ -50,6 +50,10 @@ export interface CatHerderApi {
   saveTool(id: string, tool: Tool): Promise<Tool>
   deleteTool(id: string): Promise<void>
 
+  // admin — webhook secret
+  getWebhookSecret(): Promise<{ secret: string | null }>
+  regenerateWebhookSecret(): Promise<{ secret: string }>
+
   // admin — audit
   listAudit(): Promise<AuditEntry[]>
 }

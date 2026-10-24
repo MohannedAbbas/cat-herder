@@ -12,6 +12,7 @@ mod provider;
 mod run;
 mod schema;
 mod session;
+mod setting;
 mod tool;
 
 pub use agent::PostgresAgentRepository;
@@ -21,4 +22,5 @@ pub use provider::PostgresProviderRepository;
 pub use run::PostgresRunRepository;
 pub use schema::PostgresStore;
 pub use session::PostgresSessionRepository;
+pub use setting::PostgresSettingRepository;
 pub use tool::PostgresToolRepository;

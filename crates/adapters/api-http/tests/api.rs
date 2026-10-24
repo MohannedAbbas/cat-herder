@@ -447,3 +447,88 @@ async fn admin_action_is_audited() {
         "audit should contain the agent.upsert action"
     );
 }
+
+// --- webhook secret --------------------------------------------------------
+
+#[tokio::test]
+async fn webhook_requires_secret_header() {
+    use cat_herder_domain::ports::SettingRepository;
+
+    let state = AppState::default();
+    state.settings.set("webhook_secret", "test-secret").await.unwrap();
+    let app = router(state);
+
+    // missing header -> 401
+    let (status, _) = post_json(app.clone(), "/v1/webhooks/generic", r#"{"task_spec":"x"}"#).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // wrong header -> 401
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/webhooks/generic")
+                .header("content-type", "application/json")
+                .header("x-webhook-secret", "wrong")
+                .body(Body::from(r#"{"task_spec":"x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // correct header but no runtime -> 503 (past the auth check)
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/webhooks/generic")
+                .header("content-type", "application/json")
+                .header("x-webhook-secret", "test-secret")
+                .body(Body::from(r#"{"task_spec":"x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn admin_can_generate_and_view_webhook_secret() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    // initially null
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/admin/settings/webhook-secret")
+                .header("cookie", cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(v["secret"].is_null());
+
+    // regenerate
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/admin/settings/webhook-secret")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(v["secret"].as_str().is_some_and(|s| !s.is_empty()));
+}
