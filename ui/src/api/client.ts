@@ -1,7 +1,19 @@
-import type { AgentTemplate, RunRecord, Session, SessionSummary } from '@/types/domain'
+import type {
+  AgentTemplate,
+  Model,
+  Provider,
+  RunRecord,
+  Session,
+  SessionSummary,
+} from '@/types/domain'
 import { config } from '@/config'
 import { mockApi } from './mock'
 import { httpApi } from './http'
+
+export interface AuthInfo {
+  authenticated: boolean
+  username: string | null
+}
 
 /** The control-plane API surface consumed by the UI (PLAN.md §14). */
 export interface CatHerderApi {
@@ -11,6 +23,25 @@ export interface CatHerderApi {
   getAgent(id: string): Promise<AgentTemplate>
   listRuns(): Promise<RunRecord[]>
   getRun(id: number): Promise<RunRecord>
+
+  // auth
+  login(username: string, password: string): Promise<void>
+  logout(): Promise<void>
+  me(): Promise<AuthInfo>
+
+  // admin — agents
+  saveAgent(id: string, agent: AgentTemplate): Promise<AgentTemplate>
+  deleteAgent(id: string): Promise<void>
+
+  // admin — providers
+  listProviders(): Promise<Provider[]>
+  saveProvider(id: string, provider: Provider): Promise<Provider>
+  deleteProvider(id: string): Promise<void>
+
+  // admin — models
+  listModels(): Promise<Model[]>
+  saveModel(id: string, model: Model): Promise<Model>
+  deleteModel(id: string): Promise<void>
 }
 
 /**

@@ -1,4 +1,5 @@
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useAuth } from '@/auth/AuthContext'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `block rounded-md px-3 py-2 text-sm font-medium transition ${
@@ -8,6 +9,14 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   }`
 
 export default function Layout() {
+  const { authenticated, username, logout } = useAuth()
+  const navigate = useNavigate()
+
+  async function onLogout() {
+    await logout()
+    navigate('/runs')
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="flex">
@@ -28,7 +37,39 @@ export default function Layout() {
             <NavLink to="/agents" className={navLinkClass}>
               Agents
             </NavLink>
+
+            {authenticated && (
+              <>
+                <div className="mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Admin
+                </div>
+                <NavLink to="/admin/agents" className={navLinkClass}>
+                  Agents
+                </NavLink>
+                <NavLink to="/admin/providers" className={navLinkClass}>
+                  Providers
+                </NavLink>
+                <NavLink to="/admin/models" className={navLinkClass}>
+                  Models
+                </NavLink>
+              </>
+            )}
           </nav>
+
+          <div className="mt-auto border-t border-slate-200 pt-3">
+            {authenticated ? (
+              <div className="flex items-center justify-between px-2">
+                <span className="text-sm text-slate-600">{username}</span>
+                <button onClick={onLogout} className="text-sm text-slate-500 hover:underline">
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <NavLink to="/login" className={navLinkClass}>
+                Admin sign in
+              </NavLink>
+            )}
+          </div>
         </aside>
         <main className="min-w-0 flex-1 p-8">
           <Outlet />

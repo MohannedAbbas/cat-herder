@@ -81,3 +81,20 @@ export interface RunRecord {
   startedAt: string | null
   finishedAt: string | null
 }
+
+/** An LLM provider. The API key is referenced by Secret name, never returned. */
+export interface Provider {
+  id: string
+  name: string
+  baseUrl: string
+  apiKeySecret: string
+  apiKeySecretKey: string
+  enabled: boolean
+}
+
+/** A model within a provider. Full model string is `providerId:id`. */
+export interface Model {
+  id: string
+  providerId: string
+  displayName: string
+}

@@ -36,3 +36,11 @@ export function useRun(id: string | undefined) {
     enabled: id != null,
   })
 }
+
+export function useProviders() {
+  return useQuery({ queryKey: ['providers'], queryFn: () => api.listProviders() })
+}
+
+export function useModels() {
+  return useQuery({ queryKey: ['models'], queryFn: () => api.listModels() })
+}

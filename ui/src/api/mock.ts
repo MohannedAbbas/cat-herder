@@ -1,7 +1,18 @@
-import type { AgentTemplate, Run, RunRecord, RunState, Session, SessionSummary } from '@/types/domain'
-import type { CatHerderApi } from './client'
+import type {
+  AgentTemplate,
+  Model,
+  Provider,
+  Run,
+  RunRecord,
+  RunState,
+  Session,
+  SessionSummary,
+} from '@/types/domain'
+import type { CatHerderApi, AuthInfo } from './client'
 
-const agents: AgentTemplate[] = [
+let authenticated = false
+
+let agents: AgentTemplate[] = [
   {
     id: 'agent-codeact',
     name: 'CodeAct coding agent',
@@ -254,6 +265,20 @@ const STATUS_PRIORITY: RunState[] = [
   'succeeded',
 ]
 
+let providers: Provider[] = [
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
+  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
+]
+
+let models: Model[] = [
+  { id: 'deepseek-chat', providerId: 'deepseek', displayName: 'DeepSeek Chat (V3)' },
+  { id: 'deepseek-reasoner', providerId: 'deepseek', displayName: 'DeepSeek Reasoner (R1)' },
+  { id: 'gpt-5.5', providerId: 'openai', displayName: 'GPT-5.5' },
+  { id: 'gpt-4o', providerId: 'openai', displayName: 'GPT-4o' },
+  { id: 'claude-sonnet-4-6', providerId: 'anthropic', displayName: 'Claude Sonnet 4.6' },
+]
+
 function aggregateStatus(runs: Run[]): RunState | 'idle' {
   if (runs.length === 0) return 'idle'
   const present = new Set(runs.map((r) => r.state))
@@ -290,5 +315,53 @@ export const mockApi: CatHerderApi = {
   getRun: (id) => {
     const r = runs.find((x) => x.id === id)
     return r ? delay(r) : Promise.reject(new Error(`run ${id} not found`))
+  },
+
+  login: (_u, _p) => {
+    authenticated = true
+    return delay(undefined)
+  },
+  logout: () => {
+    authenticated = false
+    return delay(undefined)
+  },
+  me: () => delay<AuthInfo>({ authenticated, username: authenticated ? 'admin' : null }),
+
+  saveAgent: (id, agent) => {
+    const i = agents.findIndex((a) => a.id === id)
+    const saved = { ...agent, id }
+    if (i >= 0) agents[i] = saved
+    else agents.push(saved)
+    return delay(saved)
+  },
+  deleteAgent: (id) => {
+    agents = agents.filter((a) => a.id !== id)
+    return delay(undefined)
+  },
+
+  listProviders: () => delay(providers),
+  saveProvider: (id, provider) => {
+    const i = providers.findIndex((p) => p.id === id)
+    const saved = { ...provider, id }
+    if (i >= 0) providers[i] = saved
+    else providers.push(saved)
+    return delay(saved)
+  },
+  deleteProvider: (id) => {
+    providers = providers.filter((p) => p.id !== id)
+    return delay(undefined)
+  },
+
+  listModels: () => delay(models),
+  saveModel: (id, model) => {
+    const i = models.findIndex((m) => m.id === id)
+    const saved = { ...model, id }
+    if (i >= 0) models[i] = saved
+    else models.push(saved)
+    return delay(saved)
+  },
+  deleteModel: (id) => {
+    models = models.filter((m) => m.id !== id)
+    return delay(undefined)
   },
 }
