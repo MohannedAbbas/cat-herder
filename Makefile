@@ -1,10 +1,15 @@
-.PHONY: build test fmt lint run chart tilt harness-image sandbox-image
+.PHONY: build test coverage fmt lint run chart tilt harness-image sandbox-image
 
 build:
 	cargo build
 
 test:
 	cargo test
+
+# Measure test coverage and fail if line coverage is below 85%.
+# Requires: cargo install cargo-llvm-cov (and `llvm-tools-preview` rustup component).
+coverage:
+	cargo llvm-cov --fail-under-lines 85 --html
 
 fmt:
 	cargo fmt
