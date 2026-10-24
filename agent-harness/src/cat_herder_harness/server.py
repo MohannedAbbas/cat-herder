@@ -176,8 +176,14 @@ def run_agent(task_spec: str, model: str) -> str:
     # inherits the harness environment minus the secrets, so tokens aren't exposed
     # via `env`. (The `execute` tool binds to the *default* backend, hence no
     # StateBackend default here.)
+    #
+    # `virtual_mode=False` makes the filesystem tools (read_file/write_file/ls/glob)
+    # resolve absolute paths against the REAL /repo, matching the shell's working
+    # directory. With the default virtual_mode=True, an absolute path like
+    # `/repo/foo` is re-anchored under root_dir and lands at `/repo/repo/foo`,
+    # silently splitting the agent's edits between two locations.
     shell_env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV_KEYS}
-    backend = LocalShellBackend(root_dir="/repo", env=shell_env)
+    backend = LocalShellBackend(root_dir="/repo", virtual_mode=False, env=shell_env)
 
     agent = create_deep_agent(
         model=model,
