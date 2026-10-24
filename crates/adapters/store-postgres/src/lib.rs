@@ -5,6 +5,7 @@
 //! in-cluster PostgreSQL StatefulSet from the Helm chart (`dependencies.postgres`).
 
 mod agent;
+mod audit;
 mod codec;
 mod model;
 mod provider;
@@ -13,6 +14,7 @@ mod schema;
 mod session;
 
 pub use agent::PostgresAgentRepository;
+pub use audit::PostgresAuditRepository;
 pub use model::PostgresModelRepository;
 pub use provider::PostgresProviderRepository;
 pub use run::PostgresRunRepository;

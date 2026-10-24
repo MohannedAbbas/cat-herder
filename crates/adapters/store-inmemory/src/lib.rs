@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cat_herder_domain::api::{AgentTemplate, Model, Provider, Session, SessionRun, now_iso};
+use cat_herder_domain::api::{
+    AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, now_iso,
+};
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, DomainResult, ModelRepository, ProviderRepository, RunRepository,
-    SessionRepository,
+    AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
+    RunRepository, SessionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -182,6 +184,49 @@ impl ModelRepository for InMemoryModelRepository {
     async fn delete(&self, id: &str) -> DomainResult<()> {
         self.models.write().await.retain(|m| m.id != id);
         Ok(())
+    }
+}
+
+/// In-memory audit log (append-only).
+#[derive(Clone)]
+pub struct InMemoryAuditRepository {
+    entries: Arc<RwLock<Vec<AuditEntry>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+impl Default for InMemoryAuditRepository {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(RwLock::new(Vec::new())),
+            next_id: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl AuditRepository for InMemoryAuditRepository {
+    async fn record(
+        &self,
+        actor: &str,
+        action: &str,
+        resource: &str,
+        resource_id: &str,
+    ) -> DomainResult<()> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        self.entries.write().await.push(AuditEntry {
+            id: id as i64,
+            timestamp: now_iso(),
+            actor: actor.to_string(),
+            action: action.to_string(),
+            resource: resource.to_string(),
+            resource_id: resource_id.to_string(),
+        });
+        Ok(())
+    }
+
+    async fn list(&self, limit: i64) -> DomainResult<Vec<AuditEntry>> {
+        let entries = self.entries.read().await;
+        let skip = entries.len().saturating_sub(limit as usize);
+        Ok(entries.iter().skip(skip).rev().cloned().collect())
     }
 }
 

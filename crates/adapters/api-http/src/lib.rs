@@ -16,7 +16,7 @@ use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, Sessi
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
-pub use repo::{AgentRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo};
+pub use repo::{AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo};
 
 mod admin;
 mod auth;
@@ -34,6 +34,7 @@ pub struct AppState {
     pub models: ModelRepo,
     pub sessions: SessionRepo,
     pub repo: RunRepo,
+    pub audit: AuditRepo,
     pub auth: Auth,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
@@ -47,6 +48,7 @@ impl Default for AppState {
             models: ModelRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
+            audit: AuditRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
             runtime: None,
         }
@@ -79,6 +81,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/admin/models", get(admin::list_models))
         .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
+        .route("/v1/admin/audit", get(admin::list_audit))
         .with_state(state)
 }
 

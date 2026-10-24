@@ -4,7 +4,7 @@
 //! `dyn`-object-safe, so application services use generics (not `Box<dyn …>`),
 //! per `PLAN.md` §5.
 
-use crate::api::{AgentTemplate, Model, Provider, Session, SessionRun};
+use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun};
 use crate::entities::{Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
@@ -76,6 +76,19 @@ pub trait ModelRepository {
     async fn get(&self, id: &str) -> DomainResult<Option<Model>>;
     async fn save(&self, model: &Model) -> DomainResult<Model>;
     async fn delete(&self, id: &str) -> DomainResult<()>;
+}
+
+/// Append-only audit log of admin actions.
+pub trait AuditRepository {
+    async fn record(
+        &self,
+        actor: &str,
+        action: &str,
+        resource: &str,
+        resource_id: &str,
+    ) -> DomainResult<()>;
+    /// Most recent entries first.
+    async fn list(&self, limit: i64) -> DomainResult<Vec<AuditEntry>>;
 }
 
 /// Read-only session store (runs grouped into sessions, `PLAN.md` §12).

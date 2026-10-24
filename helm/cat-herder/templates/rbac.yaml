@@ -14,6 +14,11 @@ rules:
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxtemplates", "sandboxclaims"]
     verbs: ["get", "list", "watch"]
+  # The control plane reads provider API-key Secrets (to inject into sandboxes).
+  # Scoped to this namespace by the Role.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

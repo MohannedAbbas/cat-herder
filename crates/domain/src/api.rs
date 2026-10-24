@@ -90,6 +90,18 @@ pub struct Model {
     pub display_name: String,
 }
 
+/// An admin action recorded in the audit log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub id: i64,
+    pub timestamp: String,
+    pub actor: String,
+    pub action: String,
+    pub resource: String,
+    pub resource_id: String,
+}
+
 /// Request body for `POST /v1/runs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRunRequest {

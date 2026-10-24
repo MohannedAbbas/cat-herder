@@ -403,3 +403,47 @@ async fn admin_upsert_provider_with_session() {
     assert_eq!(v["id"], "deepseek");
     assert_eq!(v["apiKeySecret"], "cat-herder-deepseek");
 }
+
+#[tokio::test]
+async fn admin_action_is_audited() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    // mutate an agent (audited)
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/admin/agents/agent-codeact")
+                .header("content-type", "application/json")
+                .header("cookie", cookie.clone())
+                .body(Body::from(
+                    r#"{"id":"agent-codeact","name":"CodeAct coding agent","description":"d","image":"i","runtimeTier":"default","model":"deepseek:deepseek-chat","tools":[],"maxConcurrency":8}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // list audit (audited + authenticated)
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/admin/audit")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let entries: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert!(
+        entries.as_array().unwrap().iter().any(|e| e["action"] == "agent.upsert"),
+        "audit should contain the agent.upsert action"
+    );
+}

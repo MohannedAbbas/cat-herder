@@ -7,8 +7,10 @@ use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 
-use cat_herder_domain::api::{AgentTemplate, Model, Provider};
-use cat_herder_domain::ports::{AgentRepository, ModelRepository, ProviderRepository};
+use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider};
+use cat_herder_domain::ports::{
+    AgentRepository, AuditRepository, ModelRepository, ProviderRepository,
+};
 
 use super::AppState;
 
@@ -18,12 +20,19 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-async fn require_admin(state: &AppState, jar: &CookieJar) -> Result<(), (StatusCode, String)> {
+async fn require_admin(state: &AppState, jar: &CookieJar) -> Result<String, (StatusCode, String)> {
     let token = jar.get("session").map(|c| c.value().to_string());
     match token {
-        Some(t) if state.auth.valid_session(&t).await => Ok(()),
+        Some(t) if state.auth.valid_session(&t).await => {
+            Ok(state.auth.admin_username().to_string())
+        }
         _ => Err((StatusCode::UNAUTHORIZED, "authentication required".into())),
     }
+}
+
+/// Record an admin action (best-effort — audit failure never blocks the action).
+async fn audit(state: &AppState, actor: &str, action: &str, resource: &str, id: &str) {
+    let _ = state.audit.record(actor, action, resource, id).await;
 }
 
 // --- auth ------------------------------------------------------------------
@@ -82,14 +91,15 @@ pub async fn upsert_agent(
     Path(id): Path<String>,
     Json(mut agent): Json<AgentTemplate>,
 ) -> Result<Json<AgentTemplate>, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     agent.id = id;
-    state
+    let saved = state
         .agents
         .save(&agent)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "agent.upsert", "agent", &saved.id).await;
+    Ok(Json(saved))
 }
 
 pub async fn delete_agent(
@@ -97,12 +107,13 @@ pub async fn delete_agent(
     jar: CookieJar,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     state
         .agents
         .delete(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "agent.delete", "agent", &id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -127,14 +138,15 @@ pub async fn upsert_provider(
     Path(id): Path<String>,
     Json(mut provider): Json<Provider>,
 ) -> Result<Json<Provider>, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     provider.id = id;
-    state
+    let saved = state
         .providers
         .save(&provider)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "provider.upsert", "provider", &saved.id).await;
+    Ok(Json(saved))
 }
 
 pub async fn delete_provider(
@@ -142,12 +154,13 @@ pub async fn delete_provider(
     jar: CookieJar,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     state
         .providers
         .delete(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "provider.delete", "provider", &id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -172,14 +185,15 @@ pub async fn upsert_model(
     Path(id): Path<String>,
     Json(mut model): Json<Model>,
 ) -> Result<Json<Model>, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     model.id = id;
-    state
+    let saved = state
         .models
         .save(&model)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "model.upsert", "model", &saved.id).await;
+    Ok(Json(saved))
 }
 
 pub async fn delete_model(
@@ -187,11 +201,27 @@ pub async fn delete_model(
     jar: CookieJar,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    require_admin(&state, &jar).await?;
+    let actor = require_admin(&state, &jar).await?;
     state
         .models
         .delete(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "model.delete", "model", &id).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- audit -----------------------------------------------------------------
+
+pub async fn list_audit(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<Vec<AuditEntry>>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    state
+        .audit
+        .list(100)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

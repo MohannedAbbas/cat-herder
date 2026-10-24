@@ -31,6 +31,10 @@ impl Auth {
         }
     }
 
+    pub fn admin_username(&self) -> &str {
+        &self.admin_username
+    }
+
     /// Verify credentials and, on success, create a session. Returns the token.
     pub async fn login(&self, username: &str, password: &str) -> Option<String> {
         let ok = username == self.admin_username

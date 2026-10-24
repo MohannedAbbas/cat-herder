@@ -2,19 +2,19 @@
 //! aggregate: in-memory for tests/single-replica dev fallback, Postgres for
 //! production persistence (wired in `crates/bin/cat-herder`).
 
-use cat_herder_domain::api::{AgentTemplate, Model, Provider, Session, SessionRun};
+use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun};
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, DomainResult, ModelRepository, ProviderRepository, RunRepository,
-    SessionRepository,
+    AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
+    RunRepository, SessionRepository,
 };
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryModelRepository, InMemoryProviderRepository,
-    InMemoryRunRepository, InMemorySessionRepository,
+    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
+    InMemoryProviderRepository, InMemoryRunRepository, InMemorySessionRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresModelRepository, PostgresProviderRepository,
-    PostgresRunRepository, PostgresSessionRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
+    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
 };
 
 #[derive(Clone)]
@@ -157,6 +157,34 @@ impl ModelRepository for ModelRepo {
         match self {
             ModelRepo::InMemory(r) => r.delete(id).await,
             ModelRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum AuditRepo {
+    InMemory(InMemoryAuditRepository),
+    Postgres(PostgresAuditRepository),
+}
+
+impl AuditRepository for AuditRepo {
+    async fn record(
+        &self,
+        actor: &str,
+        action: &str,
+        resource: &str,
+        resource_id: &str,
+    ) -> DomainResult<()> {
+        match self {
+            AuditRepo::InMemory(r) => r.record(actor, action, resource, resource_id).await,
+            AuditRepo::Postgres(p) => p.record(actor, action, resource, resource_id).await,
+        }
+    }
+
+    async fn list(&self, limit: i64) -> DomainResult<Vec<AuditEntry>> {
+        match self {
+            AuditRepo::InMemory(r) => r.list(limit).await,
+            AuditRepo::Postgres(p) => p.list(limit).await,
         }
     }
 }
