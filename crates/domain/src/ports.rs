@@ -4,7 +4,7 @@
 //! `dyn`-object-safe, so application services use generics (not `Box<dyn …>`),
 //! per `PLAN.md` §5.
 
-use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun};
+use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use crate::entities::{Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
@@ -89,6 +89,14 @@ pub trait AuditRepository {
     ) -> DomainResult<()>;
     /// Most recent entries first.
     async fn list(&self, limit: i64) -> DomainResult<Vec<AuditEntry>>;
+}
+
+/// Configurable list of available agent tools.
+pub trait ToolRepository {
+    async fn list(&self) -> DomainResult<Vec<Tool>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<Tool>>;
+    async fn save(&self, tool: &Tool) -> DomainResult<Tool>;
+    async fn delete(&self, id: &str) -> DomainResult<()>;
 }
 
 /// Read-only session store (runs grouped into sessions, `PLAN.md` §12).

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun};
+use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun, Tool};
 use crate::entities::{RunKind, RunState};
 
 /// Build the default agent catalog, applying per-agent model overrides (id → model)
@@ -118,6 +118,18 @@ pub fn default_models() -> Vec<Model> {
         Model { id: "gpt-5.5".into(), provider_id: "openai".into(), display_name: "GPT-5.5".into() },
         Model { id: "gpt-4o".into(), provider_id: "openai".into(), display_name: "GPT-4o".into() },
         Model { id: "claude-sonnet-4-6".into(), provider_id: "anthropic".into(), display_name: "Claude Sonnet 4.6".into() },
+    ]
+}
+
+/// Default available tools.
+pub fn default_tools() -> Vec<Tool> {
+    vec![
+        Tool { id: "filesystem".into(), description: "Read/write files in the workspace".into() },
+        Tool { id: "execute".into(), description: "Run shell commands".into() },
+        Tool { id: "git".into(), description: "Git operations".into() },
+        Tool { id: "github".into(), description: "GitHub issues and PRs".into() },
+        Tool { id: "credential".into(), description: "Scoped credential brokering".into() },
+        Tool { id: "web_search".into(), description: "Web search".into() },
     ]
 }
 

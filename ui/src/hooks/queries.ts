@@ -48,3 +48,7 @@ export function useModels() {
 export function useAudit() {
   return useQuery({ queryKey: ['audit'], queryFn: () => api.listAudit() })
 }
+
+export function useTools() {
+  return useQuery({ queryKey: ['tools'], queryFn: () => api.listTools() })
+}

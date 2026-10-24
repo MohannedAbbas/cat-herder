@@ -1,24 +1,37 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { useAgents } from '@/hooks/queries'
+import { useAgents, useModels, useProviders, useTools } from '@/hooks/queries'
 import PageHeader from '@/components/PageHeader'
 import Loading from '@/components/Loading'
 import ErrorState from '@/components/ErrorState'
 import Card from '@/components/Card'
-import type { AgentTemplate, RuntimeTier } from '@/types/domain'
+import type { AgentTemplate, Model, RuntimeTier } from '@/types/domain'
 
 const emptyForm = {
   name: '',
   description: '',
   model: '',
   runtimeTier: 'default' as RuntimeTier,
-  tools: '',
+  tools: [] as string[],
   maxConcurrency: 8,
+}
+
+function groupModelsByProvider(models: Model[]): [string, Model[]][] {
+  const map = new Map<string, Model[]>()
+  for (const m of models) {
+    const list = map.get(m.providerId) ?? []
+    list.push(m)
+    map.set(m.providerId, list)
+  }
+  return Array.from(map.entries())
 }
 
 export default function AdminAgentsPage() {
   const { data: agents, isLoading, error } = useAgents()
+  const { data: models } = useModels()
+  const { data: providers } = useProviders()
+  const { data: tools } = useTools()
   const queryClient = useQueryClient()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
@@ -37,6 +50,8 @@ export default function AdminAgentsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agents'] }),
   })
 
+  const providerName = (id: string) => providers?.find((p) => p.id === id)?.name ?? id
+
   function startEdit(agent: AgentTemplate) {
     setEditingId(agent.id)
     setForm({
@@ -44,7 +59,7 @@ export default function AdminAgentsPage() {
       description: agent.description,
       model: agent.model,
       runtimeTier: agent.runtimeTier,
-      tools: agent.tools.join(', '),
+      tools: agent.tools,
       maxConcurrency: agent.maxConcurrency,
     })
     setMessage(null)
@@ -62,7 +77,7 @@ export default function AdminAgentsPage() {
         model: form.model,
         image: 'cat-herder-agent-harness:0.1.0',
         runtimeTier: form.runtimeTier,
-        tools: form.tools.split(',').map((t) => t.trim()).filter(Boolean),
+        tools: form.tools,
         maxConcurrency: form.maxConcurrency,
       },
     })
@@ -120,12 +135,46 @@ export default function AdminAgentsPage() {
                 <Field label="Description">
                   <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className={inputCls} rows={2} />
                 </Field>
-                <Field label="Model (provider:model)">
-                  <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls} />
+
+                <Field label="Model">
+                  <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputCls}>
+                    <option value="">— none —</option>
+                    {groupModelsByProvider(models ?? []).map(([providerId, ms]) => (
+                      <optgroup key={providerId} label={providerName(providerId)}>
+                        {ms.map((m) => (
+                          <option key={`${m.providerId}:${m.id}`} value={`${m.providerId}:${m.id}`}>
+                            {m.displayName || m.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                 </Field>
-                <Field label="Tools (comma-separated)">
-                  <input value={form.tools} onChange={(e) => setForm({ ...form, tools: e.target.value })} className={inputCls} />
+
+                <Field label="Tools">
+                  <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-300 p-2">
+                    {(tools ?? []).map((t) => (
+                      <label key={t.id} className="flex cursor-pointer items-center gap-2 py-1 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={form.tools.includes(t.id)}
+                          onChange={(e) => {
+                            const selected = e.target.checked
+                              ? [...form.tools, t.id]
+                              : form.tools.filter((x) => x !== t.id)
+                            setForm({ ...form, tools: selected })
+                          }}
+                        />
+                        <span className="font-mono text-slate-700">{t.id}</span>
+                        {t.description && <span className="truncate text-xs text-slate-400">{t.description}</span>}
+                      </label>
+                    ))}
+                    {(tools ?? []).length === 0 && (
+                      <p className="py-1 text-sm text-slate-400">No tools defined — add some in the Tools tab.</p>
+                    )}
+                  </div>
                 </Field>
+
                 <Field label="Max concurrency">
                   <input
                     type="number"

@@ -7,9 +7,9 @@ use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 
-use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider};
+use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Tool};
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, ModelRepository, ProviderRepository,
+    AgentRepository, AuditRepository, ModelRepository, ProviderRepository, ToolRepository,
 };
 
 use super::AppState;
@@ -224,4 +224,51 @@ pub async fn list_audit(
         .await
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+// --- tools -----------------------------------------------------------------
+
+pub async fn list_tools(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<Vec<Tool>>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    state
+        .tools
+        .list()
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn upsert_tool(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+    Json(mut tool): Json<Tool>,
+) -> Result<Json<Tool>, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    tool.id = id;
+    let saved = state
+        .tools
+        .save(&tool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "tool.upsert", "tool", &saved.id).await;
+    Ok(Json(saved))
+}
+
+pub async fn delete_tool(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    state
+        .tools
+        .delete(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "tool.delete", "tool", &id).await;
+    Ok(StatusCode::NO_CONTENT)
 }

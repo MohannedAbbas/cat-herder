@@ -108,3 +108,9 @@ export interface AuditEntry {
   resource: string
   resourceId: string
 }
+
+/** An available agent tool (referenced by id in agent templates). */
+export interface Tool {
+  id: string
+  description: string
+}

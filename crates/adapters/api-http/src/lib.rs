@@ -16,7 +16,7 @@ use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, Sessi
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
-pub use repo::{AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo};
+pub use repo::{AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, ToolRepo};
 
 mod admin;
 mod auth;
@@ -32,6 +32,7 @@ pub struct AppState {
     pub agents: AgentRepo,
     pub providers: ProviderRepo,
     pub models: ModelRepo,
+    pub tools: ToolRepo,
     pub sessions: SessionRepo,
     pub repo: RunRepo,
     pub audit: AuditRepo,
@@ -46,6 +47,7 @@ impl Default for AppState {
             agents: AgentRepo::InMemory(Default::default()),
             providers: ProviderRepo::InMemory(Default::default()),
             models: ModelRepo::InMemory(Default::default()),
+            tools: ToolRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(Default::default()),
@@ -81,6 +83,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/admin/models", get(admin::list_models))
         .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
+        .route("/v1/admin/tools", get(admin::list_tools))
+        .route("/v1/admin/tools/{id}", put(admin::upsert_tool).delete(admin::delete_tool))
         .route("/v1/admin/audit", get(admin::list_audit))
         .with_state(state)
 }

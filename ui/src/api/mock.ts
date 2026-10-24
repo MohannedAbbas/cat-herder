@@ -8,6 +8,7 @@ import type {
   RunState,
   Session,
   SessionSummary,
+  Tool,
 } from '@/types/domain'
 import type { CatHerderApi, AuthInfo } from './client'
 
@@ -297,6 +298,15 @@ let models: Model[] = [
   { id: 'claude-sonnet-4-6', providerId: 'anthropic', displayName: 'Claude Sonnet 4.6' },
 ]
 
+let tools: Tool[] = [
+  { id: 'filesystem', description: 'Read/write files in the workspace' },
+  { id: 'execute', description: 'Run shell commands' },
+  { id: 'git', description: 'Git operations' },
+  { id: 'github', description: 'GitHub issues and PRs' },
+  { id: 'credential', description: 'Scoped credential brokering' },
+  { id: 'web_search', description: 'Web search' },
+]
+
 function aggregateStatus(runs: Run[]): RunState | 'idle' {
   if (runs.length === 0) return 'idle'
   const present = new Set(runs.map((r) => r.state))
@@ -386,6 +396,21 @@ export const mockApi: CatHerderApi = {
   deleteModel: (id) => {
     models = models.filter((m) => m.id !== id)
     recordAudit('model.delete', 'model', id)
+    return delay(undefined)
+  },
+
+  listTools: () => delay(tools),
+  saveTool: (id, tool) => {
+    const i = tools.findIndex((t) => t.id === id)
+    const saved = { ...tool, id }
+    if (i >= 0) tools[i] = saved
+    else tools.push(saved)
+    recordAudit('tool.upsert', 'tool', id)
+    return delay(saved)
+  },
+  deleteTool: (id) => {
+    tools = tools.filter((t) => t.id !== id)
+    recordAudit('tool.delete', 'tool', id)
     return delay(undefined)
   },
 

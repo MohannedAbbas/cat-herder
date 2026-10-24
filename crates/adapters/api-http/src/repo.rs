@@ -2,19 +2,21 @@
 //! aggregate: in-memory for tests/single-replica dev fallback, Postgres for
 //! production persistence (wired in `crates/bin/cat-herder`).
 
-use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun};
+use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository,
+    RunRepository, SessionRepository, ToolRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
     InMemoryProviderRepository, InMemoryRunRepository, InMemorySessionRepository,
+    InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
     PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresToolRepository,
 };
 
 #[derive(Clone)]
@@ -185,6 +187,42 @@ impl AuditRepository for AuditRepo {
         match self {
             AuditRepo::InMemory(r) => r.list(limit).await,
             AuditRepo::Postgres(p) => p.list(limit).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ToolRepo {
+    InMemory(InMemoryToolRepository),
+    Postgres(PostgresToolRepository),
+}
+
+impl ToolRepository for ToolRepo {
+    async fn list(&self) -> DomainResult<Vec<Tool>> {
+        match self {
+            ToolRepo::InMemory(r) => r.list().await,
+            ToolRepo::Postgres(p) => p.list().await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Tool>> {
+        match self {
+            ToolRepo::InMemory(r) => r.get(id).await,
+            ToolRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, tool: &Tool) -> DomainResult<Tool> {
+        match self {
+            ToolRepo::InMemory(r) => r.save(tool).await,
+            ToolRepo::Postgres(p) => p.save(tool).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            ToolRepo::InMemory(r) => r.delete(id).await,
+            ToolRepo::Postgres(p) => p.delete(id).await,
         }
     }
 }

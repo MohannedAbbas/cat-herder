@@ -85,6 +85,17 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
         }
     }
 
+    let tools: i64 = sqlx::query_scalar("SELECT count(*) FROM tools").fetch_one(pool).await?;
+    if tools == 0 {
+        for tool in catalog::default_tools() {
+            sqlx::query("INSERT INTO tools (id, description) VALUES ($1, $2)")
+                .bind(tool.id.as_str())
+                .bind(tool.description.as_str())
+                .execute(pool)
+                .await?;
+        }
+    }
+
     // Demo sessions + their runs (idempotent).
     for session in catalog::default_sessions() {
         sqlx::query(

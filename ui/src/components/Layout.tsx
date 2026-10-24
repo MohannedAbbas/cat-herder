@@ -52,6 +52,9 @@ export default function Layout() {
                 <NavLink to="/admin/models" className={navLinkClass}>
                   Models
                 </NavLink>
+                <NavLink to="/admin/tools" className={navLinkClass}>
+                  Tools
+                </NavLink>
                 <NavLink to="/admin/audit" className={navLinkClass}>
                   Audit
                 </NavLink>

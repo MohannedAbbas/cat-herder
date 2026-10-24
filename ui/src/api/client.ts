@@ -6,6 +6,7 @@ import type {
   RunRecord,
   Session,
   SessionSummary,
+  Tool,
 } from '@/types/domain'
 import { config } from '@/config'
 import { mockApi } from './mock'
@@ -43,6 +44,11 @@ export interface CatHerderApi {
   listModels(): Promise<Model[]>
   saveModel(id: string, model: Model): Promise<Model>
   deleteModel(id: string): Promise<void>
+
+  // admin — tools
+  listTools(): Promise<Tool[]>
+  saveTool(id: string, tool: Tool): Promise<Tool>
+  deleteTool(id: string): Promise<void>
 
   // admin — audit
   listAudit(): Promise<AuditEntry[]>

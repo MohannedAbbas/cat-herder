@@ -8,17 +8,19 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     router, AppState, AgentRepo, AuditRepo, Auth, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
+    ToolRepo,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::ports::ProviderRepository;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
-    InMemoryProviderRepository,
+    InMemoryProviderRepository, InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
     PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository, PostgresStore,
+    PostgresToolRepository,
 };
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -36,6 +38,7 @@ struct Repos {
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
+    tools: ToolRepo,
     sessions: SessionRepo,
     audit: AuditRepo,
 }
@@ -47,6 +50,7 @@ impl Repos {
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
+            tools: ToolRepo::InMemory(InMemoryToolRepository::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(InMemoryAuditRepository::default()),
         }
@@ -74,6 +78,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
+                    tools: ToolRepo::Postgres(PostgresToolRepository::new(&store)),
                     sessions: SessionRepo::Postgres(PostgresSessionRepository::new(&store)),
                     audit: AuditRepo::Postgres(PostgresAuditRepository::new(&store)),
                 };
@@ -157,6 +162,7 @@ async fn main() {
         agents: repos.agents,
         providers: repos.providers,
         models: repos.models,
+        tools: repos.tools,
         sessions: repos.sessions,
         audit: repos.audit,
         auth,

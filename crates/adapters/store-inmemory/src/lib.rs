@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cat_herder_domain::api::{
-    AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, now_iso,
+    AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool, now_iso,
 };
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository,
+    RunRepository, SessionRepository, ToolRepository,
 };
 use tokio::sync::RwLock;
 
@@ -227,6 +227,45 @@ impl AuditRepository for InMemoryAuditRepository {
         let entries = self.entries.read().await;
         let skip = entries.len().saturating_sub(limit as usize);
         Ok(entries.iter().skip(skip).rev().cloned().collect())
+    }
+}
+
+/// In-memory tool registry, seeded from the domain's defaults.
+#[derive(Clone)]
+pub struct InMemoryToolRepository {
+    tools: Arc<RwLock<Vec<Tool>>>,
+}
+
+impl Default for InMemoryToolRepository {
+    fn default() -> Self {
+        Self {
+            tools: Arc::new(RwLock::new(catalog::default_tools())),
+        }
+    }
+}
+
+impl ToolRepository for InMemoryToolRepository {
+    async fn list(&self) -> DomainResult<Vec<Tool>> {
+        Ok(self.tools.read().await.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Tool>> {
+        Ok(self.tools.read().await.iter().find(|t| t.id == id).cloned())
+    }
+
+    async fn save(&self, tool: &Tool) -> DomainResult<Tool> {
+        let mut tools = self.tools.write().await;
+        if let Some(existing) = tools.iter_mut().find(|t| t.id == tool.id) {
+            *existing = tool.clone();
+        } else {
+            tools.push(tool.clone());
+        }
+        Ok(tool.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.tools.write().await.retain(|t| t.id != id);
+        Ok(())
     }
 }
 

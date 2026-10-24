@@ -6,6 +6,7 @@ import type {
   RunRecord,
   Session,
   SessionSummary,
+  Tool,
 } from '@/types/domain'
 import type { CatHerderApi, AuthInfo } from './client'
 import { config } from '@/config'
@@ -55,6 +56,10 @@ export const httpApi: CatHerderApi = {
   listModels: () => request<Model[]>('/v1/admin/models'),
   saveModel: (id, model) => request<Model>(`/v1/admin/models/${id}`, json('PUT', model)),
   deleteModel: (id) => request<void>(`/v1/admin/models/${id}`, { method: 'DELETE' }),
+
+  listTools: () => request<Tool[]>('/v1/admin/tools'),
+  saveTool: (id, tool) => request<Tool>(`/v1/admin/tools/${id}`, json('PUT', tool)),
+  deleteTool: (id) => request<void>(`/v1/admin/tools/${id}`, { method: 'DELETE' }),
 
   listAudit: () => request<AuditEntry[]>('/v1/admin/audit'),
 }

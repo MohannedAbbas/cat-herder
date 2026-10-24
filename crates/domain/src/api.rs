@@ -102,6 +102,14 @@ pub struct AuditEntry {
     pub resource_id: String,
 }
 
+/// An available agent tool (referenced by id in agent templates).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tool {
+    pub id: String,
+    pub description: String,
+}
+
 /// Request body for `POST /v1/runs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRunRequest {

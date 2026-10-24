@@ -11,6 +11,7 @@ import RunDetailPage from './features/runs/RunDetailPage'
 import AdminAgentsPage from './features/admin/AdminAgentsPage'
 import AdminProvidersPage from './features/admin/AdminProvidersPage'
 import AdminModelsPage from './features/admin/AdminModelsPage'
+import AdminToolsPage from './features/admin/AdminToolsPage'
 import AdminAuditPage from './features/admin/AdminAuditPage'
 
 function RequireAdmin({ children }: { children: React.ReactNode }) {
@@ -62,6 +63,14 @@ export default function App() {
             element={
               <RequireAdmin>
                 <AdminModelsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/tools"
+            element={
+              <RequireAdmin>
+                <AdminToolsPage />
               </RequireAdmin>
             }
           />
