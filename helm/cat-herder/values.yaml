@@ -104,8 +104,11 @@ agentSandbox:
         k8s-app: kube-dns
       port: 53
     # 2. In-cluster control plane Service (cat-herder-api) in this namespace.
+    #    NOTE: this is the POD's containerPort (8080), NOT the Service's :80
+    #    port. NetworkPolicy egress rules match the destination pod after the
+    #    Service DNAT rewrites 80 -> targetPort 8080, so it must be 8080.
     controlPlane:
-      port: 80
+      port: 8080
     # 3. Supported git hosts on :443.
     #    To support a different/extra git host, add its IP CIDRs to `cidrs`.
     gitHosts:
