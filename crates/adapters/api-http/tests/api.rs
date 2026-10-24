@@ -532,3 +532,148 @@ async fn admin_can_generate_and_view_webhook_secret() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(v["secret"].as_str().is_some_and(|s| !s.is_empty()));
 }
+
+// --- admin CRUD (agents/models/tools/providers) ----------------------------
+
+async fn authed(
+    app: Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    body: &str,
+) -> (StatusCode, Vec<u8>) {
+    let mut builder = Request::builder().method(method).uri(uri).header("cookie", cookie);
+    if !body.is_empty() {
+        builder = builder.header("content-type", "application/json");
+    }
+    let res = app
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, body)
+}
+
+#[tokio::test]
+async fn admin_delete_agent() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+    let (status, _) = authed(app, "DELETE", "/v1/admin/agents/agent-codeact", &cookie, "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn admin_list_and_upsert_and_delete_model() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    let (status, body) = authed(app.clone(), "GET", "/v1/admin/models", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(models.as_array().unwrap().len() >= 5);
+
+    let (status, body) = authed(
+        app.clone(),
+        "PUT",
+        "/v1/admin/models/gpt-4o",
+        &cookie,
+        r#"{"id":"gpt-4o","providerId":"openai","displayName":"GPT-4o"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], "gpt-4o");
+
+    let (status, _) = authed(app, "DELETE", "/v1/admin/models/gpt-4o", &cookie, "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn admin_list_and_upsert_and_delete_tool() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    let (status, body) = authed(app.clone(), "GET", "/v1/admin/tools", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let tools: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(tools.as_array().unwrap().len() >= 6);
+
+    let (status, body) = authed(
+        app.clone(),
+        "PUT",
+        "/v1/admin/tools/browser",
+        &cookie,
+        r#"{"id":"browser","description":"Browser automation"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], "browser");
+
+    let (status, _) = authed(app, "DELETE", "/v1/admin/tools/browser", &cookie, "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn admin_delete_provider() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+    let (status, _) = authed(app, "DELETE", "/v1/admin/providers/openai", &cookie, "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+// --- mcp tools -------------------------------------------------------------
+
+#[tokio::test]
+async fn mcp_list_runs_and_sessions_tools() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_runs","arguments":{}}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["result"]["isError"], false);
+
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_sessions","arguments":{}}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["result"]["isError"], false);
+}
+
+#[tokio::test]
+async fn mcp_run_agent_missing_task_spec() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_agent","arguments":{"kind":"agent"}}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["result"]["isError"], true);
+    let text = v["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("task_spec"));
+}
+
+#[tokio::test]
+async fn mcp_run_agent_no_runtime() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_agent","arguments":{"task_spec":"hi","agent_id":"agent-codeact"}}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["result"]["isError"], true);
+    let text = v["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("runtime"));
+}

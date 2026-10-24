@@ -25,6 +25,31 @@ jobs:
           components: clippy
       - run: cargo clippy --workspace -- -D warnings
 
+  # DB-backed integration tests for the Postgres adapters (a containerized,
+  # seeded Postgres). Runs the tests that otherwise skip without a DB.
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cat_herder
+          POSTGRES_PASSWORD: cat-herder-test
+          POSTGRES_DB: cat_herder
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cat_herder"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CAT_HERDER_TEST_DATABASE_URL: postgres://cat_herder:cat-herder-test@localhost:5432/cat_herder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p cat-herder-store-postgres
+
   coverage:
     runs-on: ubuntu-latest
     steps:
@@ -34,5 +59,5 @@ jobs:
           components: llvm-tools-preview
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Coverage (threshold 85%)
-        run: cargo llvm-cov --fail-under-lines 85
+      - name: Coverage (threshold 85%, excl. live-infra adapters)
+        run: cargo llvm-cov --fail-under-lines 85 --ignore-filename-regex 'bin/cat-herder|runtime-agent-sandbox|store-postgres'
