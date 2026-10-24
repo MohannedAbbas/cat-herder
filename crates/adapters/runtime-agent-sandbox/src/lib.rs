@@ -166,6 +166,14 @@ impl SandboxRuntime {
                             "image": self.harness_image,
                             "env": env,
                             "ports": [{ "containerPort": 8080 }],
+                            // Disk budget: a `cargo build` in the sandbox can write a
+                            // multi-GiB target/ + registry cache. A request accounts for it
+                            // at scheduling time; a limit bounds it so one run can't fill
+                            // the node's ephemeral storage and evict itself/everything.
+                            "resources": {
+                                "requests": { "ephemeral-storage": "2Gi" },
+                                "limits": { "ephemeral-storage": "10Gi" },
+                            },
                             "readinessProbe": {
                                 "httpGet": { "path": "/healthz", "port": 8080 },
                             },
