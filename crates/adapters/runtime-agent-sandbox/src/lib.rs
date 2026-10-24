@@ -4,23 +4,32 @@
 //! This is the production execution substrate — each agent run becomes a `Sandbox`
 //! resource that the agent-sandbox controller turns into a pod.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use cat_herder_domain::api::Provider;
 use cat_herder_domain::entities::{Run, RunId, RunState};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
 use cat_herder_domain::reconcile::RuntimeStatus;
 
+use k8s_openapi::api::core::v1::Secret;
 use kube::{
     Api, Client,
     api::{DeleteParams, DynamicObject, Patch, PatchParams, PostParams},
     core::{ApiResource, GroupVersionKind},
 };
+use tokio::sync::RwLock;
 
 /// Creates and manages agent-sandbox `Sandbox` resources.
 #[derive(Clone)]
 pub struct SandboxRuntime {
     api: Api<DynamicObject>,
+    secrets: Api<Secret>,
     namespace: String,
     harness_image: String,
     model: String,
+    /// Provider id → (Secret name, Secret key) — refreshed from the provider registry.
+    provider_secrets: Arc<RwLock<HashMap<String, (String, String)>>>,
 }
 
 impl SandboxRuntime {
@@ -42,13 +51,38 @@ impl SandboxRuntime {
         model: impl Into<String>,
     ) -> DomainResult<Self> {
         let namespace = namespace.into();
-        let api = Api::namespaced_with(client, &namespace, &Self::api_resource());
+        let api = Api::namespaced_with(client.clone(), &namespace, &Self::api_resource());
+        let secrets = Api::<Secret>::namespaced(client, &namespace);
         Ok(Self {
             api,
+            secrets,
             namespace,
             harness_image: harness_image.into(),
             model: model.into(),
+            provider_secrets: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// Refresh the provider → Secret mapping from the provider registry.
+    pub async fn update_providers(&self, providers: &[Provider]) {
+        let mut map = self.provider_secrets.write().await;
+        map.clear();
+        for p in providers {
+            if p.enabled && !p.api_key_secret.is_empty() {
+                map.insert(p.id.clone(), (p.api_key_secret.clone(), p.api_key_secret_key.clone()));
+            }
+        }
+    }
+
+    /// Resolve the run's provider and read its API key from the configured Secret.
+    /// Falls back to `None` if there is no provider match or the read fails.
+    async fn resolve_api_key(&self, run: &Run) -> Option<String> {
+        let provider = run.model.as_deref()?.split(':').next()?;
+        let (secret_name, secret_key) = self.provider_secrets.read().await.get(provider).cloned()?;
+        let secret = self.secrets.get(&secret_name).await.ok()?;
+        let data = secret.data?;
+        let bytes = data.get(&secret_key)?;
+        Some(String::from_utf8_lossy(&bytes.0).into_owned())
     }
 
     /// The agent-sandbox `Sandbox` resource descriptor (explicit plural).
@@ -61,7 +95,7 @@ impl SandboxRuntime {
         format!("run-{}", id.0)
     }
 
-    fn sandbox_object(&self, run: &Run) -> DynamicObject {
+    fn sandbox_object(&self, run: &Run, api_key: Option<&str>) -> DynamicObject {
         // A run's model (from agent selection or the request) wins; otherwise the
         // global default (`CAT_HERDER_MODEL`) applies.
         let model = run.model.clone().unwrap_or_else(|| self.model.clone());
@@ -73,15 +107,18 @@ impl SandboxRuntime {
             serde_json::json!({ "name": "MODEL", "value": model }),
         ];
         // The control plane's in-cluster URL, so the harness can report events back.
-        // Overridable via the control plane's own env.
         let control_url = std::env::var("CAT_HERDER_CONTROL_URL")
             .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));
         env.push(serde_json::json!({ "name": "CAT_HERDER_CONTROL_URL", "value": control_url }));
-        // Pass the LLM key through if it's present in the control plane's env
-        // (sourced from a Kubernetes Secret in the chart). PLAN.md §11.3 will replace
-        // this with brokered credentials.
-        if let Ok(key) = std::env::var("LLM_API_KEY") {
-            env.push(serde_json::json!({ "name": "LLM_API_KEY", "value": key }));
+
+        // The provider's API key (resolved from its Secret) wins; otherwise fall back
+        // to the global LLM_API_KEY from the control plane's env.
+        let key = match api_key {
+            Some(k) => Some(k.to_string()),
+            None => std::env::var("LLM_API_KEY").ok(),
+        };
+        if let Some(k) = key {
+            env.push(serde_json::json!({ "name": "LLM_API_KEY", "value": k }));
         }
 
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
@@ -108,8 +145,9 @@ impl SandboxRuntime {
 
 impl AgentRuntime for SandboxRuntime {
     async fn spawn(&self, run: &Run) -> DomainResult<()> {
+        let api_key = self.resolve_api_key(run).await;
         self.api
-            .create(&PostParams::default(), &self.sandbox_object(run))
+            .create(&PostParams::default(), &self.sandbox_object(run, api_key.as_deref()))
             .await?;
         Ok(())
     }

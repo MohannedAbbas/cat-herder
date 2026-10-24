@@ -10,6 +10,7 @@ use cat_herder_api_http::{
     router, AppState, AgentRepo, Auth, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
 };
 use cat_herder_application::reconcile_once;
+use cat_herder_domain::ports::ProviderRepository;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{InMemoryAgentRepository, InMemoryModelRepository, InMemoryProviderRepository};
 use cat_herder_store_postgres::{
@@ -104,6 +105,23 @@ async fn main() {
     };
 
     let repos = build_repos(&agent_models()).await;
+
+    // Load providers into the runtime so it can resolve each provider's API key from
+    // its Secret at spawn time, and keep the mapping fresh (admin edits).
+    if let Some(rt) = runtime.clone() {
+        let providers = repos.providers.clone();
+        if let Ok(list) = providers.list().await {
+            rt.update_providers(&list).await;
+        }
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                if let Ok(list) = providers.list().await {
+                    rt.update_providers(&list).await;
+                }
+            }
+        });
+    }
 
     // Background reconciler: advance active runs (PodPending -> Running, Running ->
     // Succeeded) based on sandbox status (PLAN.md §6), and keep the session display
