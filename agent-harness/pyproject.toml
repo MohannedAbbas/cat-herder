@@ -8,6 +8,7 @@ dependencies = [
     "deepagents",
     "langgraph",
     "langchain",
+    "langchain-deepseek",
     "grpcio",
     "protobuf",
 ]

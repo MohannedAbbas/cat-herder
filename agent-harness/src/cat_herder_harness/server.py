@@ -70,6 +70,8 @@ def set_provider_key(model: str) -> None:
         os.environ.setdefault("ANTHROPIC_API_KEY", key)
     elif provider == "google" or provider == "google_genai":
         os.environ.setdefault("GOOGLE_API_KEY", key)
+    elif provider == "deepseek":
+        os.environ.setdefault("DEEPSEEK_API_KEY", key)
     # add more providers as needed
 
 
