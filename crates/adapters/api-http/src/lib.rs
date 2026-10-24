@@ -275,8 +275,8 @@ async fn post_run_event(
     }
 }
 
-/// Open a PR/MR from the agent's diff, if the repo has a write-token Secret and
-/// changes exist. The write token is read from its Secret here (never the sandbox).
+/// Open a PR/MR from the agent's diff, if the repo has a write token and changes
+/// exist. The write token is decrypted here (control-plane only, never the sandbox).
 async fn maybe_open_pr(
     state: &AppState,
     run: &Run,
@@ -289,28 +289,26 @@ async fn maybe_open_pr(
     }
     let Some(repo_url) = run.repo.as_deref() else { return };
 
-    // Resolve the repo identity + its write-token Secret reference.
+    // Resolve the repo identity and its encrypted write token.
     let Some(identity) = repo_identity_from_url(repo_url) else { return };
     let repo_record = match state.git_repos.get(&identity.id()).await {
         Ok(Some(r)) => r,
         _ => return,
     };
-    let (Some(secret), Some(key)) = (repo_record.write_token_secret, repo_record.write_token_key) else {
-        eprintln!("run {} has no write-token Secret configured; skipping PR", run.id.0);
+    let Some(write_token_ciphertext) = repo_record.write_token_ciphertext else {
+        eprintln!("run {} has no write token; skipping PR", run.id.0);
         return;
     };
 
-    // Read the write token from its Secret (control-plane only).
-    let Some(store) = state.key_store.clone() else { return };
-    let token = match store.read(&secret, &key).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            eprintln!("write-token Secret {secret}/{key} not found; skipping PR");
-            return;
-        }
-        Err(e) => {
-            eprintln!("failed to read write-token Secret {secret}/{key}: {e}");
-            return;
+    // Decrypt the write token (control-plane only).
+    let token = {
+        let cipher = state.cipher.read().await;
+        match cipher.decrypt(&write_token_ciphertext) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("failed to decrypt write token for run {}: {e}", run.id.0);
+                return;
+            }
         }
     };
 

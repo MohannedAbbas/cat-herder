@@ -54,22 +54,6 @@ impl KeySecretStore {
         }
     }
 
-    /// Read an arbitrary key from an arbitrary Secret in this namespace (used to
-    /// fetch a repo's write token). Returns `None` if the Secret/key is absent.
-    pub async fn read(&self, name: &str, key: &str) -> DomainResult<Option<String>> {
-        match self.secrets.get(name).await {
-            Ok(secret) => {
-                let value = secret
-                    .data
-                    .and_then(|d| d.get(key).cloned())
-                    .map(|bytes| String::from_utf8_lossy(&bytes.0).into_owned());
-                Ok(value)
-            }
-            Err(kube::Error::Api(err)) if err.code == 404 => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     /// Write the key to the Secret (create-or-update via server-side apply).
     pub async fn store(&self, value: &str) -> DomainResult<()> {
         let mut data = serde_json::Map::new();

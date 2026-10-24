@@ -122,9 +122,8 @@ export interface GitHost {
   label: string
 }
 
-/** A git repository an agent can clone. The read token is never returned; `hasToken`
- * reports whether one is stored (encrypted) server-side. The write token is a
- * Kubernetes Secret reference (name + key). */
+/** A git repository an agent can clone. The tokens are never returned; `hasToken` /
+ * `hasWriteToken` report whether each is stored (encrypted) server-side. */
 export interface GitRepo {
   id: string
   name: string
@@ -132,18 +131,15 @@ export interface GitRepo {
   url: string
   enabled: boolean
   hasToken: boolean
-  writeTokenSecret: string | null
-  writeTokenKey: string | null
+  hasWriteToken: boolean
 }
 
 /** Write model for a git repo. `host` + `repo` (path) are required; the canonical
- * id/name/url are derived server-side. The read token is write-only; the write token
- * is a Kubernetes Secret reference (name + key). */
+ * id/name/url are derived server-side. Both tokens are write-only. */
 export interface GitRepoWrite {
   host: string
   repo: string
   enabled: boolean
   token?: string
-  writeTokenSecret?: string
-  writeTokenKey?: string
+  writeToken?: string
 }

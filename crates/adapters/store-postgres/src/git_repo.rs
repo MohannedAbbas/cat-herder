@@ -41,21 +41,19 @@ impl GitRepoRepository for PostgresGitRepoRepository {
 
     async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo> {
         sqlx::query(
-            "INSERT INTO git_repos (id, name, url, token_ciphertext, write_token_secret, write_token_key, enabled) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+            "INSERT INTO git_repos (id, name, url, token_ciphertext, write_token_ciphertext, enabled) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT (id) DO UPDATE SET \
                name = EXCLUDED.name, url = EXCLUDED.url, \
                token_ciphertext = EXCLUDED.token_ciphertext, \
-               write_token_secret = EXCLUDED.write_token_secret, \
-               write_token_key = EXCLUDED.write_token_key, \
+               write_token_ciphertext = EXCLUDED.write_token_ciphertext, \
                enabled = EXCLUDED.enabled",
         )
         .bind(repo.id.as_str())
         .bind(repo.name.as_str())
         .bind(repo.url.as_str())
         .bind(repo.token_ciphertext.as_deref())
-        .bind(repo.write_token_secret.as_deref())
-        .bind(repo.write_token_key.as_deref())
+        .bind(repo.write_token_ciphertext.as_deref())
         .bind(repo.enabled)
         .execute(&self.pool)
         .await?;
@@ -77,8 +75,7 @@ fn repo_from_row(row: &PgRow) -> Result<GitRepo, sqlx::Error> {
         name: row.try_get("name")?,
         url: row.try_get("url")?,
         token_ciphertext: row.try_get("token_ciphertext")?,
-        write_token_secret: row.try_get("write_token_secret")?,
-        write_token_key: row.try_get("write_token_key")?,
+        write_token_ciphertext: row.try_get("write_token_ciphertext")?,
         enabled: row.try_get("enabled")?,
     })
 }

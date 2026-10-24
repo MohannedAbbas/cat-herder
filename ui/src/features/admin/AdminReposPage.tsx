@@ -13,8 +13,7 @@ const emptyForm = {
   repo: '',
   enabled: true,
   token: '',
-  writeTokenSecret: '',
-  writeTokenKey: '',
+  writeToken: '',
 }
 
 export default function AdminReposPage() {
@@ -81,8 +80,7 @@ export default function AdminReposPage() {
       repo: r.name,
       enabled: r.enabled,
       token: '',
-      writeTokenSecret: r.writeTokenSecret ?? '',
-      writeTokenKey: r.writeTokenKey ?? '',
+      writeToken: '',
     })
     setMessage(null)
     setErrorMsg(null)
@@ -95,9 +93,7 @@ export default function AdminReposPage() {
       repo: form.repo.trim(),
       enabled: form.enabled,
       ...(form.token ? { token: form.token } : {}),
-      ...(form.writeTokenSecret.trim()
-        ? { writeTokenSecret: form.writeTokenSecret.trim(), writeTokenKey: form.writeTokenKey.trim() || 'token' }
-        : {}),
+      ...(form.writeToken ? { writeToken: form.writeToken } : {}),
     }
     save.mutate(payload)
   }
@@ -215,25 +211,18 @@ export default function AdminReposPage() {
                     encryption key. Never returned by the API.
                   </span>
                 </Field>
-                <Field label="Write token Secret name">
+                <Field label="Write token">
                   <input
-                    value={form.writeTokenSecret}
-                    onChange={(e) => setForm({ ...form, writeTokenSecret: e.target.value })}
-                    placeholder="cat-herder-git-write"
+                    type="password"
+                    value={form.writeToken}
+                    onChange={(e) => setForm({ ...form, writeToken: e.target.value })}
+                    placeholder={editingId === '__new__' ? 'ghp_…' : 'Leave blank to keep existing token'}
                     className={inputCls}
                   />
                   <span className="mt-1 block text-xs text-slate-400">
-                    A Kubernetes Secret holding the token used to open PRs/MRs (never stored
-                    in the DB or sent to the sandbox).
+                    Used to open PRs/MRs from the agent's output. Encrypted at rest like the
+                    read token. Never returned by the API.
                   </span>
-                </Field>
-                <Field label="Write token Secret key">
-                  <input
-                    value={form.writeTokenKey}
-                    onChange={(e) => setForm({ ...form, writeTokenKey: e.target.value })}
-                    placeholder="token"
-                    className={inputCls}
-                  />
                 </Field>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input

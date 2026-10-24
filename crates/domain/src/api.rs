@@ -110,9 +110,8 @@ pub struct Tool {
     pub description: String,
 }
 
-/// A git repository as exposed by the admin API. The read token is never returned;
-/// `has_token` reports whether one is stored (encrypted) server-side. The write token
-/// is a Kubernetes Secret *reference* (name + key), like the LLM provider keys.
+/// A git repository as exposed by the admin API. The tokens are never returned;
+/// `has_token`/`has_write_token` report whether each is stored (encrypted) server-side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepo {
@@ -122,8 +121,7 @@ pub struct GitRepo {
     pub url: String,
     pub enabled: bool,
     pub has_token: bool,
-    pub write_token_secret: Option<String>,
-    pub write_token_key: Option<String>,
+    pub has_write_token: bool,
 }
 
 impl From<&crate::entities::GitRepo> for GitRepo {
@@ -141,8 +139,7 @@ impl From<&crate::entities::GitRepo> for GitRepo {
             url: repo.url.clone(),
             enabled: repo.enabled,
             has_token: repo.token_ciphertext.is_some(),
-            write_token_secret: repo.write_token_secret.clone(),
-            write_token_key: repo.write_token_key.clone(),
+            has_write_token: repo.write_token_ciphertext.is_some(),
         }
     }
 }
