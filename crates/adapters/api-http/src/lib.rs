@@ -16,6 +16,7 @@ use cat_herder_domain::ports::{RunRepository, RunRequest};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::InMemoryRunRepository;
 
+mod mcp;
 mod mock;
 mod webhook;
 
@@ -48,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run))
         .route("/v1/webhooks/generic", post(webhook_generic))
+        .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
@@ -117,7 +119,13 @@ async fn webhook_generic(
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }
 
-// --- Session / agent handlers --------------------------------------------
+/// MCP endpoint (Streamable HTTP): JSON-RPC 2.0 in, JSON-RPC response out.
+async fn mcp_handler(
+    State(state): State<AppState>,
+    Json(request): Json<mcp::JsonRpcRequest>,
+) -> Json<serde_json::Value> {
+    Json(mcp::handle(request, &state).await)
+}
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionSummary>> {
     Json(state.sessions.iter().map(summarize).collect())

@@ -133,3 +133,49 @@ async fn webhook_without_runtime_returns_503() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// --- mcp ------------------------------------------------------------------
+
+#[tokio::test]
+async fn mcp_initialize_returns_server_info() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["result"]["serverInfo"]["name"], "cat-herder");
+}
+
+#[tokio::test]
+async fn mcp_tools_list_returns_tools() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    let tools = v["result"]["tools"].as_array().expect("tools array");
+    assert!(tools.iter().any(|t| t["name"] == "run_agent"));
+    assert!(tools.iter().any(|t| t["name"] == "list_runs"));
+}
+
+#[tokio::test]
+async fn mcp_list_agents_tool_works() {
+    let (status, body) = post_json(
+        app(),
+        "/mcp",
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["result"]["isError"], false);
+    let text = v["result"]["content"][0]["text"].as_str().unwrap();
+    let agents: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(agents.as_array().unwrap().len() >= 3);
+}

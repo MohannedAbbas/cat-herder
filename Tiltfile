@@ -51,4 +51,14 @@ helm_resource(
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
     image_keys=['controlPlane.image', 'harness.image', 'ui.image'],
     image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui'],
+    # Expose the API locally (localhost:8080).
+    port_forwards=['8080:8080'],
+)
+
+# Expose the UI with an explicit port-forward (Tilt's `port_forwards` is ambiguous
+# across the multiple pods in one helm resource).
+local_resource(
+    'ui-port-forward',
+    serve_cmd='kubectl port-forward -n cat-herder svc/cat-herder-ui 8081:80',
+    resource_deps=['cat-herder'],
 )
