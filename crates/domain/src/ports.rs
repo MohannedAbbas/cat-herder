@@ -4,6 +4,7 @@
 //! `dyn`-object-safe, so application services use generics (not `Box<dyn …>`),
 //! per `PLAN.md` §5.
 
+use crate::api::{AgentTemplate, Session};
 use crate::entities::{Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
@@ -42,6 +43,18 @@ pub trait RunRepository {
     async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>>;
     /// All runs (used by the reconciler).
     async fn list_all(&self) -> DomainResult<Vec<Run>>;
+}
+
+/// Read-only catalog of agent templates (reference data, `PLAN.md` §13).
+pub trait AgentRepository {
+    async fn list(&self) -> DomainResult<Vec<AgentTemplate>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>>;
+}
+
+/// Read-only session store (runs grouped into sessions, `PLAN.md` §12).
+pub trait SessionRepository {
+    async fn list(&self) -> DomainResult<Vec<Session>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<Session>>;
 }
 
 pub trait EventBus {

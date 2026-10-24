@@ -1,38 +1,61 @@
 //! Cat Herder — control plane binary (composition root).
 //!
 //! Wires the runtime adapter and the background reconciler into the API. Data is
-//! in-memory mock until Postgres repositories are implemented.
+//! persisted in Postgres when `CAT_HERDER_DATABASE_URL` is set, otherwise in-memory.
 
 use std::time::Duration;
 
-use cat_herder_api_http::{router, AppState, RunRepo};
+use cat_herder_api_http::{router, AppState, AgentRepo, RunRepo, SessionRepo};
 use cat_herder_application::reconcile_once;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
-use cat_herder_store_postgres::PostgresRunRepository;
+use cat_herder_store_postgres::{
+    PostgresAgentRepository, PostgresRunRepository, PostgresSessionRepository, PostgresStore,
+};
 
-/// Choose the run repository: Postgres when `CAT_HERDER_DATABASE_URL` is set (the
+/// The three repositories (run/agent/session), all in-memory or all Postgres.
+struct Repos {
+    run: RunRepo,
+    agents: AgentRepo,
+    sessions: SessionRepo,
+}
+
+impl Repos {
+    fn in_memory() -> Self {
+        Self {
+            run: RunRepo::InMemory(Default::default()),
+            agents: AgentRepo::InMemory(Default::default()),
+            sessions: SessionRepo::InMemory(Default::default()),
+        }
+    }
+}
+
+/// Choose the repositories: Postgres when `CAT_HERDER_DATABASE_URL` is set (the
 /// chart injects it when `dependencies.postgres.enabled`), otherwise in-memory.
 /// Retries briefly because the bundled Postgres StatefulSet may still be
 /// initializing when the control plane starts.
-async fn build_repo() -> RunRepo {
+async fn build_repos() -> Repos {
     let Some(url) = std::env::var("CAT_HERDER_DATABASE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
     else {
-        return RunRepo::InMemory(Default::default());
+        return Repos::in_memory();
     };
 
     for attempt in 1..=30 {
-        match PostgresRunRepository::connect(&url).await {
-            Ok(repo) => {
-                eprintln!("using Postgres run repository");
-                return RunRepo::Postgres(repo);
+        match PostgresStore::connect(&url).await {
+            Ok(store) => {
+                eprintln!("using Postgres repositories");
+                return Repos {
+                    run: RunRepo::Postgres(PostgresRunRepository::new(&store)),
+                    agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
+                    sessions: SessionRepo::Postgres(PostgresSessionRepository::new(&store)),
+                };
             }
             Err(e) => {
                 if attempt == 30 {
                     eprintln!(
                         "warning: Postgres unavailable after {attempt} attempts ({e}); \
-                         falling back to in-memory repository"
+                         falling back to in-memory repositories"
                     );
                 } else {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -40,7 +63,7 @@ async fn build_repo() -> RunRepo {
             }
         }
     }
-    RunRepo::InMemory(Default::default())
+    Repos::in_memory()
 }
 
 #[tokio::main]
@@ -60,7 +83,8 @@ async fn main() {
         }
     };
 
-    let repo = build_repo().await;
+    let repos = build_repos().await;
+    let repo = repos.run;
 
     // Background reconciler: advance active runs (PodPending -> Running, Running ->
     // Succeeded) based on sandbox status (PLAN.md §6).
@@ -78,8 +102,9 @@ async fn main() {
 
     let state = AppState {
         repo,
+        agents: repos.agents,
+        sessions: repos.sessions,
         runtime,
-        ..AppState::default()
     };
 
     let app = router(state);

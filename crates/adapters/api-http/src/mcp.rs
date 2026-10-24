@@ -4,7 +4,7 @@
 use cat_herder_application::start_run;
 use cat_herder_domain::api::RunResponse;
 use cat_herder_domain::entities::{RunKind, TenantId};
-use cat_herder_domain::ports::{RunRepository, RunRequest};
+use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, SessionRepository};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -18,6 +18,7 @@ const SERVER_VERSION: &str = "0.1.0";
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
     #[serde(default)]
+    #[allow(dead_code)] // parsed but not yet validated against the spec version
     pub jsonrpc: String,
     #[serde(default)]
     pub id: Option<Value>,
@@ -143,14 +144,14 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
             }
             Err(e) => (format!("error: {e}"), true),
         },
-        "list_sessions" => (
-            serde_json::to_string(&state.sessions).unwrap_or_default(),
-            false,
-        ),
-        "list_agents" => (
-            serde_json::to_string(&state.agents).unwrap_or_default(),
-            false,
-        ),
+        "list_sessions" => match state.sessions.list().await {
+            Ok(sessions) => (serde_json::to_string(&sessions).unwrap_or_default(), false),
+            Err(e) => (format!("error: {e}"), true),
+        },
+        "list_agents" => match state.agents.list().await {
+            Ok(agents) => (serde_json::to_string(&agents).unwrap_or_default(), false),
+            Err(e) => (format!("error: {e}"), true),
+        },
         other => (format!("unknown tool: {other}"), true),
     }
 }

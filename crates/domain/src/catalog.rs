@@ -1,10 +1,11 @@
-//! In-memory mock data (mirrors `ui/src/api/mock.ts`), used until Postgres-backed
-//! repositories are implemented.
+//! Default reference/seed data: the built-in agent catalog and a few demo
+//! sessions. Used to seed both the in-memory and Postgres backends so the API and
+//! UI have data on first boot. (Mirrors `ui/src/api/mock.ts`.)
 
-use cat_herder_domain::api::{AgentTemplate, RuntimeTier, Session, SessionRun};
-use cat_herder_domain::entities::{RunKind, RunState};
+use crate::api::{AgentTemplate, RuntimeTier, Session, SessionRun};
+use crate::entities::{RunKind, RunState};
 
-pub fn agents() -> Vec<AgentTemplate> {
+pub fn default_agents() -> Vec<AgentTemplate> {
     vec![
         AgentTemplate {
             id: "agent-codeact".into(),
@@ -45,7 +46,7 @@ pub fn agents() -> Vec<AgentTemplate> {
     ]
 }
 
-pub fn sessions() -> Vec<Session> {
+pub fn default_sessions() -> Vec<Session> {
     vec![
         Session {
             id: "sess-01".into(),

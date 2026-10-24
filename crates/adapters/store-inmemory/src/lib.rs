@@ -1,11 +1,14 @@
-//! In-memory [`RunRepository`] — reference adapter until Postgres is wired.
+//! In-memory repositories — reference adapters until Postgres is wired for every
+//! aggregate.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use cat_herder_domain::api::{AgentTemplate, Session};
+use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
-use cat_herder_domain::ports::{DomainResult, RunRepository};
+use cat_herder_domain::ports::{AgentRepository, DomainResult, RunRepository, SessionRepository};
 use tokio::sync::RwLock;
 
 /// A process-local, `Arc`-shared run store.
@@ -56,6 +59,54 @@ impl RunRepository for InMemoryRunRepository {
     }
 }
 
+/// In-memory agent catalog, seeded from the domain's default reference data.
+#[derive(Clone)]
+pub struct InMemoryAgentRepository {
+    agents: Arc<Vec<AgentTemplate>>,
+}
+
+impl Default for InMemoryAgentRepository {
+    fn default() -> Self {
+        Self {
+            agents: Arc::new(catalog::default_agents()),
+        }
+    }
+}
+
+impl AgentRepository for InMemoryAgentRepository {
+    async fn list(&self) -> DomainResult<Vec<AgentTemplate>> {
+        Ok(self.agents.as_ref().clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>> {
+        Ok(self.agents.iter().find(|a| a.id == id).cloned())
+    }
+}
+
+/// In-memory session store, seeded from the domain's default demo data.
+#[derive(Clone)]
+pub struct InMemorySessionRepository {
+    sessions: Arc<Vec<Session>>,
+}
+
+impl Default for InMemorySessionRepository {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(catalog::default_sessions()),
+        }
+    }
+}
+
+impl SessionRepository for InMemorySessionRepository {
+    async fn list(&self) -> DomainResult<Vec<Session>> {
+        Ok(self.sessions.as_ref().clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Session>> {
+        Ok(self.sessions.iter().find(|s| s.id == id).cloned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +148,24 @@ mod tests {
     async fn get_unknown_returns_none() {
         let repo = InMemoryRunRepository::new();
         assert!(repo.get(RunId(12345)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_repo_is_seeded_and_queryable() {
+        let repo = InMemoryAgentRepository::default();
+        let agents = repo.list().await.unwrap();
+        assert!(agents.len() >= 3);
+        assert!(repo.get("agent-codeact").await.unwrap().is_some());
+        assert!(repo.get("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn session_repo_is_seeded_and_queryable() {
+        let repo = InMemorySessionRepository::default();
+        let sessions = repo.list().await.unwrap();
+        assert!(!sessions.is_empty());
+        let sess = repo.get("sess-01").await.unwrap().unwrap();
+        assert_eq!(sess.runs.len(), 3);
+        assert!(repo.get("nope").await.unwrap().is_none());
     }
 }

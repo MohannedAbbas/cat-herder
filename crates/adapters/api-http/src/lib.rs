@@ -12,23 +12,21 @@ use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
 };
 use cat_herder_domain::entities::{RunId, RunState, TenantId};
-use cat_herder_domain::ports::{RunRepository, RunRequest};
+use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, SessionRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
-pub use repo::RunRepo;
+pub use repo::{AgentRepo, RunRepo, SessionRepo};
 
 mod mcp;
-mod mock;
 mod repo;
 mod webhook;
 
-/// Application state: the data the handlers serve. Agents/sessions are mock data
-/// for now; runs are persisted via [`RunRepo`] (Postgres in production, in-memory
-/// fallback otherwise).
+/// Application state: the data the handlers serve. Runs, agents, and sessions are
+/// backed by their repositories (Postgres in production, in-memory fallback).
 #[derive(Clone)]
 pub struct AppState {
-    pub agents: Vec<AgentTemplate>,
-    pub sessions: Vec<Session>,
+    pub agents: AgentRepo,
+    pub sessions: SessionRepo,
     pub repo: RunRepo,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
@@ -37,8 +35,8 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            agents: mock::agents(),
-            sessions: mock::sessions(),
+            agents: AgentRepo::InMemory(Default::default()),
+            sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
             runtime: None,
         }
@@ -131,7 +129,8 @@ async fn mcp_handler(
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionSummary>> {
-    Json(state.sessions.iter().map(summarize).collect())
+    let sessions = state.sessions.list().await.unwrap_or_default();
+    Json(sessions.iter().map(summarize).collect())
 }
 
 async fn get_session(
@@ -140,15 +139,15 @@ async fn get_session(
 ) -> Result<Json<Session>, StatusCode> {
     state
         .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .cloned()
+        .get(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentTemplate>> {
-    Json(state.agents)
+    Json(state.agents.list().await.unwrap_or_default())
 }
 
 async fn get_agent(
@@ -157,9 +156,9 @@ async fn get_agent(
 ) -> Result<Json<AgentTemplate>, StatusCode> {
     state
         .agents
-        .iter()
-        .find(|a| a.id == id)
-        .cloned()
+        .get(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
