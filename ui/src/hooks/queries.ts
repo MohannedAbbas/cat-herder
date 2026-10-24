@@ -44,3 +44,7 @@ export function useProviders() {
 export function useModels() {
   return useQuery({ queryKey: ['models'], queryFn: () => api.listModels() })
 }
+
+export function useAudit() {
+  return useQuery({ queryKey: ['audit'], queryFn: () => api.listAudit() })
+}

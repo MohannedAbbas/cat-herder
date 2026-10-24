@@ -98,3 +98,13 @@ export interface Model {
   providerId: string
   displayName: string
 }
+
+/** An admin action recorded in the audit log. */
+export interface AuditEntry {
+  id: number
+  timestamp: string
+  actor: string
+  action: string
+  resource: string
+  resourceId: string
+}

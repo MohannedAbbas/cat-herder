@@ -1,5 +1,6 @@
 import type {
   AgentTemplate,
+  AuditEntry,
   Model,
   Provider,
   RunRecord,
@@ -42,6 +43,9 @@ export interface CatHerderApi {
   listModels(): Promise<Model[]>
   saveModel(id: string, model: Model): Promise<Model>
   deleteModel(id: string): Promise<void>
+
+  // admin — audit
+  listAudit(): Promise<AuditEntry[]>
 }
 
 /**

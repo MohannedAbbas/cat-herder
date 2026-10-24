@@ -1,5 +1,6 @@
 import type {
   AgentTemplate,
+  AuditEntry,
   Model,
   Provider,
   RunRecord,
@@ -54,4 +55,6 @@ export const httpApi: CatHerderApi = {
   listModels: () => request<Model[]>('/v1/admin/models'),
   saveModel: (id, model) => request<Model>(`/v1/admin/models/${id}`, json('PUT', model)),
   deleteModel: (id) => request<void>(`/v1/admin/models/${id}`, { method: 'DELETE' }),
+
+  listAudit: () => request<AuditEntry[]>('/v1/admin/audit'),
 }

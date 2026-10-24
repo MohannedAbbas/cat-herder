@@ -1,5 +1,6 @@
 import type {
   AgentTemplate,
+  AuditEntry,
   Model,
   Provider,
   Run,
@@ -11,6 +12,23 @@ import type {
 import type { CatHerderApi, AuthInfo } from './client'
 
 let authenticated = false
+
+let auditLog: AuditEntry[] = []
+
+let auditSeq = 0
+function recordAudit(action: string, resource: string, resourceId: string) {
+  auditLog = [
+    {
+      id: ++auditSeq,
+      timestamp: new Date().toISOString(),
+      actor: 'admin',
+      action,
+      resource,
+      resourceId,
+    },
+    ...auditLog,
+  ]
+}
 
 let agents: AgentTemplate[] = [
   {
@@ -332,10 +350,12 @@ export const mockApi: CatHerderApi = {
     const saved = { ...agent, id }
     if (i >= 0) agents[i] = saved
     else agents.push(saved)
+    recordAudit('agent.upsert', 'agent', id)
     return delay(saved)
   },
   deleteAgent: (id) => {
     agents = agents.filter((a) => a.id !== id)
+    recordAudit('agent.delete', 'agent', id)
     return delay(undefined)
   },
 
@@ -345,10 +365,12 @@ export const mockApi: CatHerderApi = {
     const saved = { ...provider, id }
     if (i >= 0) providers[i] = saved
     else providers.push(saved)
+    recordAudit('provider.upsert', 'provider', id)
     return delay(saved)
   },
   deleteProvider: (id) => {
     providers = providers.filter((p) => p.id !== id)
+    recordAudit('provider.delete', 'provider', id)
     return delay(undefined)
   },
 
@@ -358,10 +380,14 @@ export const mockApi: CatHerderApi = {
     const saved = { ...model, id }
     if (i >= 0) models[i] = saved
     else models.push(saved)
+    recordAudit('model.upsert', 'model', id)
     return delay(saved)
   },
   deleteModel: (id) => {
     models = models.filter((m) => m.id !== id)
+    recordAudit('model.delete', 'model', id)
     return delay(undefined)
   },
+
+  listAudit: () => delay(auditLog),
 }
