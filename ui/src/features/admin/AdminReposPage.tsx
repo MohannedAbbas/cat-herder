@@ -13,6 +13,8 @@ const emptyForm = {
   repo: '',
   enabled: true,
   token: '',
+  writeTokenSecret: '',
+  writeTokenKey: '',
 }
 
 export default function AdminReposPage() {
@@ -74,7 +76,14 @@ export default function AdminReposPage() {
 
   function startEdit(r: GitRepo) {
     setEditingId(r.id)
-    setForm({ host: r.host, repo: r.name, enabled: r.enabled, token: '' })
+    setForm({
+      host: r.host,
+      repo: r.name,
+      enabled: r.enabled,
+      token: '',
+      writeTokenSecret: r.writeTokenSecret ?? '',
+      writeTokenKey: r.writeTokenKey ?? '',
+    })
     setMessage(null)
     setErrorMsg(null)
   }
@@ -86,6 +95,9 @@ export default function AdminReposPage() {
       repo: form.repo.trim(),
       enabled: form.enabled,
       ...(form.token ? { token: form.token } : {}),
+      ...(form.writeTokenSecret.trim()
+        ? { writeTokenSecret: form.writeTokenSecret.trim(), writeTokenKey: form.writeTokenKey.trim() || 'token' }
+        : {}),
     }
     save.mutate(payload)
   }
@@ -199,8 +211,29 @@ export default function AdminReposPage() {
                     className={inputCls}
                   />
                   <span className="mt-1 block text-xs text-slate-400">
-                    Encrypted at rest with the control plane's encryption key. Never returned by the API.
+                    Read token (for cloning). Encrypted at rest with the control plane's
+                    encryption key. Never returned by the API.
                   </span>
+                </Field>
+                <Field label="Write token Secret name">
+                  <input
+                    value={form.writeTokenSecret}
+                    onChange={(e) => setForm({ ...form, writeTokenSecret: e.target.value })}
+                    placeholder="cat-herder-git-write"
+                    className={inputCls}
+                  />
+                  <span className="mt-1 block text-xs text-slate-400">
+                    A Kubernetes Secret holding the token used to open PRs/MRs (never stored
+                    in the DB or sent to the sandbox).
+                  </span>
+                </Field>
+                <Field label="Write token Secret key">
+                  <input
+                    value={form.writeTokenKey}
+                    onChange={(e) => setForm({ ...form, writeTokenKey: e.target.value })}
+                    placeholder="token"
+                    className={inputCls}
+                  />
                 </Field>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input

@@ -344,7 +344,7 @@ pub async fn delete_tool(
 // --- git repos -------------------------------------------------------------
 
 /// Write model for `PUT /v1/admin/repos`. Only the host + repo path are required; the
-/// canonical `id`/`name`/`url` are derived server-side. The token is write-only.
+/// canonical `id`/`name`/`url` are derived server-side. The read token is write-only.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepoWrite {
@@ -354,9 +354,15 @@ pub struct GitRepoWrite {
     pub repo: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Access token. Blank/omitted on update keeps the existing token.
+    /// Read access token (for cloning). Blank/omitted on update keeps the existing token.
     #[serde(default)]
     pub token: Option<String>,
+    /// Kubernetes Secret holding the write token (for opening PRs/MRs).
+    #[serde(default)]
+    pub write_token_secret: Option<String>,
+    /// Key within that Secret holding the write token.
+    #[serde(default)]
+    pub write_token_key: Option<String>,
 }
 
 /// Query model for `DELETE /v1/admin/repos?id=HOST/PATH`.
@@ -414,8 +420,14 @@ pub async fn upsert_repo(
     let name = identity.path.clone();
     let url = identity.url();
 
-    // A provided token is encrypted; otherwise the existing ciphertext (if any) is
-    // kept so a plain metadata edit doesn't wipe the credential.
+    // Fetch the existing repo once (for "keep existing" semantics on omitted fields).
+    let existing = state
+        .git_repos
+        .get(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // A provided read token is encrypted; otherwise the existing ciphertext is kept.
     let token_ciphertext = match write.token.as_deref() {
         Some(t) if !t.is_empty() => {
             let encrypted = {
@@ -424,12 +436,18 @@ pub async fn upsert_repo(
             };
             Some(encrypted.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?)
         }
-        _ => state
-            .git_repos
-            .get(&id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .and_then(|r| r.token_ciphertext),
+        _ => existing.as_ref().and_then(|r| r.token_ciphertext.clone()),
+    };
+
+    // The write token is a Secret reference (name + key); an omitted field keeps the
+    // existing reference so a plain metadata edit doesn't drop it.
+    let write_token_secret = match write.write_token_secret.as_deref() {
+        Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => existing.as_ref().and_then(|r| r.write_token_secret.clone()),
+    };
+    let write_token_key = match write.write_token_key.as_deref() {
+        Some(k) if !k.trim().is_empty() => Some(k.trim().to_string()),
+        _ => existing.as_ref().and_then(|r| r.write_token_key.clone()),
     };
 
     let entity = GitRepoEntity {
@@ -437,6 +455,8 @@ pub async fn upsert_repo(
         name,
         url,
         token_ciphertext,
+        write_token_secret,
+        write_token_key,
         enabled: write.enabled,
     };
     let saved = state

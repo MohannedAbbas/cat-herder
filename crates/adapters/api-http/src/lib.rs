@@ -13,18 +13,20 @@ use tokio::sync::RwLock;
 use cat_herder_application::{Outcome, complete_run, start_run};
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
+    repo_identity_from_url,
 };
 use cat_herder_domain::entities::{Run, RunId, RunState, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
+    AgentRepository, GitRepoRepository, RunRepository, RunRequest, SessionRepository,
+    SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
 pub use crypto::AesGcmCipher;
-pub use github_pr::{FileChange, GitHubPrClient};
 pub use key_store::KeySecretStore;
 pub use oauth::{GitHubOAuth, OAuthConfig};
+pub use pr::{FileChange, PrClient, PrSpec};
 pub use repo::{
     AgentRepo, AuditRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
     ToolRepo,
@@ -33,10 +35,10 @@ pub use repo::{
 mod admin;
 mod auth;
 mod crypto;
-mod github_pr;
 mod key_store;
 mod mcp;
 mod oauth;
+mod pr;
 mod repo;
 mod webhook;
 
@@ -70,10 +72,9 @@ pub struct AppState {
     pub cipher: Arc<RwLock<AesGcmCipher>>,
     /// Secret-backed encryption-key store (present in the real binary; absent in tests).
     pub key_store: Option<Arc<KeySecretStore>>,
-    /// Optional GitHub PR client (present when `GITHUB_WRITE_TOKEN` is set); opens a
-    /// PR from the agent's diff when a run finishes. Holds the write credential, which
-    /// is never sent to the sandbox.
-    pub pr_client: Option<Arc<GitHubPrClient>>,
+    /// Host-aware PR/MR client (stateless; the write token is read per-run from the
+    /// repo's referenced Secret). Opens a PR from the agent's diff when a run finishes.
+    pub pr_client: Arc<PrClient>,
 }
 
 impl Default for AppState {
@@ -93,7 +94,7 @@ impl Default for AppState {
             runtime: None,
             cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
             key_store: None,
-            pr_client: None,
+            pr_client: Arc::new(PrClient::new()),
         }
     }
 }
@@ -264,7 +265,7 @@ async fn post_run_event(
             // On success with a diff, open a PR in the background (the write token
             // lives here in the control plane, never in the sandbox).
             if outcome == Outcome::Succeeded {
-                maybe_open_pr(&state, &run, report, changes);
+                maybe_open_pr(&state, &run, report, changes).await;
             }
 
             Ok(Json(RunResponse::from(&run)))
@@ -274,30 +275,63 @@ async fn post_run_event(
     }
 }
 
-/// Open a PR from the agent's diff, if a PR client is configured and changes exist.
-fn maybe_open_pr(state: &AppState, run: &Run, report: Option<String>, changes: Option<Vec<FileChange>>) {
-    let Some(pr_client) = state.pr_client.clone() else {
-        return;
-    };
-    let Some(repo_url) = run.repo.clone() else {
-        return;
-    };
-    let Some(changes) = changes else {
-        return;
-    };
+/// Open a PR/MR from the agent's diff, if the repo has a write-token Secret and
+/// changes exist. The write token is read from its Secret here (never the sandbox).
+async fn maybe_open_pr(
+    state: &AppState,
+    run: &Run,
+    report: Option<String>,
+    changes: Option<Vec<FileChange>>,
+) {
+    let Some(changes) = changes else { return };
     if changes.is_empty() {
         return;
     }
+    let Some(repo_url) = run.repo.as_deref() else { return };
 
+    // Resolve the repo identity + its write-token Secret reference.
+    let Some(identity) = repo_identity_from_url(repo_url) else { return };
+    let repo_record = match state.git_repos.get(&identity.id()).await {
+        Ok(Some(r)) => r,
+        _ => return,
+    };
+    let (Some(secret), Some(key)) = (repo_record.write_token_secret, repo_record.write_token_key) else {
+        eprintln!("run {} has no write-token Secret configured; skipping PR", run.id.0);
+        return;
+    };
+
+    // Read the write token from its Secret (control-plane only).
+    let Some(store) = state.key_store.clone() else { return };
+    let token = match store.read(&secret, &key).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            eprintln!("write-token Secret {secret}/{key} not found; skipping PR");
+            return;
+        }
+        Err(e) => {
+            eprintln!("failed to read write-token Secret {secret}/{key}: {e}");
+            return;
+        }
+    };
+
+    let host = identity.host;
+    let path = identity.path;
     let report = report.unwrap_or_default();
     let task_spec = run.task_spec.clone();
     let run_id = run.id;
+    let pr_client = state.pr_client.clone();
     let state = state.clone();
 
     tokio::spawn(async move {
         let head = format!("cat-herder/run-{}", run_id.0);
         let title = pr_title(&task_spec);
-        match pr_client.create_pr(&repo_url, &head, &title, &report, &changes).await {
+        let spec = PrSpec {
+            head: &head,
+            title: &title,
+            body: &report,
+            changes: &changes,
+        };
+        match pr_client.create_pr(&host, &token, &path, &spec).await {
             Ok(url) => {
                 eprintln!("opened PR for run {}: {url}", run_id.0);
                 if let Ok(Some(mut r)) = state.repo.get(run_id).await {

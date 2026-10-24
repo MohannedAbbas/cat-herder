@@ -83,15 +83,20 @@ pub struct ReviewDecision {
 
 /// A git repository an agent can clone and work on, with an optional access token.
 ///
-/// The token is stored **encrypted** (`token_ciphertext`); the domain never sees
-/// the plaintext — encryption/decryption is an adapter concern (see `PLAN.md` §10
-/// "repo-scoped credential"). The ciphertext is opaque here so the domain stays
-/// infrastructure-free.
+/// The read token is stored **encrypted** (`token_ciphertext`); the domain never
+/// sees the plaintext — encryption/decryption is an adapter concern (see `PLAN.md`
+/// §10 "repo-scoped credential"). The write token (for opening PRs/MRs) is stored
+/// as a Kubernetes Secret *reference* (name + key), like the LLM provider API keys,
+/// so the plaintext write credential never enters the database or the sandbox.
 #[derive(Debug, Clone)]
 pub struct GitRepo {
     pub id: String,
     pub name: String,
     pub url: String,
     pub token_ciphertext: Option<String>,
+    /// Kubernetes Secret holding the write token (used to open PRs/MRs).
+    pub write_token_secret: Option<String>,
+    /// Key within that Secret holding the write token.
+    pub write_token_key: Option<String>,
     pub enabled: bool,
 }

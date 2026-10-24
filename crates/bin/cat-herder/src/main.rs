@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     router, AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, GIT_HOSTS_SETTING, GitHubOAuth,
-    GitHubPrClient, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, ProviderRepo, RunRepo,
+    GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo,
     SessionRepo, SettingRepo, ToolRepo,
 };
 use cat_herder_application::reconcile_once;
@@ -259,16 +259,6 @@ async fn main() {
         eprintln!("GitHub OAuth SSO disabled (GITHUB_OAUTH_* not fully configured)");
     }
 
-    // Optional GitHub PR creation from the agent's diff. The write token lives only
-    // here in the control plane (never injected into the sandbox).
-    let pr_client = std::env::var("GITHUB_WRITE_TOKEN")
-        .ok()
-        .filter(|t| !t.trim().is_empty())
-        .map(|token| {
-            eprintln!("GitHub PR creation enabled");
-            Arc::new(GitHubPrClient::new(token))
-        });
-
     let state = AppState {
         repo: repos.run,
         agents: repos.agents,
@@ -284,7 +274,7 @@ async fn main() {
         runtime,
         cipher,
         key_store: Some(key_store),
-        pr_client,
+        pr_client: Arc::new(PrClient::new()),
     };
 
     let app = router(state);

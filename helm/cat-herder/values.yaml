@@ -19,12 +19,6 @@ llmApiKeySecret: cat-herder-llm
 encryptionKeySecret: cat-herder-encryption
 encryptionKeySecretKey: key
 
-# Git write token (a fine-grained PAT with Contents: Write + Pull requests: Write)
-# used to open a PR from the agent's diff. Held only by the control plane — never
-# injected into the sandbox. Create it with:
-#   kubectl -n cat-herder create secret generic cat-herder-git-write --from-literal=token=ghp_...
-gitWriteTokenSecret: cat-herder-git-write
-
 # Per-agent model overrides (agent id -> model). Leave empty to use the built-in
 # catalog defaults. Example (DeepSeek):
 agents:

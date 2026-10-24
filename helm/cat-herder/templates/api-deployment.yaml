@@ -31,12 +31,6 @@ spec:
               value: {{ .Values.encryptionKeySecret | quote }}
             - name: CAT_HERDER_ENCRYPTION_SECRET_KEY
               value: {{ .Values.encryptionKeySecretKey | quote }}
-            - name: GITHUB_WRITE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.gitWriteTokenSecret }}
-                  key: token
-                  optional: true
             - name: CAT_HERDER_ADMIN_USER
               valueFrom:
                 secretKeyRef:

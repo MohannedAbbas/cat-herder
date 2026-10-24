@@ -459,6 +459,8 @@ mod tests {
             name: "Cat Herder".into(),
             url: "https://github.com/org/cat-herder.git".into(),
             token_ciphertext: Some("v1:abc".into()),
+            write_token_secret: None,
+            write_token_key: None,
             enabled: true,
         };
         repo.save(&r).await.unwrap();

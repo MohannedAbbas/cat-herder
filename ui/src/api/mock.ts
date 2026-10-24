@@ -446,6 +446,10 @@ export const mockApi: CatHerderApi = {
       url: `https://${host}/${path}`,
       enabled: write.enabled,
       hasToken: Boolean(write.token) || (i >= 0 && repos[i]?.hasToken === true),
+      writeTokenSecret:
+        write.writeTokenSecret?.trim() || (i >= 0 ? repos[i]?.writeTokenSecret ?? null : null),
+      writeTokenKey:
+        write.writeTokenKey?.trim() || (i >= 0 ? repos[i]?.writeTokenKey ?? null : null),
     }
     if (i >= 0) repos[i] = saved
     else repos.push(saved)
