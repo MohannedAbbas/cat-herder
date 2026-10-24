@@ -20,12 +20,13 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list"]
   # The control plane owns the encryption-key Secret: it generates the key on first
-  # boot and rewrites it on rotation (via server-side apply, i.e. the `patch` verb).
-  # Scoped to just that Secret.
+  # boot and rewrites it on rotation (via server-side apply). SSA on a missing Secret
+  # is a `create`, so `create` is granted here too — still scoped to just that Secret
+  # by `resourceNames`, so it is no broader than `patch`.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["{{ .Values.encryptionKeySecret }}"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "patch", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
