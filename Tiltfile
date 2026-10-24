@@ -21,6 +21,7 @@ custom_build(
     'cat-herder',
     'podman build -t $EXPECTED_REF -f crates/bin/cat-herder/Dockerfile . && podman push $EXPECTED_REF',
     ['./crates', 'Cargo.toml', 'Cargo.lock'],
+    skips_local_docker=True,
 )
 
 # Agent harness (used by agent-sandbox SandboxTemplate at runtime; not yet wired
@@ -29,6 +30,7 @@ custom_build(
     'cat-herder-agent-harness',
     'podman build -t $EXPECTED_REF -f agent-harness/Containerfile agent-harness && podman push $EXPECTED_REF',
     ['./agent-harness'],
+    skips_local_docker=True,
 )
 
 # UI (React SPA served by nginx).
@@ -36,6 +38,7 @@ custom_build(
     'cat-herder-ui',
     'podman build -t $EXPECTED_REF -f ui/Dockerfile ui && podman push $EXPECTED_REF',
     ['./ui'],
+    skips_local_docker=True,
 )
 
 # --- Deploy via Helm ------------------------------------------------------
