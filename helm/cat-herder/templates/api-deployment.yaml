@@ -33,6 +33,14 @@ spec:
                   name: {{ .Values.llmApiKeySecret }}
                   key: api-key
                   optional: true
+            {{- if .Values.dependencies.postgres.enabled }}
+            - name: CAT_HERDER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cat-herder-postgres
+                  key: database-url
+                  optional: true
+            {{- end }}
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:

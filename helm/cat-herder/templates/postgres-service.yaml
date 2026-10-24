@@ -1,0 +1,19 @@
+{{- if .Values.dependencies.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.dependencies.postgres.serviceName }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-postgres
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  # Headless: stable DNS for the single StatefulSet pod.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: cat-herder-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+{{- end }}

@@ -14,19 +14,22 @@ use cat_herder_domain::api::{
 use cat_herder_domain::entities::{RunId, RunState, TenantId};
 use cat_herder_domain::ports::{RunRepository, RunRequest};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
-use cat_herder_store_inmemory::InMemoryRunRepository;
+
+pub use repo::RunRepo;
 
 mod mcp;
 mod mock;
+mod repo;
 mod webhook;
 
-/// Application state: the data the handlers serve. In-memory mock data by default;
-/// will be backed by Postgres repositories later.
+/// Application state: the data the handlers serve. Agents/sessions are mock data
+/// for now; runs are persisted via [`RunRepo`] (Postgres in production, in-memory
+/// fallback otherwise).
 #[derive(Clone)]
 pub struct AppState {
     pub agents: Vec<AgentTemplate>,
     pub sessions: Vec<Session>,
-    pub repo: InMemoryRunRepository,
+    pub repo: RunRepo,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
 }
@@ -36,7 +39,7 @@ impl Default for AppState {
         Self {
             agents: mock::agents(),
             sessions: mock::sessions(),
-            repo: InMemoryRunRepository::new(),
+            repo: RunRepo::InMemory(Default::default()),
             runtime: None,
         }
     }

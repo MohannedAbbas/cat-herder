@@ -25,16 +25,28 @@ ui:
   replicas: 1
   port: 80
 
-# In-cluster dependencies (subcharts: Postgres/NATS/Redis/MinIO).
+# In-cluster dependencies, bundled as k8s-native workloads in this chart
+# (see PLAN.md §13/§19 — no managed services).
 dependencies:
+  # PostgreSQL: StatefulSet + headless Service + PVC + Secret. The control plane
+  # uses it for run persistence when CAT_HERDER_DATABASE_URL is injected (which
+  # this chart does automatically when enabled). Disable to fall back to the
+  # in-memory repository (single-replica dev only).
   postgres:
     enabled: true
+    image: postgres:16-alpine
+    user: cat_herder
+    database: cat_herder
+    # Internal ClusterIP-only; override in production via `--set` or a values file.
+    password: cat-herder-dev-password
+    storage: 1Gi
+    serviceName: cat-herder-postgres
   nats:
-    enabled: true
+    enabled: false
   redis:
-    enabled: true
+    enabled: false
   minio:
-    enabled: true
+    enabled: false
 
 agentSandbox:
   enabled: true

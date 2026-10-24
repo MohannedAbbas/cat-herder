@@ -5,10 +5,43 @@
 
 use std::time::Duration;
 
-use cat_herder_api_http::{router, AppState};
+use cat_herder_api_http::{router, AppState, RunRepo};
 use cat_herder_application::reconcile_once;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
-use cat_herder_store_inmemory::InMemoryRunRepository;
+use cat_herder_store_postgres::PostgresRunRepository;
+
+/// Choose the run repository: Postgres when `CAT_HERDER_DATABASE_URL` is set (the
+/// chart injects it when `dependencies.postgres.enabled`), otherwise in-memory.
+/// Retries briefly because the bundled Postgres StatefulSet may still be
+/// initializing when the control plane starts.
+async fn build_repo() -> RunRepo {
+    let Some(url) = std::env::var("CAT_HERDER_DATABASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return RunRepo::InMemory(Default::default());
+    };
+
+    for attempt in 1..=30 {
+        match PostgresRunRepository::connect(&url).await {
+            Ok(repo) => {
+                eprintln!("using Postgres run repository");
+                return RunRepo::Postgres(repo);
+            }
+            Err(e) => {
+                if attempt == 30 {
+                    eprintln!(
+                        "warning: Postgres unavailable after {attempt} attempts ({e}); \
+                         falling back to in-memory repository"
+                    );
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+    RunRepo::InMemory(Default::default())
+}
 
 #[tokio::main]
 async fn main() {
@@ -27,7 +60,7 @@ async fn main() {
         }
     };
 
-    let repo = InMemoryRunRepository::new();
+    let repo = build_repo().await;
 
     // Background reconciler: advance active runs (PodPending -> Running, Running ->
     // Succeeded) based on sandbox status (PLAN.md §6).

@@ -8,6 +8,6 @@ license.workspace = true
 cat-herder-api-http = { path = "../../adapters/api-http" }
 cat-herder-application = { path = "../../application" }
 cat-herder-runtime-agent-sandbox = { path = "../../adapters/runtime-agent-sandbox" }
-cat-herder-store-inmemory = { path = "../../adapters/store-inmemory" }
+cat-herder-store-postgres = { path = "../../adapters/store-postgres" }
 axum.workspace = true
 tokio.workspace = true
