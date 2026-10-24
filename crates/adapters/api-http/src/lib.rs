@@ -326,7 +326,13 @@ async fn maybe_open_pr(
     let state = state.clone();
 
     tokio::spawn(async move {
-        let head = format!("cat-herder/run-{}", run_id.0);
+        // Suffix the branch with a Unix timestamp so a DB reset (which reuses run
+        // ids) can't collide with a stale branch from a previous incarnation.
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let head = format!("cat-herder/run-{}-{}", run_id.0, ts);
         let title = pr_title(&task_spec);
         let spec = PrSpec {
             head: &head,
