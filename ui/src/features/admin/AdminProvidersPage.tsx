@@ -114,7 +114,18 @@ export default function AdminProvidersPage() {
                   <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} className={inputCls} />
                 </Field>
                 <Field label="API key Secret name">
-                  <input value={form.apiKeySecret} onChange={(e) => setForm({ ...form, apiKeySecret: e.target.value })} className={inputCls} />
+                  <input
+                    value={form.apiKeySecret}
+                    onChange={(e) => setForm({ ...form, apiKeySecret: e.target.value })}
+                    placeholder={`cat-herder-${form.id || '<id>'}`}
+                    className={inputCls}
+                  />
+                  <span className="mt-1 block text-xs text-slate-400">
+                    A Kubernetes Secret that holds the key (not the key itself). Create it first:
+                    <code className="mt-0.5 block break-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-600">
+                      kubectl -n cat-herder create secret generic {form.apiKeySecret || `cat-herder-${form.id || '<id>'}`} --from-literal={form.apiKeySecretKey || 'api-key'}=sk-…
+                    </code>
+                  </span>
                 </Field>
                 <Field label="Secret key">
                   <input value={form.apiKeySecretKey} onChange={(e) => setForm({ ...form, apiKeySecretKey: e.target.value })} className={inputCls} />
