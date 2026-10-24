@@ -129,6 +129,13 @@ agentSandbox:
       cidrs:
         - 3.173.21.0/24      # api.deepseek.com (resolved at time of writing;
                              # replace with your provider's current ranges)
+    # 5. Package registries on :443, so agents can fetch dependencies while
+    #    building/testing (e.g. `cargo` needs static.crates.io / index.crates.io).
+    #    crates.io is served by Fastly; add more registries (npm, pypi, …) as CIDRs.
+    registries:
+      port: 443
+      cidrs:
+        - 151.101.0.0/16     # Fastly CDN: static.crates.io + index.crates.io
 
 # GitHub OAuth SSO (optional; password login still works when disabled).
 # When enabled the API exposes /v1/auth/github/login and

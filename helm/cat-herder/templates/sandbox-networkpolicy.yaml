@@ -145,4 +145,31 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.agentSandbox.networkPolicy.llm.port }}
+---
+# Allow package registries (e.g. crates.io for `cargo`) on :443. Agents need
+# these to fetch dependencies when they build/test the target repo.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-allow-registries-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range .Values.agentSandbox.networkPolicy.registries.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.agentSandbox.networkPolicy.registries.port }}
 {{- end }}
