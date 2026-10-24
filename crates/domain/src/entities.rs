@@ -54,6 +54,8 @@ pub struct Run {
     pub kind: RunKind,
     pub state: RunState,
     pub task_spec: String,
+    /// The session this run belongs to (auto-created on `start_run`).
+    pub session_id: Option<String>,
     pub max_concurrency: u32,
     pub created_at: SystemTime,
 }

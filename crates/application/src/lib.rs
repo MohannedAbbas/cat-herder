@@ -4,17 +4,29 @@
 
 use std::time::SystemTime;
 
+use cat_herder_domain::api::{SessionRun, new_session_id};
 use cat_herder_domain::entities::{Run, RunId, RunState};
-use cat_herder_domain::ports::{AgentRuntime, DomainResult, RunRepository, RunRequest};
+use cat_herder_domain::ports::{
+    AgentRuntime, DomainResult, RunRepository, RunRequest, SessionRepository,
+};
 use cat_herder_domain::reconcile::reconcile_run;
 
 /// Use case: accept a trigger's request, persist it, spawn the agent, and advance the
 /// lifecycle state machine through to `PodPending`. The reconciler (`reconcile_once`)
 /// advances it to `Running` (and terminal states) once the sandbox is actually ready.
-pub async fn start_run<R, P>(req: RunRequest, runtime: &R, repo: &P) -> DomainResult<Run>
+///
+/// Each run is auto-linked to a freshly created session (title derived from the
+/// task spec).
+pub async fn start_run<R, P, S>(
+    req: RunRequest,
+    runtime: &R,
+    repo: &P,
+    sessions: &S,
+) -> DomainResult<Run>
 where
     R: AgentRuntime,
     P: RunRepository,
+    S: SessionRepository,
 {
     let run = Run {
         id: RunId(0), // assigned by the repository
@@ -22,11 +34,21 @@ where
         kind: req.kind,
         state: RunState::Queued,
         task_spec: req.task_spec,
+        session_id: None,
         max_concurrency: req.max_concurrency,
         created_at: SystemTime::now(),
     };
 
-    let mut run = repo.save(&run).await?; // Queued
+    let mut run = repo.save(&run).await?; // Queued (id assigned)
+
+    // Auto-create a session and link the run to it.
+    let session_id = new_session_id();
+    sessions.create(&session_id, &session_title(&run.task_spec)).await?;
+    run.session_id = Some(session_id.clone());
+    run = repo.save(&run).await?;
+
+    // Project the run into the session's display rows.
+    sessions.add_run(&session_id, &SessionRun::from(&run)).await?;
 
     run.transition(RunState::Scheduled)?;
     run = repo.save(&run).await?;
@@ -37,6 +59,16 @@ where
     runtime.spawn(&run).await?;
 
     Ok(run) // PodPending — the reconciler advances from here
+}
+
+/// A short, human-readable title derived from a task spec (first 80 chars).
+fn session_title(task_spec: &str) -> String {
+    let title: String = task_spec.trim().chars().take(80).collect();
+    if title.is_empty() {
+        "Untitled session".to_string()
+    } else {
+        title
+    }
 }
 
 /// Reconcile all active runs against their execution status, advancing the lifecycle
@@ -71,7 +103,7 @@ mod tests {
     use super::*;
     use cat_herder_domain::entities::{RunKind, TenantId};
     use cat_herder_domain::reconcile::RuntimeStatus;
-    use cat_herder_store_inmemory::InMemoryRunRepository;
+    use cat_herder_store_inmemory::{InMemoryRunRepository, InMemorySessionRepository};
 
     struct StubRuntime {
         status: Option<RuntimeStatus>,
@@ -111,7 +143,8 @@ mod tests {
     #[tokio::test]
     async fn start_run_advances_to_pod_pending_and_persists() {
         let repo = InMemoryRunRepository::new();
-        let run = start_run(req(), &StubRuntime::new(None), &repo).await.unwrap();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
 
         assert_eq!(run.state, RunState::PodPending);
         assert_ne!(run.id, RunId(0));
@@ -121,9 +154,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_run_creates_and_links_session() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+
+        // The run is linked to a session, and that session has the run's display row.
+        let session_id = run.session_id.as_deref().expect("run linked to a session");
+        let session = sessions.get(session_id).await.unwrap().expect("session exists");
+        assert_eq!(session.runs.len(), 1);
+        assert_eq!(session.runs[0].id, format!("run-{}", run.id.0));
+        assert_eq!(session.runs[0].task_spec, "test");
+    }
+
+    #[tokio::test]
     async fn reconcile_walks_pod_pending_to_succeeded() {
         let repo = InMemoryRunRepository::new();
-        let run = start_run(req(), &StubRuntime::new(None), &repo).await.unwrap();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
         assert_eq!(run.state, RunState::PodPending);
 
         // ready -> running
@@ -142,7 +190,8 @@ mod tests {
     #[tokio::test]
     async fn reconcile_leaves_stable_runs_alone() {
         let repo = InMemoryRunRepository::new();
-        let run = start_run(req(), &StubRuntime::new(None), &repo).await.unwrap();
+        let sessions = InMemorySessionRepository::default();
+        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
 
         // still pending (not ready yet) -> no change
         let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Pending)), &repo)

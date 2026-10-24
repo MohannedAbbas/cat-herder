@@ -94,3 +94,39 @@ impl From<&crate::entities::Run> for RunResponse {
         }
     }
 }
+
+/// Project a lifecycle run into the session detail's display row. Fields that a
+/// bare run doesn't carry (agent identity, timing, cost) are left as placeholders;
+/// they'll be populated as the harness reports events (PLAN.md §9).
+impl From<&crate::entities::Run> for SessionRun {
+    fn from(run: &crate::entities::Run) -> Self {
+        SessionRun {
+            id: format!("run-{}", run.id.0),
+            kind: run.kind,
+            state: run.state,
+            agent_id: String::new(),
+            agent_name: "Default agent".into(),
+            task_spec: run.task_spec.clone(),
+            created_at: to_iso(run.created_at),
+            started_at: None,
+            finished_at: None,
+            cost_usd: None,
+        }
+    }
+}
+
+/// Format a [`std::time::SystemTime`] as an RFC-3339 UTC timestamp (seconds).
+fn to_iso(t: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(t)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Current time as an RFC-3339 UTC timestamp (seconds) — used for new session rows.
+pub fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// A fresh, unique session id.
+pub fn new_session_id() -> String {
+    format!("sess-{}", uuid::Uuid::new_v4())
+}

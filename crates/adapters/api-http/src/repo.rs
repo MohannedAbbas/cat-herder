@@ -2,7 +2,7 @@
 //! aggregate: in-memory for tests/single-replica dev fallback, Postgres for
 //! production persistence (wired in `crates/bin/cat-herder`).
 
-use cat_herder_domain::api::{AgentTemplate, Session};
+use cat_herder_domain::api::{AgentTemplate, Session, SessionRun};
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, DomainResult, RunRepository, SessionRepository,
@@ -92,6 +92,20 @@ impl SessionRepository for SessionRepo {
             SessionRepo::Postgres(p) => p.get(id).await,
         }
     }
+
+    async fn create(&self, id: &str, title: &str) -> DomainResult<()> {
+        match self {
+            SessionRepo::InMemory(r) => r.create(id, title).await,
+            SessionRepo::Postgres(p) => p.create(id, title).await,
+        }
+    }
+
+    async fn add_run(&self, session_id: &str, run: &SessionRun) -> DomainResult<()> {
+        match self {
+            SessionRepo::InMemory(r) => r.add_run(session_id, run).await,
+            SessionRepo::Postgres(p) => p.add_run(session_id, run).await,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -107,6 +121,7 @@ mod tests {
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "delegate".into(),
+            session_id: None,
             max_concurrency: 1,
             created_at: SystemTime::now(),
         }

@@ -23,6 +23,7 @@ async fn main() -> DomainResult<()> {
         kind: RunKind::Agent,
         state: RunState::Queued,
         task_spec: "smoke test".into(),
+        session_id: None,
         max_concurrency: 1,
         created_at: SystemTime::now(),
     };

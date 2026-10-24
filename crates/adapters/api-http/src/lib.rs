@@ -78,7 +78,7 @@ async fn create_run(
         max_concurrency: req.max_concurrency,
     };
 
-    let run = start_run(run_req, runtime, &state.repo)
+    let run = start_run(run_req, runtime, &state.repo, &state.sessions)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -113,7 +113,7 @@ async fn webhook_generic(
         "execution runtime not configured".into(),
     ))?;
 
-    let run = start_run(webhook::normalize(payload), runtime, &state.repo)
+    let run = start_run(webhook::normalize(payload), runtime, &state.repo, &state.sessions)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

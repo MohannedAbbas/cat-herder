@@ -129,7 +129,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 max_concurrency,
             };
 
-            match start_run(req, runtime, &state.repo).await {
+            match start_run(req, runtime, &state.repo, &state.sessions).await {
                 Ok(run) => (
                     serde_json::to_string(&RunResponse::from(&run)).unwrap_or_default(),
                     false,

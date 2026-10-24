@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cat_herder_domain::api::{AgentTemplate, Session};
+use cat_herder_domain::api::{AgentTemplate, Session, SessionRun, now_iso};
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{Run, RunId, TenantId};
 use cat_herder_domain::ports::{AgentRepository, DomainResult, RunRepository, SessionRepository};
@@ -86,24 +86,47 @@ impl AgentRepository for InMemoryAgentRepository {
 /// In-memory session store, seeded from the domain's default demo data.
 #[derive(Clone)]
 pub struct InMemorySessionRepository {
-    sessions: Arc<Vec<Session>>,
+    sessions: Arc<RwLock<Vec<Session>>>,
 }
 
 impl Default for InMemorySessionRepository {
     fn default() -> Self {
         Self {
-            sessions: Arc::new(catalog::default_sessions()),
+            sessions: Arc::new(RwLock::new(catalog::default_sessions())),
         }
     }
 }
 
 impl SessionRepository for InMemorySessionRepository {
     async fn list(&self) -> DomainResult<Vec<Session>> {
-        Ok(self.sessions.as_ref().clone())
+        Ok(self.sessions.read().await.clone())
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Session>> {
-        Ok(self.sessions.iter().find(|s| s.id == id).cloned())
+        Ok(self.sessions.read().await.iter().find(|s| s.id == id).cloned())
+    }
+
+    async fn create(&self, id: &str, title: &str) -> DomainResult<()> {
+        let now = now_iso();
+        let mut sessions = self.sessions.write().await;
+        if !sessions.iter().any(|s| s.id == id) {
+            sessions.push(Session {
+                id: id.to_string(),
+                title: title.to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+                runs: vec![],
+            });
+        }
+        Ok(())
+    }
+
+    async fn add_run(&self, session_id: &str, run: &SessionRun) -> DomainResult<()> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
+            s.runs.push(run.clone());
+        }
+        Ok(())
     }
 }
 
@@ -120,6 +143,7 @@ mod tests {
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "test".into(),
+            session_id: None,
             max_concurrency: 1,
             created_at: SystemTime::now(),
         }

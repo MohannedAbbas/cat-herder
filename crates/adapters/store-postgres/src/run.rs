@@ -33,25 +33,26 @@ impl RunRepository for PostgresRunRepository {
 
         let id: i64 = if run.id == RunId(0) {
             sqlx::query_scalar(
-                "INSERT INTO runs (tenant_id, kind, state, task_spec, max_concurrency, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                "INSERT INTO runs (tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
             )
             .bind(tenant)
             .bind(&kind)
             .bind(&state)
             .bind(&run.task_spec)
+            .bind(run.session_id.as_deref())
             .bind(run.max_concurrency as i32)
             .bind(created_ms)
             .fetch_one(&self.pool)
             .await?
         } else {
             sqlx::query_scalar(
-                "INSERT INTO runs (id, tenant_id, kind, state, task_spec, max_concurrency, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                "INSERT INTO runs (id, tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (id) DO UPDATE SET \
                    tenant_id = EXCLUDED.tenant_id, kind = EXCLUDED.kind, state = EXCLUDED.state, \
-                   task_spec = EXCLUDED.task_spec, max_concurrency = EXCLUDED.max_concurrency, \
-                   created_at = EXCLUDED.created_at \
+                   task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
+                   max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at \
                  RETURNING id",
             )
             .bind(run.id.0 as i64)
@@ -59,6 +60,7 @@ impl RunRepository for PostgresRunRepository {
             .bind(&kind)
             .bind(&state)
             .bind(&run.task_spec)
+            .bind(run.session_id.as_deref())
             .bind(run.max_concurrency as i32)
             .bind(created_ms)
             .fetch_one(&self.pool)
@@ -102,6 +104,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         kind: decode_kind(&row.try_get::<String, _>("kind")?),
         state: decode_state(&row.try_get::<String, _>("state")?),
         task_spec: row.try_get("task_spec")?,
+        session_id: row.try_get::<Option<String>, _>("session_id")?,
         max_concurrency: row.try_get::<i32, _>("max_concurrency")? as u32,
         created_at: from_millis(row.try_get::<i64, _>("created_at")?),
     })
@@ -125,6 +128,7 @@ fn from_millis(ms: i64) -> SystemTime {
 mod tests {
     use super::*;
     use cat_herder_domain::entities::{RunKind, RunState};
+    use cat_herder_domain::ports::SessionRepository;
 
     #[test]
     fn time_roundtrips() {
@@ -145,12 +149,18 @@ mod tests {
         let store = PostgresStore::connect(&url).await.expect("connect");
         let repo = PostgresRunRepository::new(&store);
 
+        // A session_id must reference a real session (FK); create one first.
+        let sessions = crate::PostgresSessionRepository::new(&store);
+        let session_id = cat_herder_domain::api::new_session_id();
+        sessions.create(&session_id, "run test session").await.expect("create session");
+
         let run = Run {
             id: RunId(0),
             tenant: TenantId(42),
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "persist me".into(),
+            session_id: Some(session_id.clone()),
             max_concurrency: 3,
             created_at: SystemTime::now(),
         };
@@ -161,6 +171,7 @@ mod tests {
         assert_eq!(got.id, saved.id);
         assert_eq!(got.tenant, TenantId(42));
         assert_eq!(got.task_spec, "persist me");
+        assert_eq!(got.session_id.as_deref(), Some(session_id.as_str()));
         assert_eq!(got.state, RunState::Queued);
 
         let mut updated = saved.clone();

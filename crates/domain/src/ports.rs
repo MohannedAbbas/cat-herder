@@ -4,7 +4,7 @@
 //! `dyn`-object-safe, so application services use generics (not `Box<dyn …>`),
 //! per `PLAN.md` §5.
 
-use crate::api::{AgentTemplate, Session};
+use crate::api::{AgentTemplate, Session, SessionRun};
 use crate::entities::{Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
@@ -55,6 +55,10 @@ pub trait AgentRepository {
 pub trait SessionRepository {
     async fn list(&self) -> DomainResult<Vec<Session>>;
     async fn get(&self, id: &str) -> DomainResult<Option<Session>>;
+    /// Create a session with the given id and title (empty runs).
+    async fn create(&self, id: &str, title: &str) -> DomainResult<()>;
+    /// Append a display run to an existing session.
+    async fn add_run(&self, session_id: &str, run: &SessionRun) -> DomainResult<()>;
 }
 
 pub trait EventBus {

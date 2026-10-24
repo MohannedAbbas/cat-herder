@@ -170,6 +170,7 @@ mod tests {
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),
+            session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };
@@ -185,6 +186,7 @@ mod tests {
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),
+            session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };
@@ -202,6 +204,7 @@ mod tests {
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),
+            session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
         };
