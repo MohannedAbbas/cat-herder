@@ -3,10 +3,13 @@
 namespace: cat-herder
 
 # LLM configuration for the harness.
-# `model` is provider-qualified (e.g. "anthropic:claude-sonnet-4-6"). The API key is
-# provided via a Secret named `llmApiKeySecret` (create it with:
-#   kubectl -n cat-herder create secret generic cat-herder-llm --from-literal=api-key=...
-# ). The control plane passes it through to the sandbox pod env.
+# `model` is the fallback model (provider-qualified, e.g. "deepseek:deepseek-chat").
+# Each provider uses its OWN Secret (see the Providers admin tab): by convention
+# `cat-herder-<provider-id>` with key `api-key`, e.g.
+#   kubectl -n cat-herder create secret generic cat-herder-deepseek --from-literal=api-key=sk-...
+#   kubectl -n cat-herder create secret generic cat-herder-openai   --from-literal=api-key=sk-...
+# The global `llmApiKeySecret` below is only a fallback when a run's model has no
+# matching provider.
 model: "deepseek:deepseek-reasoner"
 llmApiKeySecret: cat-herder-llm
 

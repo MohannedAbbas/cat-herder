@@ -285,9 +285,9 @@ const STATUS_PRIORITY: RunState[] = [
 ]
 
 let providers: Provider[] = [
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
-  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
-  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiKeySecret: 'cat-herder-llm', apiKeySecretKey: 'api-key', enabled: true },
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', apiKeySecret: 'cat-herder-deepseek', apiKeySecretKey: 'api-key', enabled: true },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKeySecret: 'cat-herder-openai', apiKeySecretKey: 'api-key', enabled: true },
+  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiKeySecret: 'cat-herder-anthropic', apiKeySecretKey: 'api-key', enabled: true },
 ]
 
 let models: Model[] = [

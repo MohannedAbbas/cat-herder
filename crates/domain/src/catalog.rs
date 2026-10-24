@@ -78,15 +78,16 @@ mod tests {
     }
 }
 
-/// Default LLM providers. The API key is referenced by a Kubernetes Secret name
-/// (`api_key_secret`), never stored or returned here.
+/// Default LLM providers. Each provider references its OWN Kubernetes Secret
+/// (`cat-herder-<id>` by convention, key `api-key`); the API key is never stored
+/// or returned here.
 pub fn default_providers() -> Vec<Provider> {
     vec![
         Provider {
             id: "deepseek".into(),
             name: "DeepSeek".into(),
             base_url: "https://api.deepseek.com".into(),
-            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret: "cat-herder-deepseek".into(),
             api_key_secret_key: "api-key".into(),
             enabled: true,
         },
@@ -94,7 +95,7 @@ pub fn default_providers() -> Vec<Provider> {
             id: "openai".into(),
             name: "OpenAI".into(),
             base_url: "https://api.openai.com/v1".into(),
-            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret: "cat-herder-openai".into(),
             api_key_secret_key: "api-key".into(),
             enabled: true,
         },
@@ -102,7 +103,7 @@ pub fn default_providers() -> Vec<Provider> {
             id: "anthropic".into(),
             name: "Anthropic".into(),
             base_url: "https://api.anthropic.com".into(),
-            api_key_secret: "cat-herder-llm".into(),
+            api_key_secret: "cat-herder-anthropic".into(),
             api_key_secret_key: "api-key".into(),
             enabled: true,
         },
