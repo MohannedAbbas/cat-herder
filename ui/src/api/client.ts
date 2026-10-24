@@ -1,4 +1,4 @@
-import type { AgentTemplate, Session, SessionSummary } from '@/types/domain'
+import type { AgentTemplate, RunRecord, Session, SessionSummary } from '@/types/domain'
 import { config } from '@/config'
 import { mockApi } from './mock'
 import { httpApi } from './http'
@@ -9,6 +9,7 @@ export interface CatHerderApi {
   getSession(id: string): Promise<Session>
   listAgents(): Promise<AgentTemplate[]>
   getAgent(id: string): Promise<AgentTemplate>
+  listRuns(): Promise<RunRecord[]>
 }
 
 /**

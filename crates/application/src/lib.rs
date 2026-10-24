@@ -37,6 +37,13 @@ where
         session_id: None,
         max_concurrency: req.max_concurrency,
         created_at: SystemTime::now(),
+        trigger: req.trigger,
+        actor: req.actor,
+        model: req.model,
+        repo: req.repo,
+        language: req.language,
+        started_at: None,
+        finished_at: None,
     };
 
     let mut run = repo.save(&run).await?; // Queued (id assigned)
@@ -137,6 +144,11 @@ mod tests {
             task_spec: "test".into(),
             dedup_key: String::new(),
             max_concurrency: 1,
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
         }
     }
 

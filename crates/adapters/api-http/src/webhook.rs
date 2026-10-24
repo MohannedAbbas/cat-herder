@@ -19,6 +19,14 @@ pub struct WebhookPayload {
     /// Idempotency key (e.g. a webhook delivery id).
     #[serde(default)]
     pub dedup_key: String,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 fn default_kind() -> RunKind {
@@ -37,6 +45,11 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
         task_spec: payload.task_spec,
         dedup_key: payload.dedup_key,
         max_concurrency: payload.max_concurrency,
+        trigger: "webhook".into(),
+        actor: payload.actor,
+        model: payload.model,
+        repo: payload.repo,
+        language: payload.language,
     }
 }
 
@@ -44,28 +57,43 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
 mod tests {
     use super::*;
 
-    #[test]
-    fn normalize_preserves_fields() {
-        let req = normalize(WebhookPayload {
+    fn payload() -> WebhookPayload {
+        WebhookPayload {
             task_spec: "ship it".into(),
             kind: RunKind::Workflow,
             max_concurrency: 4,
             dedup_key: "delivery-42".into(),
-        });
+            actor: Some("octocat".into()),
+            model: Some("openai/gpt-5.5".into()),
+            repo: Some("org/repo".into()),
+            language: Some("rust".into()),
+        }
+    }
+
+    #[test]
+    fn normalize_preserves_fields() {
+        let req = normalize(payload());
         assert_eq!(req.task_spec, "ship it");
         assert_eq!(req.kind, RunKind::Workflow);
         assert_eq!(req.max_concurrency, 4);
         assert_eq!(req.dedup_key, "delivery-42");
+        assert_eq!(req.trigger, "webhook");
+        assert_eq!(req.actor.as_deref(), Some("octocat"));
+        assert_eq!(req.model.as_deref(), Some("openai/gpt-5.5"));
+        assert_eq!(req.repo.as_deref(), Some("org/repo"));
+        assert_eq!(req.language.as_deref(), Some("rust"));
     }
 
     #[test]
     fn normalize_uses_tenant_placeholder() {
-        let req = normalize(WebhookPayload {
-            task_spec: "x".into(),
-            kind: RunKind::Agent,
-            max_concurrency: 1,
-            dedup_key: String::new(),
-        });
+        let mut p = payload();
+        p.actor = None;
+        p.model = None;
+        p.repo = None;
+        p.language = None;
+        let req = normalize(p);
         assert_eq!(req.tenant, TenantId(1));
+        assert_eq!(req.actor, None);
+        assert_eq!(req.repo, None);
     }
 }

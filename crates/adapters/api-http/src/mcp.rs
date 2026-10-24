@@ -82,6 +82,10 @@ fn tools() -> Vec<Value> {
                     "task_spec": { "type": "string", "description": "The task for the agent" },
                     "kind": { "type": "string", "enum": ["agent", "workflow"] },
                     "max_concurrency": { "type": "integer" },
+                    "actor": { "type": "string", "description": "Who triggered the run" },
+                    "model": { "type": "string", "description": "Agent model" },
+                    "repo": { "type": "string", "description": "Repository" },
+                    "language": { "type": "string", "description": "Primary coding language" }
                 },
                 "required": ["task_spec"],
             },
@@ -116,6 +120,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 _ => RunKind::Agent,
             };
             let max_concurrency = args["max_concurrency"].as_u64().unwrap_or(1) as u32;
+            let opt = |k: &str| args[k].as_str().map(str::to_string);
 
             let Some(runtime) = &state.runtime else {
                 return ("execution runtime not configured".into(), true);
@@ -127,6 +132,11 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 task_spec,
                 dedup_key: String::new(),
                 max_concurrency,
+                trigger: "mcp".into(),
+                actor: opt("actor"),
+                model: opt("model"),
+                repo: opt("repo"),
+                language: opt("language"),
             };
 
             match start_run(req, runtime, &state.repo, &state.sessions).await {

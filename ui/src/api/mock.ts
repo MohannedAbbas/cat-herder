@@ -1,4 +1,4 @@
-import type { AgentTemplate, Run, RunState, Session, SessionSummary } from '@/types/domain'
+import type { AgentTemplate, Run, RunRecord, RunState, Session, SessionSummary } from '@/types/domain'
 import type { CatHerderApi } from './client'
 
 const agents: AgentTemplate[] = [
@@ -173,6 +173,65 @@ const sessions: Session[] = [
   },
 ]
 
+const runs: RunRecord[] = [
+  {
+    id: 1,
+    kind: 'agent',
+    state: 'running',
+    trigger: 'webhook',
+    actor: 'octocat',
+    model: 'anthropic/claude-sonnet-4-6',
+    repo: 'org/auth-service',
+    language: 'rust',
+    taskSpec: 'Investigate and fix the token refresh race in auth middleware.',
+    createdAt: '2026-10-23T09:15:00Z',
+    startedAt: '2026-10-23T09:16:00Z',
+    finishedAt: null,
+  },
+  {
+    id: 2,
+    kind: 'agent',
+    state: 'succeeded',
+    trigger: 'api',
+    actor: null,
+    model: 'openai/gpt-5.5',
+    repo: 'org/web-app',
+    language: 'typescript',
+    taskSpec: 'Migrate the HTTP adapter from axum 0.7 to 0.8.',
+    createdAt: '2026-10-22T15:31:00Z',
+    startedAt: '2026-10-22T15:32:00Z',
+    finishedAt: '2026-10-22T16:12:00Z',
+  },
+  {
+    id: 3,
+    kind: 'workflow',
+    state: 'failed',
+    trigger: 'mcp',
+    actor: 'mohanned',
+    model: 'openai/gpt-5.5',
+    repo: 'org/release-tooling',
+    language: 'python',
+    taskSpec: 'Generate release notes from merged PRs since v0.0.9.',
+    createdAt: '2026-10-21T11:01:00Z',
+    startedAt: '2026-10-21T11:02:00Z',
+    finishedAt: '2026-10-21T11:35:00Z',
+  },
+  {
+    id: 4,
+    kind: 'agent',
+    state: 'queued',
+    trigger: 'webhook',
+    actor: null,
+    model: null,
+    repo: 'org/infra',
+    language: 'go',
+    taskSpec: 'Reproduce and diagnose the flaky workspace snapshot test.',
+    createdAt: '2026-10-20T08:05:00Z',
+    startedAt: null,
+    finishedAt: null,
+  },
+]
+
 // Active → terminal priority for deriving a session's aggregate status.
 const STATUS_PRIORITY: RunState[] = [
   'running',
@@ -223,4 +282,5 @@ export const mockApi: CatHerderApi = {
     const a = agents.find((x) => x.id === id)
     return a ? delay(a) : Promise.reject(new Error(`agent ${id} not found`))
   },
+  listRuns: () => delay(runs),
 }

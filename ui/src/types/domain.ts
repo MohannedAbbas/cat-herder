@@ -61,3 +61,22 @@ export interface SessionSummary {
 export interface Session extends SessionSummary {
   runs: Run[]
 }
+
+/**
+ * A lifecycle run as returned by `GET /v1/runs` — the richer, run-centric record
+ * (trigger context, model/repo/language, and lifecycle timing).
+ */
+export interface RunRecord {
+  id: number
+  kind: RunKind
+  state: RunState
+  trigger: string
+  actor: string | null
+  model: string | null
+  repo: string | null
+  language: string | null
+  taskSpec: string
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+}

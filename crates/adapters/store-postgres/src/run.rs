@@ -30,11 +30,14 @@ impl RunRepository for PostgresRunRepository {
         let kind = encode_kind(run.kind);
         let state = encode_state(run.state);
         let created_ms = millis(run.created_at);
+        let started_ms = run.started_at.map(millis);
+        let finished_ms = run.finished_at.map(millis);
 
         let id: i64 = if run.id == RunId(0) {
             sqlx::query_scalar(
-                "INSERT INTO runs (tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+                "INSERT INTO runs (tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
+                 trigger, actor, model, repo, language, started_at, finished_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id",
             )
             .bind(tenant)
             .bind(&kind)
@@ -43,16 +46,27 @@ impl RunRepository for PostgresRunRepository {
             .bind(run.session_id.as_deref())
             .bind(run.max_concurrency as i32)
             .bind(created_ms)
+            .bind(&run.trigger)
+            .bind(run.actor.as_deref())
+            .bind(run.model.as_deref())
+            .bind(run.repo.as_deref())
+            .bind(run.language.as_deref())
+            .bind(started_ms)
+            .bind(finished_ms)
             .fetch_one(&self.pool)
             .await?
         } else {
             sqlx::query_scalar(
-                "INSERT INTO runs (id, tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                "INSERT INTO runs (id, tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
+                 trigger, actor, model, repo, language, started_at, finished_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
                  ON CONFLICT (id) DO UPDATE SET \
                    tenant_id = EXCLUDED.tenant_id, kind = EXCLUDED.kind, state = EXCLUDED.state, \
                    task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
-                   max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at \
+                   max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
+                   trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
+                   repo = EXCLUDED.repo, language = EXCLUDED.language, \
+                   started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at \
                  RETURNING id",
             )
             .bind(run.id.0 as i64)
@@ -63,6 +77,13 @@ impl RunRepository for PostgresRunRepository {
             .bind(run.session_id.as_deref())
             .bind(run.max_concurrency as i32)
             .bind(created_ms)
+            .bind(&run.trigger)
+            .bind(run.actor.as_deref())
+            .bind(run.model.as_deref())
+            .bind(run.repo.as_deref())
+            .bind(run.language.as_deref())
+            .bind(started_ms)
+            .bind(finished_ms)
             .fetch_one(&self.pool)
             .await?
         };
@@ -107,6 +128,13 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         session_id: row.try_get::<Option<String>, _>("session_id")?,
         max_concurrency: row.try_get::<i32, _>("max_concurrency")? as u32,
         created_at: from_millis(row.try_get::<i64, _>("created_at")?),
+        trigger: row.try_get("trigger")?,
+        actor: row.try_get("actor")?,
+        model: row.try_get("model")?,
+        repo: row.try_get("repo")?,
+        language: row.try_get("language")?,
+        started_at: row.try_get::<Option<i64>, _>("started_at")?.map(from_millis),
+        finished_at: row.try_get::<Option<i64>, _>("finished_at")?.map(from_millis),
     })
 }
 
@@ -163,6 +191,13 @@ mod tests {
             session_id: Some(session_id.clone()),
             max_concurrency: 3,
             created_at: SystemTime::now(),
+            trigger: "webhook".into(),
+            actor: Some("octocat".into()),
+            model: Some("anthropic/claude-sonnet-4-6".into()),
+            repo: Some("org/repo".into()),
+            language: Some("rust".into()),
+            started_at: None,
+            finished_at: None,
         };
         let saved = repo.save(&run).await.expect("save assigns id");
         assert_ne!(saved.id, RunId(0));
@@ -172,6 +207,11 @@ mod tests {
         assert_eq!(got.tenant, TenantId(42));
         assert_eq!(got.task_spec, "persist me");
         assert_eq!(got.session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(got.trigger, "webhook");
+        assert_eq!(got.actor.as_deref(), Some("octocat"));
+        assert_eq!(got.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
+        assert_eq!(got.repo.as_deref(), Some("org/repo"));
+        assert_eq!(got.language.as_deref(), Some("rust"));
         assert_eq!(got.state, RunState::Queued);
 
         let mut updated = saved.clone();

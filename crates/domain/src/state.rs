@@ -63,16 +63,23 @@ impl std::error::Error for TransitionError {}
 
 impl crate::entities::Run {
     /// Attempt to transition this run to `to`, enforcing the lifecycle state machine.
+    /// Sets `started_at` on entry to `Running` and `finished_at` on completion
+    /// (`Succeeded` or any terminal state).
     pub fn transition(&mut self, to: RunState) -> Result<(), TransitionError> {
-        if can_transition(self.state, to) {
-            self.state = to;
-            Ok(())
-        } else {
-            Err(TransitionError {
+        if !can_transition(self.state, to) {
+            return Err(TransitionError {
                 from: self.state,
                 to,
-            })
+            });
         }
+        self.state = to;
+        if to == Running {
+            self.started_at = Some(std::time::SystemTime::now());
+        }
+        if to == Succeeded || is_terminal(to) {
+            self.finished_at = Some(std::time::SystemTime::now());
+        }
+        Ok(())
     }
 }
 
@@ -173,6 +180,13 @@ mod tests {
             session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
         };
         assert!(run.transition(Scheduled).is_ok());
         assert_eq!(run.state, Scheduled);
@@ -189,6 +203,13 @@ mod tests {
             session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
         };
         let err = run.transition(Running).unwrap_err();
         assert_eq!(err.from, Queued);
@@ -207,6 +228,13 @@ mod tests {
             session_id: None,
             max_concurrency: 1,
             created_at: std::time::SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
         };
         for next in [Scheduled, PodPending, Running, Succeeded] {
             run.transition(next).expect("valid transition");

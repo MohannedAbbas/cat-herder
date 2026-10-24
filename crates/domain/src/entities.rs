@@ -58,6 +58,16 @@ pub struct Run {
     pub session_id: Option<String>,
     pub max_concurrency: u32,
     pub created_at: SystemTime,
+    /// Trigger context — where the run came from and who/what requested it.
+    pub trigger: String,
+    pub actor: Option<String>,
+    /// Agent/model + repository + language context (optional, trigger-provided).
+    pub model: Option<String>,
+    pub repo: Option<String>,
+    pub language: Option<String>,
+    /// Lifecycle timing (set as the run transitions through the state machine).
+    pub started_at: Option<SystemTime>,
+    pub finished_at: Option<SystemTime>,
 }
 
 /// Result-review decision (see `PLAN.md` §10).

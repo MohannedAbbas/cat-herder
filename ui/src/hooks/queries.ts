@@ -24,3 +24,7 @@ export function useAgent(id: string | undefined) {
     enabled: id != null,
   })
 }
+
+export function useRuns() {
+  return useQuery({ queryKey: ['runs'], queryFn: () => api.listRuns() })
+}

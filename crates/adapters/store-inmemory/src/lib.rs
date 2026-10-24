@@ -146,6 +146,13 @@ mod tests {
             session_id: None,
             max_concurrency: 1,
             created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
         }
     }
 

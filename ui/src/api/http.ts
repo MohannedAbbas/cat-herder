@@ -1,4 +1,4 @@
-import type { AgentTemplate, Session, SessionSummary } from '@/types/domain'
+import type { AgentTemplate, RunRecord, Session, SessionSummary } from '@/types/domain'
 import type { CatHerderApi } from './client'
 import { config } from '@/config'
 
@@ -16,4 +16,5 @@ export const httpApi: CatHerderApi = {
   getSession: (id) => get<Session>(`/v1/sessions/${id}`),
   listAgents: () => get<AgentTemplate[]>('/v1/agents'),
   getAgent: (id) => get<AgentTemplate>(`/v1/agents/${id}`),
+  listRuns: () => get<RunRecord[]>('/v1/runs'),
 }

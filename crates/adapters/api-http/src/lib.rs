@@ -76,6 +76,11 @@ async fn create_run(
         task_spec: req.task_spec,
         dedup_key: String::new(),
         max_concurrency: req.max_concurrency,
+        trigger: "api".into(),
+        actor: req.actor,
+        model: req.model,
+        repo: req.repo,
+        language: req.language,
     };
 
     let run = start_run(run_req, runtime, &state.repo, &state.sessions)

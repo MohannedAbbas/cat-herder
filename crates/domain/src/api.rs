@@ -17,6 +17,7 @@ pub enum RuntimeTier {
 
 /// A reusable agent configuration (maps to SandboxTemplate + harness config).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentTemplate {
     pub id: String,
     pub name: String,
@@ -30,6 +31,7 @@ pub struct AgentTemplate {
 
 /// A single run as exposed in a session (richer than the lifecycle `Run`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionRun {
     pub id: String,
     pub kind: RunKind,
@@ -45,6 +47,7 @@ pub struct SessionRun {
 
 /// Summary row for a session (list view).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
@@ -56,6 +59,7 @@ pub struct SessionSummary {
 
 /// A session with its full set of runs (detail view).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub title: String,
@@ -71,18 +75,36 @@ pub struct CreateRunRequest {
     pub kind: RunKind,
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: u32,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 fn default_max_concurrency() -> u32 {
     1
 }
 
-/// Response body for `POST /v1/runs`.
+/// Response body for `POST /v1/runs` and the runs list (`GET /v1/runs`).
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunResponse {
     pub id: u64,
     pub kind: RunKind,
     pub state: RunState,
+    pub trigger: String,
+    pub actor: Option<String>,
+    pub model: Option<String>,
+    pub repo: Option<String>,
+    pub language: Option<String>,
+    pub task_spec: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -91,6 +113,15 @@ impl From<&crate::entities::Run> for RunResponse {
             id: run.id.0,
             kind: run.kind,
             state: run.state,
+            trigger: run.trigger.clone(),
+            actor: run.actor.clone(),
+            model: run.model.clone(),
+            repo: run.repo.clone(),
+            language: run.language.clone(),
+            task_spec: run.task_spec.clone(),
+            created_at: to_iso(run.created_at),
+            started_at: run.started_at.map(to_iso),
+            finished_at: run.finished_at.map(to_iso),
         }
     }
 }

@@ -19,6 +19,9 @@ export default function Layout() {
             <span className="text-lg font-semibold text-slate-900">Cat Herder</span>
           </Link>
           <nav className="flex flex-col gap-1">
+            <NavLink to="/runs" className={navLinkClass}>
+              Runs
+            </NavLink>
             <NavLink to="/sessions" className={navLinkClass}>
               Sessions
             </NavLink>

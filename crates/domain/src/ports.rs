@@ -19,6 +19,13 @@ pub struct RunRequest {
     pub task_spec: String,
     pub dedup_key: String,
     pub max_concurrency: u32,
+    /// Trigger channel ("api" | "webhook" | "mcp" | …).
+    pub trigger: String,
+    /// Optional identity of the requester (until SSO is wired).
+    pub actor: Option<String>,
+    pub model: Option<String>,
+    pub repo: Option<String>,
+    pub language: Option<String>,
 }
 
 /// Inbound (driving): every trigger source normalizes its events to `RunRequest`.
