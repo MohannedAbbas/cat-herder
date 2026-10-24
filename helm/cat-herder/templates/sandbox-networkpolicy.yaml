@@ -6,6 +6,15 @@
 # below is dropped. The first policy therefore enforces the DEFAULT DENY, and the
 # subsequent policies punch the specific holes the harness actually needs.
 #
+# WHY HAND-ROLLED: cat-herder creates each agent Sandbox directly with an INLINE
+# `spec.podTemplate` (there is no templateRef). The platform's
+# `SandboxTemplate.spec.networkPolicy` mechanism selects pods on the
+# `agents.x-k8s.io/sandbox-template-ref-hash` label, which cat-herder's pods never
+# carry, so that mechanism never matches them. We therefore emit our own
+# NetworkPolicy that selects on the `app.kubernetes.io/name=cat-herder-harness`
+# label which cat-herder sets in the Sandbox podTemplate `metadata.labels` (and
+# which the controller propagates onto the pod).
+#
 # NOTE: a standard NetworkPolicy matches peers by pod/namespace selector or by
 # `ipBlock` CIDR — it cannot match on DNS names. The git-host and LLM-endpoint
 # allows are therefore expressed as the resolved IP CIDRs listed in

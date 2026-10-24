@@ -160,6 +160,15 @@ impl SandboxRuntime {
         obj.data = serde_json::json!({
             "spec": {
                 "podTemplate": {
+                    // Non-system labels are propagated by the agent-sandbox controller
+                    // onto the pod it builds from this inline template; the egress
+                    // NetworkPolicy selects on `app.kubernetes.io/name`.
+                    "metadata": {
+                        "labels": {
+                            "app.kubernetes.io/name": "cat-herder-harness",
+                            "app.kubernetes.io/part-of": "cat-herder",
+                        },
+                    },
                     "spec": {
                         "containers": [{
                             "name": "harness",
