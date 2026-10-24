@@ -78,8 +78,20 @@ def set_provider_key(model: str) -> None:
 def run_agent(task_spec: str, model: str) -> str:
     """Run a Deep Agents agent on the task and return its final message."""
     from deepagents import create_deep_agent
+    from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 
-    agent = create_deep_agent(model=model, system_prompt="You are a coding agent.")
+    # Route /repo/* to the real filesystem (the source baked into the image), while
+    # agent-internal state (memories, offloaded tool results) stays in the ephemeral
+    # StateBackend. Without this, Deep Agents' tools only see an empty virtual FS.
+    backend = CompositeBackend(
+        default=StateBackend(),
+        routes={"/repo/": FilesystemBackend(root_dir="/repo")},
+    )
+    agent = create_deep_agent(
+        model=model,
+        system_prompt="You are a coding agent.",
+        backend=backend,
+    )
     result = agent.invoke({"messages": [{"role": "user", "content": task_spec}]})
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if messages:
