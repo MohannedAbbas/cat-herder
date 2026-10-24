@@ -1,0 +1,139 @@
+{{- if .Values.agentSandbox.networkPolicy.enabled }}
+# Default-deny egress (plus the minimal allow-list) for the harness sandbox pods.
+#
+# A Kubernetes NetworkPolicy is deny-by-default for the directions it selects: the
+# moment any policy selects a pod for `Egress`, all egress not explicitly allowed
+# below is dropped. The first policy therefore enforces the DEFAULT DENY, and the
+# subsequent policies punch the specific holes the harness actually needs.
+#
+# NOTE: a standard NetworkPolicy matches peers by pod/namespace selector or by
+# `ipBlock` CIDR — it cannot match on DNS names. The git-host and LLM-endpoint
+# allows are therefore expressed as the resolved IP CIDRs listed in
+# `agentSandbox.networkPolicy.*` in values.yaml. Keep those lists in sync with the
+# hosts your runs use (or switch to a CNI with FQDN support, e.g. Cilium).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-default-deny-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  # No `egress` rules: deny all egress from the harness pods by default.
+  egress: []
+---
+# Allow DNS (UDP + TCP port 53) to the cluster DNS service in kube-system.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-allow-dns-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.agentSandbox.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.agentSandbox.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: {{ .Values.agentSandbox.networkPolicy.dns.port }}
+        - protocol: TCP
+          port: {{ .Values.agentSandbox.networkPolicy.dns.port }}
+---
+# Allow the in-cluster control plane service (cat-herder-api) so the harness can
+# report run events back.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-allow-control-plane-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cat-herder-api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.agentSandbox.networkPolicy.controlPlane.port }}
+---
+# Allow the supported git hosts (github.com, gitlab.com, codeberg.org) on :443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-allow-git-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range .Values.agentSandbox.networkPolicy.gitHosts.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.agentSandbox.networkPolicy.gitHosts.port }}
+---
+# Allow the configured LLM provider API (e.g. api.deepseek.com) on :443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cat-herder-harness-allow-llm-egress
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-harness
+    app.kubernetes.io/part-of: cat-herder
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-harness
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range .Values.agentSandbox.networkPolicy.llm.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.agentSandbox.networkPolicy.llm.port }}
+{{- end }}
