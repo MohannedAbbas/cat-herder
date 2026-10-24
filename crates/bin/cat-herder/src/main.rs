@@ -3,14 +3,25 @@
 //! Wires the runtime adapter and the background reconciler into the API. Data is
 //! persisted in Postgres when `CAT_HERDER_DATABASE_URL` is set, otherwise in-memory.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use cat_herder_api_http::{router, AppState, AgentRepo, RunRepo, SessionRepo};
 use cat_herder_application::reconcile_once;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
+use cat_herder_store_inmemory::InMemoryAgentRepository;
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresRunRepository, PostgresSessionRepository, PostgresStore,
 };
+
+/// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
+/// map injected by the chart from `agents.models`).
+fn agent_models() -> HashMap<String, String> {
+    std::env::var("CAT_HERDER_AGENT_MODELS")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
 
 /// The three repositories (run/agent/session), all in-memory or all Postgres.
 struct Repos {
@@ -20,10 +31,10 @@ struct Repos {
 }
 
 impl Repos {
-    fn in_memory() -> Self {
+    fn in_memory(models: &HashMap<String, String>) -> Self {
         Self {
             run: RunRepo::InMemory(Default::default()),
-            agents: AgentRepo::InMemory(Default::default()),
+            agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             sessions: SessionRepo::InMemory(Default::default()),
         }
     }
@@ -33,16 +44,16 @@ impl Repos {
 /// chart injects it when `dependencies.postgres.enabled`), otherwise in-memory.
 /// Retries briefly because the bundled Postgres StatefulSet may still be
 /// initializing when the control plane starts.
-async fn build_repos() -> Repos {
+async fn build_repos(models: &HashMap<String, String>) -> Repos {
     let Some(url) = std::env::var("CAT_HERDER_DATABASE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
     else {
-        return Repos::in_memory();
+        return Repos::in_memory(models);
     };
 
     for attempt in 1..=30 {
-        match PostgresStore::connect(&url).await {
+        match PostgresStore::connect(&url, models).await {
             Ok(store) => {
                 eprintln!("using Postgres repositories");
                 return Repos {
@@ -63,7 +74,7 @@ async fn build_repos() -> Repos {
             }
         }
     }
-    Repos::in_memory()
+    Repos::in_memory(models)
 }
 
 #[tokio::main]
@@ -83,7 +94,7 @@ async fn main() {
         }
     };
 
-    let repos = build_repos().await;
+    let repos = build_repos(&agent_models()).await;
 
     // Background reconciler: advance active runs (PodPending -> Running, Running ->
     // Succeeded) based on sandbox status (PLAN.md §6), and keep the session display

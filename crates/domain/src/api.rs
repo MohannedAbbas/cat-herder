@@ -79,6 +79,9 @@ pub struct CreateRunRequest {
     pub actor: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Select an agent template; its configured model is used unless `model` is set.
+    #[serde(default)]
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]

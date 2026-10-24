@@ -7,8 +7,16 @@ namespace: cat-herder
 # provided via a Secret named `llmApiKeySecret` (create it with:
 #   kubectl -n cat-herder create secret generic cat-herder-llm --from-literal=api-key=...
 # ). The control plane passes it through to the sandbox pod env.
-model: ""
+model: "deepseek:deepseek-reasoner"
 llmApiKeySecret: cat-herder-llm
+
+# Per-agent model overrides (agent id -> model). Leave empty to use the built-in
+# catalog defaults. Example (DeepSeek):
+agents:
+  models:
+    agent-codeact: "deepseek:deepseek-chat"
+    agent-reviewer: "deepseek:deepseek-chat"
+    agent-docs: "deepseek:deepseek-reasoner"
 
 # Image refs are single strings so Tilt can inject locally-built images
 # (see Tiltfile `image_keys`).

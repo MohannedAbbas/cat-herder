@@ -71,6 +71,20 @@ async fn create_run(
         "execution runtime not configured".into(),
     ))?;
 
+    // Resolve the model: explicit `model` wins, else the selected agent's model.
+    let model = match req.model {
+        Some(m) => Some(m),
+        None => match req.agent_id {
+            Some(agent_id) => state
+                .agents
+                .get(&agent_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map(|a| a.model),
+            None => None,
+        },
+    };
+
     let run_req = RunRequest {
         tenant: TenantId(1), // placeholder until multi-tenancy is wired
         kind: req.kind,
@@ -79,7 +93,7 @@ async fn create_run(
         max_concurrency: req.max_concurrency,
         trigger: "api".into(),
         actor: req.actor,
-        model: req.model,
+        model,
         repo: req.repo,
         language: req.language,
     };

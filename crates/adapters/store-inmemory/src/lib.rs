@@ -65,11 +65,17 @@ pub struct InMemoryAgentRepository {
     agents: Arc<Vec<AgentTemplate>>,
 }
 
+impl InMemoryAgentRepository {
+    pub fn new(model_overrides: &HashMap<String, String>) -> Self {
+        Self {
+            agents: Arc::new(catalog::default_agents(model_overrides)),
+        }
+    }
+}
+
 impl Default for InMemoryAgentRepository {
     fn default() -> Self {
-        Self {
-            agents: Arc::new(catalog::default_agents()),
-        }
+        Self::new(&HashMap::new())
     }
 }
 

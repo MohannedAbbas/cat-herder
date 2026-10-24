@@ -27,6 +27,8 @@ spec:
               value: "{{ .Values.harness.image }}"
             - name: CAT_HERDER_MODEL
               value: {{ .Values.model | quote }}
+            - name: CAT_HERDER_AGENT_MODELS
+              value: {{ .Values.agents.models | toJson | quote }}
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:

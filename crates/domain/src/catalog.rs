@@ -2,10 +2,18 @@
 //! sessions. Used to seed both the in-memory and Postgres backends so the API and
 //! UI have data on first boot. (Mirrors `ui/src/api/mock.ts`.)
 
+use std::collections::HashMap;
+
 use crate::api::{AgentTemplate, RuntimeTier, Session, SessionRun};
 use crate::entities::{RunKind, RunState};
 
-pub fn default_agents() -> Vec<AgentTemplate> {
+/// Build the default agent catalog, applying per-agent model overrides (id → model)
+/// from configuration (see the Helm chart's `agents.models`).
+pub fn default_agents(model_overrides: &HashMap<String, String>) -> Vec<AgentTemplate> {
+    let model = |id: &str, default: &str| -> String {
+        model_overrides.get(id).cloned().unwrap_or_else(|| default.to_string())
+    };
+
     vec![
         AgentTemplate {
             id: "agent-codeact".into(),
@@ -13,7 +21,7 @@ pub fn default_agents() -> Vec<AgentTemplate> {
             description: "General-purpose coding agent: plans, edits, tests, and opens PRs.".into(),
             image: "cat-herder-agent-harness:0.1.0".into(),
             runtime_tier: RuntimeTier::Default,
-            model: "anthropic/claude-sonnet-4-6".into(),
+            model: model("agent-codeact", "anthropic:claude-sonnet-4-6"),
             tools: vec![
                 "filesystem".into(),
                 "execute".into(),
@@ -29,7 +37,7 @@ pub fn default_agents() -> Vec<AgentTemplate> {
             description: "Reviews diffs for correctness, security, and style.".into(),
             image: "cat-herder-agent-harness:0.1.0".into(),
             runtime_tier: RuntimeTier::Gvisor,
-            model: "openai/gpt-5.5".into(),
+            model: model("agent-reviewer", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "git".into(), "github".into()],
             max_concurrency: 4,
         },
@@ -39,11 +47,35 @@ pub fn default_agents() -> Vec<AgentTemplate> {
             description: "Generates changelogs and API docs from the codebase.".into(),
             image: "cat-herder-agent-harness:0.1.0".into(),
             runtime_tier: RuntimeTier::Default,
-            model: "openai/gpt-5.5".into(),
+            model: model("agent-docs", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "web_search".into()],
             max_concurrency: 4,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn model_overrides_apply_to_matching_agents_only() {
+        let mut m = HashMap::new();
+        m.insert("agent-codeact".to_string(), "deepseek:deepseek-chat".to_string());
+        let agents = default_agents(&m);
+        let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
+        let reviewer = agents.iter().find(|a| a.id == "agent-reviewer").unwrap();
+        assert_eq!(codeact.model, "deepseek:deepseek-chat");
+        assert_eq!(reviewer.model, "openai:gpt-5.5");
+    }
+
+    #[test]
+    fn no_overrides_keeps_defaults() {
+        let agents = default_agents(&HashMap::new());
+        assert_eq!(agents.len(), 3);
+        assert!(agents.iter().all(|a| a.model.contains(':')));
+    }
 }
 
 pub fn default_sessions() -> Vec<Session> {

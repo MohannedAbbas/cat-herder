@@ -174,7 +174,7 @@ mod tests {
             eprintln!("skipping postgres_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
         let repo = PostgresRunRepository::new(&store);
 
         // A session_id must reference a real session (FK); create one first.

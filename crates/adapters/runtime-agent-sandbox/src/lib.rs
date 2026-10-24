@@ -62,11 +62,15 @@ impl SandboxRuntime {
     }
 
     fn sandbox_object(&self, run: &Run) -> DynamicObject {
+        // A run's model (from agent selection or the request) wins; otherwise the
+        // global default (`CAT_HERDER_MODEL`) applies.
+        let model = run.model.clone().unwrap_or_else(|| self.model.clone());
+
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
             serde_json::json!({ "name": "TENANT_ID", "value": run.tenant.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
-            serde_json::json!({ "name": "MODEL", "value": self.model }),
+            serde_json::json!({ "name": "MODEL", "value": model }),
         ];
         // The control plane's in-cluster URL, so the harness can report events back.
         // Overridable via the control plane's own env.

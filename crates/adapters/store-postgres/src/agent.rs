@@ -64,7 +64,7 @@ mod tests {
             eprintln!("skipping postgres_agents_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
         let repo = PostgresAgentRepository::new(&store);
         let agents = repo.list().await.expect("list");
         assert!(agents.iter().any(|a| a.id == "agent-codeact"));

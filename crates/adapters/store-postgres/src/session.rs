@@ -148,7 +148,7 @@ mod tests {
             eprintln!("skipping postgres_sessions_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
         let repo = PostgresSessionRepository::new(&store);
         let sessions = repo.list().await.expect("list");
         assert!(!sessions.is_empty());
@@ -165,7 +165,7 @@ mod tests {
             eprintln!("skipping postgres_create_and_add_run: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
         let repo = PostgresSessionRepository::new(&store);
 
         let id = cat_herder_domain::api::new_session_id();
@@ -200,7 +200,7 @@ mod tests {
             eprintln!("skipping postgres_sync_run: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
         let repo = PostgresSessionRepository::new(&store);
 
         let id = cat_herder_domain::api::new_session_id();

@@ -2,6 +2,8 @@
 //! seed data. The individual repositories (run/agent/session) are constructed from
 //! this store so they share a single pool.
 
+use std::collections::HashMap;
+
 use cat_herder_domain::catalog;
 use cat_herder_domain::ports::DomainResult;
 use sqlx::PgPool;
@@ -17,23 +19,27 @@ pub struct PostgresStore {
 
 impl PostgresStore {
     /// Connect, apply any pending migrations, and seed the reference/demo data.
-    pub async fn connect(url: &str) -> DomainResult<Self> {
+    pub async fn connect(url: &str, agent_models: &HashMap<String, String>) -> DomainResult<Self> {
         let pool = PgPool::connect(url).await?;
         // Versioned migrations (embedded at compile time) replace the previous
         // runtime `CREATE TABLE IF NOT EXISTS` + advisory-lock approach. sqlx takes
         // its own advisory lock while migrating, so concurrent connects are safe.
         sqlx::migrate!("./migrations").run(&pool).await?;
-        seed(&pool).await?;
+        seed(&pool, agent_models).await?;
         Ok(Self { pool })
     }
 }
 
-async fn seed(pool: &PgPool) -> DomainResult<()> {
-    // Reference agent catalog (idempotent).
-    for agent in catalog::default_agents() {
+async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainResult<()> {
+    // Reference agent catalog (idempotent upsert so model overrides apply on redeploy).
+    for agent in catalog::default_agents(agent_models) {
         sqlx::query(
             "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO UPDATE SET \
+               name = EXCLUDED.name, description = EXCLUDED.description, image = EXCLUDED.image, \
+               runtime_tier = EXCLUDED.runtime_tier, model = EXCLUDED.model, tools = EXCLUDED.tools, \
+               max_concurrency = EXCLUDED.max_concurrency",
         )
         .bind(agent.id.as_str())
         .bind(agent.name.as_str())

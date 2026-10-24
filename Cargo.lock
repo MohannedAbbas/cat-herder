@@ -197,7 +197,9 @@ dependencies = [
  "cat-herder-api-http",
  "cat-herder-application",
  "cat-herder-runtime-agent-sandbox",
+ "cat-herder-store-inmemory",
  "cat-herder-store-postgres",
+ "serde_json",
  "tokio",
 ]
 
