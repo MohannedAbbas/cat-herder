@@ -73,6 +73,59 @@ dependencies:
 
 agentSandbox:
   enabled: true
+  # Network egress controls for the sandbox ("harness") pods. These pods run
+  # agent-generated code, so by default ALL egress is DENIED and only the hosts
+  # below are allowed (see templates/sandbox-networkpolicy.yaml). This bounds the
+  # blast radius of a compromised agent: it can no longer exfiltrate secrets to an
+  # arbitrary endpoint.
+  #
+  # The allowed destinations are:
+  #   1. DNS ......... UDP+TCP :53 to the cluster DNS service in kube-system.
+  #   2. Control plane cat-herder-api on :80 in the release namespace, so the
+  #                    harness can report run events back.
+  #   3. Git hosts ... github.com, gitlab.com, codeberg.org on :443, for cloning.
+  #   4. LLM API ..... the configured provider's API on :443.
+  #
+  # IMPORTANT — why CIDRs, not hostnames: a standard Kubernetes NetworkPolicy
+  # matches peers by pod/namespace selector or by `ipBlock` CIDR; it cannot match
+  # on DNS names. The git-host and LLM rules are therefore expressed as resolved
+  # IP CIDRs. If you use a different LLM provider or git host, update the CIDRs
+  # below (e.g. `dig +short api.openai.com` / `dig +short github.com`) and re-run
+  # the release. If your CNI supports FQDN policies (e.g. Cilium), you can replace
+  # these ipBlocks with toFQDNs rules. Set `.enabled: false` to turn egress
+  # filtering off entirely (NOT recommended).
+  networkPolicy:
+    enabled: true
+    # 1. DNS — the cluster DNS service in kube-system (kube-dns / CoreDNS).
+    dns:
+      namespace: kube-system
+      # Match the CoreDNS pods. Override if your cluster DNS labels differ.
+      podSelector:
+        k8s-app: kube-dns
+      port: 53
+    # 2. In-cluster control plane Service (cat-herder-api) in this namespace.
+    controlPlane:
+      port: 80
+    # 3. Supported git hosts on :443.
+    #    To support a different/extra git host, add its IP CIDRs to `cidrs`.
+    gitHosts:
+      port: 443
+      cidrs:
+        - 140.82.112.0/20    # github.com
+        - 192.30.252.0/22    # github.com (legacy range)
+        - 172.65.251.78/32   # gitlab.com
+        - 217.197.84.0/24    # codeberg.org
+    # 4. The configured LLM provider API on :443.
+    #    CHANGE THIS when you use a different provider, e.g.:
+    #      DeepSeek  ->  api.deepseek.com
+    #      OpenAI    ->  api.openai.com,  160.79.104.0/23
+    #      Anthropic ->  api.anthropic.com, 160.79.104.0/23
+    #    `dig +short api.deepseek.com` gives the current CIDR(s) to list.
+    llm:
+      port: 443
+      cidrs:
+        - 3.173.21.0/24      # api.deepseek.com (resolved at time of writing;
+                             # replace with your provider's current ranges)
 
 # GitHub OAuth SSO (optional; password login still works when disabled).
 # When enabled the API exposes /v1/auth/github/login and
