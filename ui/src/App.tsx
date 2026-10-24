@@ -12,6 +12,7 @@ import AdminAgentsPage from './features/admin/AdminAgentsPage'
 import AdminProvidersPage from './features/admin/AdminProvidersPage'
 import AdminModelsPage from './features/admin/AdminModelsPage'
 import AdminToolsPage from './features/admin/AdminToolsPage'
+import AdminReposPage from './features/admin/AdminReposPage'
 import AdminAuditPage from './features/admin/AdminAuditPage'
 import AdminWebhooksPage from './features/admin/AdminWebhooksPage'
 
@@ -72,6 +73,14 @@ export default function App() {
             element={
               <RequireAdmin>
                 <AdminToolsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/repos"
+            element={
+              <RequireAdmin>
+                <AdminReposPage />
               </RequireAdmin>
             }
           />

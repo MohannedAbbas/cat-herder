@@ -6,7 +6,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use cat_herder_api_http::{router, AppState};
+use cat_herder_api_http::{router, AppState, GitHubOAuth, OAuthConfig};
 use cat_herder_domain::api::{AgentTemplate, Session, SessionSummary};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -207,6 +207,7 @@ async fn post_finished_event_marks_run_succeeded() {
             language: None,
             started_at: None,
             finished_at: None,
+            pr_url: None,
         })
         .await
         .unwrap();
@@ -249,6 +250,7 @@ async fn post_finished_event_failed_marks_run_failed() {
             language: None,
             started_at: None,
             finished_at: None,
+            pr_url: None,
         })
         .await
         .unwrap();
@@ -301,6 +303,7 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             language: None,
             started_at: None,
             finished_at: None,
+            pr_url: None,
         })
         .await
         .unwrap();
@@ -676,4 +679,69 @@ async fn mcp_run_agent_no_runtime() {
     assert_eq!(v["result"]["isError"], true);
     let text = v["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("runtime"));
+}
+
+// --- GitHub OAuth SSO ------------------------------------------------------
+
+fn oauth_app() -> Router {
+    let cfg = OAuthConfig {
+        client_id: "test-client".into(),
+        client_secret: "test-secret".into(),
+        redirect_url: "https://cat.example.com".into(),
+        allowed_users: vec!["octocat".into()],
+    };
+    let mut state = AppState::default();
+    state.github_oauth = Some(GitHubOAuth::new(cfg));
+    router(state)
+}
+
+#[tokio::test]
+async fn github_login_redirects_to_github_and_sets_state_cookie() {
+    let res = oauth_app()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/github/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    let location = res
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .expect("Location header");
+    assert!(location.starts_with("https://github.com/login/oauth/authorize"));
+    assert!(location.contains("client_id=test-client"));
+    assert!(location.contains("state="));
+
+    let set_cookie = res
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("gh_oauth_state="), "missing CSRF cookie");
+    assert!(set_cookie.to_lowercase().contains("httponly"));
+}
+
+#[tokio::test]
+async fn github_login_unconfigured_returns_404() {
+    // Default AppState has github_oauth = None.
+    let (status, _body) = send(app(), "/v1/auth/github/login").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn github_callback_rejects_missing_state_cookie() {
+    // No gh_oauth_state cookie => CSRF check fails before any GitHub call.
+    let (status, _body) =
+        send(oauth_app(), "/v1/auth/github/callback?code=abc&state=xyz").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn github_callback_unconfigured_returns_404() {
+    let (status, _body) = send(app(), "/v1/auth/github/callback?code=abc&state=xyz").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

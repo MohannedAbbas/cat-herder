@@ -68,6 +68,8 @@ pub struct Run {
     /// Lifecycle timing (set as the run transitions through the state machine).
     pub started_at: Option<SystemTime>,
     pub finished_at: Option<SystemTime>,
+    /// PR URL, set when the control plane opens a pull request from the agent's diff.
+    pub pr_url: Option<String>,
 }
 
 /// Result-review decision (see `PLAN.md` §10).
@@ -77,4 +79,19 @@ pub struct ReviewDecision {
     pub verdict: ReviewVerdict,
     pub feedback: String,
     pub reviewed_at: SystemTime,
+}
+
+/// A git repository an agent can clone and work on, with an optional access token.
+///
+/// The token is stored **encrypted** (`token_ciphertext`); the domain never sees
+/// the plaintext — encryption/decryption is an adapter concern (see `PLAN.md` §10
+/// "repo-scoped credential"). The ciphertext is opaque here so the domain stays
+/// infrastructure-free.
+#[derive(Debug, Clone)]
+pub struct GitRepo {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub token_ciphertext: Option<String>,
+    pub enabled: bool,
 }

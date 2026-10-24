@@ -1,6 +1,8 @@
 import type {
   AgentTemplate,
   AuditEntry,
+  GitHost,
+  GitRepo,
   Model,
   Provider,
   RunRecord,
@@ -17,7 +19,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   })
   if (!res.ok) {
-    throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}`)
+    const body = await res.text().catch(() => '')
+    const detail = body ? `: ${body}` : ''
+    throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}${detail}`)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -61,10 +65,18 @@ export const httpApi: CatHerderApi = {
   saveTool: (id, tool) => request<Tool>(`/v1/admin/tools/${id}`, json('PUT', tool)),
   deleteTool: (id) => request<void>(`/v1/admin/tools/${id}`, { method: 'DELETE' }),
 
+  listRepos: () => request<GitRepo[]>('/v1/admin/repos'),
+  listGitHosts: () => request<GitHost[]>('/v1/admin/git-hosts'),
+  saveRepo: (repo) => request<GitRepo>('/v1/admin/repos', json('PUT', repo)),
+  deleteRepo: (id) => request<void>(`/v1/admin/repos?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   getWebhookSecret: () =>
     request<{ secret: string | null }>('/v1/admin/settings/webhook-secret'),
   regenerateWebhookSecret: () =>
     request<{ secret: string }>('/v1/admin/settings/webhook-secret', { method: 'POST' }),
+
+  rotateEncryptionKey: () =>
+    request('/v1/admin/settings/encryption-key/rotate', { method: 'POST' }).then(() => undefined),
 
   listAudit: () => request<AuditEntry[]>('/v1/admin/audit'),
 }

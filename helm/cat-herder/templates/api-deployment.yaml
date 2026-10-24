@@ -27,6 +27,16 @@ spec:
               value: "{{ .Values.harness.image }}"
             - name: CAT_HERDER_AGENT_MODELS
               value: {{ .Values.agents.models | toJson | quote }}
+            - name: CAT_HERDER_ENCRYPTION_SECRET
+              value: {{ .Values.encryptionKeySecret | quote }}
+            - name: CAT_HERDER_ENCRYPTION_SECRET_KEY
+              value: {{ .Values.encryptionKeySecretKey | quote }}
+            - name: GITHUB_WRITE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitWriteTokenSecret }}
+                  key: token
+                  optional: true
             - name: CAT_HERDER_ADMIN_USER
               valueFrom:
                 secretKeyRef:
@@ -50,6 +60,22 @@ spec:
                   name: cat-herder-postgres
                   key: database-url
                   optional: true
+            {{- end }}
+            {{- if .Values.oauth.github.enabled }}
+            - name: GITHUB_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth.github.secret }}
+                  key: client-id
+            - name: GITHUB_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth.github.secret }}
+                  key: client-secret
+            - name: GITHUB_OAUTH_REDIRECT_URL
+              value: {{ .Values.oauth.github.redirectUrl | quote }}
+            - name: GITHUB_OAUTH_ALLOWED_USERS
+              value: {{ join "," .Values.oauth.github.allowedUsers | quote }}
             {{- end }}
           ports:
             - containerPort: {{ .Values.controlPlane.port }}

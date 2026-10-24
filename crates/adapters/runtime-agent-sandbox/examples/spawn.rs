@@ -33,6 +33,7 @@ async fn main() -> DomainResult<()> {
         language: None,
         started_at: None,
         finished_at: None,
+        pr_url: None,
     };
 
     println!("spawning Sandbox run-999 ...");

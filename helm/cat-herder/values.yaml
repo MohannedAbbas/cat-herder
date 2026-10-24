@@ -13,6 +13,18 @@ namespace: cat-herder
 # provider.
 llmApiKeySecret: cat-herder-llm
 
+# Encryption-key Secret: the control plane generates a random key into this Secret on
+# first boot (no operator initialization) and rewrites it on rotation. Tokens are
+# encrypted at rest with this key, but stored separately in Postgres.
+encryptionKeySecret: cat-herder-encryption
+encryptionKeySecretKey: key
+
+# Git write token (a fine-grained PAT with Contents: Write + Pull requests: Write)
+# used to open a PR from the agent's diff. Held only by the control plane — never
+# injected into the sandbox. Create it with:
+#   kubectl -n cat-herder create secret generic cat-herder-git-write --from-literal=token=ghp_...
+gitWriteTokenSecret: cat-herder-git-write
+
 # Per-agent model overrides (agent id -> model). Leave empty to use the built-in
 # catalog defaults. Example (DeepSeek):
 agents:
@@ -67,6 +79,19 @@ dependencies:
 
 agentSandbox:
   enabled: true
+
+# GitHub OAuth SSO (optional; password login still works when disabled).
+# When enabled the API exposes /v1/auth/github/login and
+# /v1/auth/github/callback. The client id/secret come from the Secret named in
+# `secret` (keys `client-id` and `client-secret`); the allow-list is the comma
+# separated set of GitHub logins permitted to become admin. `redirectUrl` is the
+# public base URL of the control plane (the callback path is appended).
+oauth:
+  github:
+    enabled: false
+    secret: cat-herder-github-oauth
+    redirectUrl: ""
+    allowedUsers: []
 
 ingress:
   enabled: false

@@ -36,8 +36,8 @@ impl RunRepository for PostgresRunRepository {
         let id: i64 = if run.id == RunId(0) {
             sqlx::query_scalar(
                 "INSERT INTO runs (tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id",
+                 trigger, actor, model, repo, language, started_at, finished_at, pr_url) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id",
             )
             .bind(tenant)
             .bind(&kind)
@@ -53,20 +53,22 @@ impl RunRepository for PostgresRunRepository {
             .bind(run.language.as_deref())
             .bind(started_ms)
             .bind(finished_ms)
+            .bind(run.pr_url.as_deref())
             .fetch_one(&self.pool)
             .await?
         } else {
             sqlx::query_scalar(
                 "INSERT INTO runs (id, tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+                 trigger, actor, model, repo, language, started_at, finished_at, pr_url) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
                  ON CONFLICT (id) DO UPDATE SET \
                    tenant_id = EXCLUDED.tenant_id, kind = EXCLUDED.kind, state = EXCLUDED.state, \
                    task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
                    max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
                    trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
                    repo = EXCLUDED.repo, language = EXCLUDED.language, \
-                   started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at \
+                   started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
+                   pr_url = EXCLUDED.pr_url \
                  RETURNING id",
             )
             .bind(run.id.0 as i64)
@@ -84,6 +86,7 @@ impl RunRepository for PostgresRunRepository {
             .bind(run.language.as_deref())
             .bind(started_ms)
             .bind(finished_ms)
+            .bind(run.pr_url.as_deref())
             .fetch_one(&self.pool)
             .await?
         };
@@ -135,6 +138,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         language: row.try_get("language")?,
         started_at: row.try_get::<Option<i64>, _>("started_at")?.map(from_millis),
         finished_at: row.try_get::<Option<i64>, _>("finished_at")?.map(from_millis),
+        pr_url: row.try_get("pr_url")?,
     })
 }
 
@@ -198,6 +202,7 @@ mod tests {
             language: Some("rust".into()),
             started_at: None,
             finished_at: None,
+            pr_url: None,
         };
         let saved = repo.save(&run).await.expect("save assigns id");
         assert_ne!(saved.id, RunId(0));

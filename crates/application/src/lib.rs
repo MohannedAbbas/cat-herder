@@ -45,6 +45,7 @@ where
         language: req.language,
         started_at: None,
         finished_at: None,
+        pr_url: None,
     };
 
     let mut run = repo.save(&run).await?; // Queued (id assigned)

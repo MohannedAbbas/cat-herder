@@ -1,6 +1,9 @@
 import type {
   AgentTemplate,
   AuditEntry,
+  GitHost,
+  GitRepo,
+  GitRepoWrite,
   Model,
   Provider,
   Run,
@@ -220,6 +223,7 @@ const runs: RunRecord[] = [
     createdAt: '2026-10-23T09:15:00Z',
     startedAt: '2026-10-23T09:16:00Z',
     finishedAt: null,
+    prUrl: null,
   },
   {
     id: 2,
@@ -235,6 +239,7 @@ const runs: RunRecord[] = [
     createdAt: '2026-10-22T15:31:00Z',
     startedAt: '2026-10-22T15:32:00Z',
     finishedAt: '2026-10-22T16:12:00Z',
+    prUrl: null,
   },
   {
     id: 3,
@@ -250,6 +255,7 @@ const runs: RunRecord[] = [
     createdAt: '2026-10-21T11:01:00Z',
     startedAt: '2026-10-21T11:02:00Z',
     finishedAt: '2026-10-21T11:35:00Z',
+    prUrl: null,
   },
   {
     id: 4,
@@ -265,6 +271,7 @@ const runs: RunRecord[] = [
     createdAt: '2026-10-20T08:05:00Z',
     startedAt: null,
     finishedAt: null,
+    prUrl: null,
   },
 ]
 
@@ -307,6 +314,14 @@ let tools: Tool[] = [
   { id: 'github', description: 'GitHub issues and PRs' },
   { id: 'credential', description: 'Scoped credential brokering' },
   { id: 'web_search', description: 'Web search' },
+]
+
+let repos: GitRepo[] = []
+
+let gitHosts: GitHost[] = [
+  { host: 'github.com', label: 'GitHub' },
+  { host: 'gitlab.com', label: 'GitLab' },
+  { host: 'codeberg.org', label: 'Codeberg' },
 ]
 
 function aggregateStatus(runs: Run[]): RunState | 'idle' {
@@ -416,11 +431,42 @@ export const mockApi: CatHerderApi = {
     return delay(undefined)
   },
 
+  listRepos: () => delay(repos),
+  listGitHosts: () => delay(gitHosts),
+  saveRepo: (write: GitRepoWrite) => {
+    const host = write.host.trim().toLowerCase()
+    const path = write.repo.trim().replace(/\.git$/, '').replace(/\/$/, '')
+    const folded = host === 'github.com' ? path.toLowerCase() : path
+    const id = `${host}/${folded}`
+    const i = repos.findIndex((r) => r.id === id)
+    const saved: GitRepo = {
+      id,
+      name: path,
+      host,
+      url: `https://${host}/${path}`,
+      enabled: write.enabled,
+      hasToken: Boolean(write.token) || (i >= 0 && repos[i]?.hasToken === true),
+    }
+    if (i >= 0) repos[i] = saved
+    else repos.push(saved)
+    recordAudit('repo.upsert', 'repo', id)
+    return delay(saved)
+  },
+  deleteRepo: (id) => {
+    repos = repos.filter((r) => r.id !== id)
+    recordAudit('repo.delete', 'repo', id)
+    return delay(undefined)
+  },
+
   listAudit: () => delay(auditLog),
   getWebhookSecret: () => delay({ secret: webhookSecret }),
   regenerateWebhookSecret: () => {
     webhookSecret = crypto.randomUUID()
     recordAudit('webhook-secret.regenerate', 'settings', 'webhook_secret')
     return delay({ secret: webhookSecret })
+  },
+  rotateEncryptionKey: () => {
+    recordAudit('encryption-key.rotate', 'settings', 'encryption_key')
+    return delay(undefined)
   },
 }

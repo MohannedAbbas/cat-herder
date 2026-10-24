@@ -59,6 +59,33 @@ make tilt   # == tilt up
 Podman's insecure-registry allowlist for `127.0.0.1:5000` lives in
 `~/.config/containers/registries.conf` (already configured).
 
+## Configuration
+
+The control plane is configured via environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `CAT_HERDER_ADMIN_USER` / `CAT_HERDER_ADMIN_PASSWORD` | Seeded admin for the username/password login (`POST /v1/auth/login`). |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App credentials. |
+| `GITHUB_OAUTH_REDIRECT_URL` | Public base URL of the control plane; the callback path `/v1/auth/github/callback` is appended. |
+| `GITHUB_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to become admin. |
+
+### GitHub OAuth SSO
+
+When all of `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and
+`GITHUB_OAUTH_REDIRECT_URL` are set, GitHub SSO is enabled in addition to (not
+instead of) the username/password login:
+
+- `GET /v1/auth/github/login` redirects to GitHub.
+- `GET /v1/auth/github/callback?code=…&state=…` exchanges the code, loads the
+  authenticated GitHub user, and — **only if that user's login is in
+  `GITHUB_OAUTH_ALLOWED_USERS`** — issues a normal admin session.
+
+Register the OAuth App callback URL as
+`<GITHUB_OAUTH_REDIRECT_URL>/v1/auth/github/callback`. With Helm, set
+`oauth.github.enabled=true` (see `values.yaml`); client id/secret are read from a
+Secret with keys `client-id` / `client-secret`.
+
 ## Toolchain notes
 
 - Rust 1.95+ and Python 3.12+ (via `uv`) are the primary toolchains.

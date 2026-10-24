@@ -52,3 +52,11 @@ export function useAudit() {
 export function useTools() {
   return useQuery({ queryKey: ['tools'], queryFn: () => api.listTools() })
 }
+
+export function useRepos() {
+  return useQuery({ queryKey: ['repos'], queryFn: () => api.listRepos() })
+}
+
+export function useGitHosts() {
+  return useQuery({ queryKey: ['gitHosts'], queryFn: () => api.listGitHosts() })
+}

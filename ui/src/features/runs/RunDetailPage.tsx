@@ -65,6 +65,23 @@ export default function RunDetailPage() {
               <div className="mt-3 space-y-2 text-sm">
                 <Row label="Model" value={orDash(run.model)} />
                 <Row label="Repository" value={orDash(run.repo)} />
+                <Row
+                  label="Pull request"
+                  value={
+                    run.prUrl ? (
+                      <a
+                        href={run.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        {run.prUrl}
+                      </a>
+                    ) : (
+                      '—'
+                    )
+                  }
+                />
                 <Row label="Language" value={orDash(run.language)} />
               </div>
             </Card>

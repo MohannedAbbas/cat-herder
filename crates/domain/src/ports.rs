@@ -5,7 +5,7 @@
 //! per `PLAN.md` §5.
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use crate::entities::{Run, RunId, RunState, TenantId};
+use crate::entities::{GitRepo, Run, RunId, RunState, TenantId};
 use crate::reconcile::RuntimeStatus;
 
 pub type DomainResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -96,6 +96,14 @@ pub trait ToolRepository {
     async fn list(&self) -> DomainResult<Vec<Tool>>;
     async fn get(&self, id: &str) -> DomainResult<Option<Tool>>;
     async fn save(&self, tool: &Tool) -> DomainResult<Tool>;
+    async fn delete(&self, id: &str) -> DomainResult<()>;
+}
+
+/// Git repositories (with encrypted tokens) that agents can clone (see §10).
+pub trait GitRepoRepository {
+    async fn list(&self) -> DomainResult<Vec<GitRepo>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<GitRepo>>;
+    async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo>;
     async fn delete(&self, id: &str) -> DomainResult<()>;
 }
 

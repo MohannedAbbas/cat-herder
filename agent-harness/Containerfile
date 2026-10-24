@@ -1,9 +1,13 @@
 # Cat Herder agent harness image (runs inside the sandbox pod).
 FROM python:3.12-slim
 
+# uv, taken from its official image (keeps the base python image untouched).
+# Pinned so builds don't silently change on future uv releases.
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
+
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY src ./src
 
 # git is needed to clone the target repo; ca-certificates for HTTPS clones.
@@ -11,7 +15,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir .
+# Install deps + the project into a venv, frozen to the lockfile.
+RUN uv sync --frozen --no-dev --no-editable --no-cache
+
+# Make the venv's interpreter the default python on PATH.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Working directory the target repo is cloned into (empty by default).
 RUN mkdir -p /repo

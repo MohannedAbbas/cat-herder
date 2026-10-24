@@ -1,35 +1,50 @@
 //! HTTP adapter (Axum): exposes the control-plane REST API (see `PLAN.md` §14).
 
+use std::sync::Arc;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post, put},
 };
+use tokio::sync::RwLock;
 
 use cat_herder_application::{Outcome, complete_run, start_run};
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
 };
-use cat_herder_domain::entities::{RunId, RunState, TenantId};
+use cat_herder_domain::entities::{Run, RunId, RunState, TenantId};
 use cat_herder_domain::ports::{
     AgentRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
+pub use crypto::AesGcmCipher;
+pub use github_pr::{FileChange, GitHubPrClient};
+pub use key_store::KeySecretStore;
+pub use oauth::{GitHubOAuth, OAuthConfig};
 pub use repo::{
-    AgentRepo, AuditRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    AgentRepo, AuditRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
+    ToolRepo,
 };
 
 mod admin;
 mod auth;
+mod crypto;
+mod github_pr;
+mod key_store;
 mod mcp;
+mod oauth;
 mod repo;
 mod webhook;
 
 /// Settings key for the shared webhook secret.
 pub const WEBHOOK_SECRET_KEY: &str = "webhook_secret";
+
+/// Settings key for the supported git hosts (a JSON array of `{host,label}`).
+pub const GIT_HOSTS_SETTING: &str = "git_hosts";
 
 /// Application state: the data the handlers serve. Runs, agents, sessions,
 /// providers, and models are backed by their repositories (Postgres in production,
@@ -40,13 +55,25 @@ pub struct AppState {
     pub providers: ProviderRepo,
     pub models: ModelRepo,
     pub tools: ToolRepo,
+    pub git_repos: GitRepoRepo,
     pub sessions: SessionRepo,
     pub repo: RunRepo,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
     pub auth: Auth,
+    /// Optional GitHub OAuth SSO provider (present when its env vars are set).
+    pub github_oauth: Option<GitHubOAuth>,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
+    /// Encryption cipher for git tokens (always present; key lives in a Secret and is
+    /// rotated via the admin API).
+    pub cipher: Arc<RwLock<AesGcmCipher>>,
+    /// Secret-backed encryption-key store (present in the real binary; absent in tests).
+    pub key_store: Option<Arc<KeySecretStore>>,
+    /// Optional GitHub PR client (present when `GITHUB_WRITE_TOKEN` is set); opens a
+    /// PR from the agent's diff when a run finishes. Holds the write credential, which
+    /// is never sent to the sandbox.
+    pub pr_client: Option<Arc<GitHubPrClient>>,
 }
 
 impl Default for AppState {
@@ -56,12 +83,17 @@ impl Default for AppState {
             providers: ProviderRepo::InMemory(Default::default()),
             models: ModelRepo::InMemory(Default::default()),
             tools: ToolRepo::InMemory(Default::default()),
+            git_repos: GitRepoRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
+            github_oauth: None,
             runtime: None,
+            cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
+            key_store: None,
+            pr_client: None,
         }
     }
 }
@@ -83,6 +115,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/login", post(admin::login))
         .route("/v1/auth/logout", post(admin::logout))
         .route("/v1/auth/me", get(admin::me))
+        .route("/v1/auth/github/login", get(admin::github_login))
+        .route("/v1/auth/github/callback", get(admin::github_callback))
         // admin
         .route("/v1/admin/agents/{id}", put(admin::upsert_agent).delete(admin::delete_agent))
         .route("/v1/admin/providers", get(admin::list_providers))
@@ -94,7 +128,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
         .route("/v1/admin/tools", get(admin::list_tools))
         .route("/v1/admin/tools/{id}", put(admin::upsert_tool).delete(admin::delete_tool))
+        .route("/v1/admin/repos", get(admin::list_repos).put(admin::upsert_repo).delete(admin::delete_repo))
+        .route("/v1/admin/git-hosts", get(admin::list_git_hosts))
         .route("/v1/admin/settings/webhook-secret", get(admin::get_webhook_secret).post(admin::regenerate_webhook_secret))
+        .route("/v1/admin/settings/encryption-key/rotate", post(admin::rotate_encryption_key))
         .route("/v1/admin/audit", get(admin::list_audit))
         .with_state(state)
 }
@@ -186,6 +223,12 @@ pub struct RunEvent {
     pub event_type: String,
     #[serde(default)]
     pub status: Option<String>,
+    /// The agent's final report (used as the PR body).
+    #[serde(default)]
+    pub report: Option<String>,
+    /// Changed files reported by the harness (used to open a PR).
+    #[serde(default)]
+    pub changes: Option<Vec<FileChange>>,
 }
 
 /// Ingest a harness-reported event for a run.
@@ -204,17 +247,76 @@ async fn post_run_event(
 
     match event.event_type.as_str() {
         "finished" => {
-            let outcome = match event.status.as_deref() {
+            let RunEvent {
+                event_type: _,
+                status,
+                report,
+                changes,
+            } = event;
+            let outcome = match status.as_deref() {
                 Some("failed") => Outcome::Failed,
                 _ => Outcome::Succeeded,
             };
             let run = complete_run(run_id, outcome, &state.repo, &state.sessions)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // On success with a diff, open a PR in the background (the write token
+            // lives here in the control plane, never in the sandbox).
+            if outcome == Outcome::Succeeded {
+                maybe_open_pr(&state, &run, report, changes);
+            }
+
             Ok(Json(RunResponse::from(&run)))
         }
         // "started" and any other event type: acknowledged without a state change.
         _ => Ok(Json(RunResponse::from(&exists))),
+    }
+}
+
+/// Open a PR from the agent's diff, if a PR client is configured and changes exist.
+fn maybe_open_pr(state: &AppState, run: &Run, report: Option<String>, changes: Option<Vec<FileChange>>) {
+    let Some(pr_client) = state.pr_client.clone() else {
+        return;
+    };
+    let Some(repo_url) = run.repo.clone() else {
+        return;
+    };
+    let Some(changes) = changes else {
+        return;
+    };
+    if changes.is_empty() {
+        return;
+    }
+
+    let report = report.unwrap_or_default();
+    let task_spec = run.task_spec.clone();
+    let run_id = run.id;
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let head = format!("cat-herder/run-{}", run_id.0);
+        let title = pr_title(&task_spec);
+        match pr_client.create_pr(&repo_url, &head, &title, &report, &changes).await {
+            Ok(url) => {
+                eprintln!("opened PR for run {}: {url}", run_id.0);
+                if let Ok(Some(mut r)) = state.repo.get(run_id).await {
+                    r.pr_url = Some(url);
+                    let _ = state.repo.save(&r).await;
+                }
+            }
+            Err(e) => eprintln!("PR creation failed for run {}: {e}", run_id.0),
+        }
+    });
+}
+
+/// Derive a short PR title from the task's first line.
+fn pr_title(task_spec: &str) -> String {
+    let first_line = task_spec.lines().next().map(str::trim).unwrap_or("");
+    if first_line.is_empty() {
+        "cat-herder run".to_string()
+    } else {
+        first_line.chars().take(80).collect()
     }
 }
 

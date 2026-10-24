@@ -9,6 +9,7 @@ Kubernetes Secret); it is mapped to the provider's own env var that LangChain re
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -22,15 +23,27 @@ PORT = int(os.environ.get("PORT", "8080"))
 CONTROL_URL = os.environ.get("CAT_HERDER_CONTROL_URL", "").rstrip("/")
 # The repository to clone and work on (injected from the run's `repo` field).
 REPO_URL = os.environ.get("REPO_URL", "").strip()
+# Git token for private-repo clones (optional). Used only via a git askpass
+# helper so the credential never appears in argv or logs.
+GIT_TOKEN = os.environ.get("GIT_TOKEN", "").strip()
 
 
-def report_event(event_type: str, status: str | None = None) -> None:
+def report_event(
+    event_type: str,
+    status: str | None = None,
+    report: str | None = None,
+    changes: list | None = None,
+) -> None:
     """Report a run event back to the control plane (best-effort, non-fatal)."""
     if not CONTROL_URL:
         return
     payload: dict = {"type": event_type}
     if status:
         payload["status"] = status
+    if report:
+        payload["report"] = report
+    if changes is not None:
+        payload["changes"] = changes
     req = urllib.request.Request(
         f"{CONTROL_URL}/v1/runs/{RUN_ID}/events",
         data=json.dumps(payload).encode("utf-8"),
@@ -38,7 +51,7 @@ def report_event(event_type: str, status: str | None = None) -> None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10):
+        with urllib.request.urlopen(req, timeout=30):
             pass
     except Exception as exc:  # noqa: BLE001 — reporting is best-effort
         print(f"failed to report {event_type} event: {exc}", flush=True)
@@ -93,17 +106,47 @@ def is_safe_repo_url(url: str) -> bool:
     return scheme in ALLOWED_REPO_SCHEMES
 
 
+def write_git_askpass() -> str:
+    """Write a git askpass script that supplies `GIT_TOKEN`, returning its path.
+
+    git invokes the askpass script once per credential prompt, passing the prompt
+    text as the first argument. We answer the username prompt with a placeholder
+    and the password prompt with the token, keeping the token out of the clone
+    argv (and therefore out of `ps` and process logs).
+    """
+    path = "/tmp/cat-herder-git-askpass.sh"
+    script = (
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  *sername*) echo \"git\" ;;\n"
+        "  *) echo \"$GIT_TOKEN\" ;;\n"
+        "esac\n"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(script)
+    os.chmod(path, 0o700)
+    return path
+
+
 def clone_repo(repo_url: str) -> bool:
     """Clone the target repo into /repo. Returns True on success."""
     if not is_safe_repo_url(repo_url):
         print(f"refusing to clone unsafe repo URL: {repo_url}", flush=True)
         return False
+
+    env = os.environ.copy()
+    if GIT_TOKEN:
+        env["GIT_ASKPASS"] = write_git_askpass()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_TOKEN"] = GIT_TOKEN
+
     try:
         subprocess.run(
             ["git", "clone", "--depth", "1", "--", repo_url, "/repo"],
             check=True,
             capture_output=True,
             text=True,
+            env=env,
         )
         print(f"cloned {repo_url} into /repo", flush=True)
         return True
@@ -138,6 +181,60 @@ def run_agent(task_spec: str, model: str) -> str:
     return str(result)
 
 
+def _file_change(path: str) -> dict:
+    """Build a change entry for an added/modified file (content read from /repo)."""
+    full = os.path.join("/repo", path)
+    try:
+        with open(full, "rb") as f:
+            content = f.read()
+    except OSError:
+        content = b""
+    return {
+        "path": path,
+        "status": "modified",
+        "content_base64": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def collect_changes() -> list[dict]:
+    """Collect the agent's repo changes as a list of change entries."""
+    if not os.path.isdir("/repo/.git"):
+        return []
+    try:
+        subprocess.run(
+            ["git", "-C", "/repo", "add", "-A"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return []
+
+    proc = subprocess.run(
+        ["git", "-C", "/repo", "diff", "--cached", "--name-status"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return []
+
+    changes: list[dict] = []
+    for line in proc.stdout.splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        status = parts[0]
+        if status == "D":
+            changes.append({"path": parts[1], "status": "deleted"})
+        elif status.startswith("R"):
+            # rename: R<score>\told\tnew
+            changes.append({"path": parts[1], "status": "deleted"})
+            changes.append(_file_change(parts[2]))
+        else:  # A or M
+            changes.append(_file_change(parts[1]))
+    return changes
+
+
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", PORT), HealthHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -168,7 +265,8 @@ def main() -> None:
     try:
         result = run_agent(task_spec, model)
         print(f"agent completed: {result}", flush=True)
-        report_event("finished", status="succeeded")
+        changes = collect_changes()
+        report_event("finished", status="succeeded", report=result, changes=changes)
     except Exception as exc:  # noqa: BLE001 — keep the pod alive and log
         print(f"agent failed: {exc}", flush=True)
         report_event("finished", status="failed")

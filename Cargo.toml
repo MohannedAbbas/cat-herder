@@ -27,4 +27,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate", "m
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 bcrypt = "0.16"
+ring = "0.17"
+base64 = "0.22"
 axum-extra = { version = "0.10", features = ["cookie"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

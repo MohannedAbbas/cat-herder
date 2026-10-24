@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cat_herder_domain::api::Provider;
+use cat_herder_domain::api::{Provider, repo_identity_from_url};
 use cat_herder_domain::entities::{Run, RunId, RunState};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
 use cat_herder_domain::reconcile::RuntimeStatus;
@@ -29,6 +29,9 @@ pub struct SandboxRuntime {
     harness_image: String,
     /// Provider id → (Secret name, Secret key) — refreshed from the provider registry.
     provider_secrets: Arc<RwLock<HashMap<String, (String, String)>>>,
+    /// Repo id (host/path) → decrypted access token — refreshed by the control plane
+    /// (per-repo scoping; the token is only injected for a run whose repo matches).
+    git_tokens: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl SandboxRuntime {
@@ -56,6 +59,7 @@ impl SandboxRuntime {
             namespace,
             harness_image: harness_image.into(),
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
+            git_tokens: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -68,6 +72,21 @@ impl SandboxRuntime {
                 map.insert(p.id.clone(), (p.api_key_secret.clone(), p.api_key_secret_key.clone()));
             }
         }
+    }
+
+    /// Refresh the repo URL → token mapping (tokens already decrypted by the control
+    /// plane). Only enabled repos with a token are kept.
+    pub async fn update_git_tokens(&self, tokens: HashMap<String, String>) {
+        *self.git_tokens.write().await = tokens;
+    }
+
+    /// Resolve the git token scoped to this run's repo, if one is registered. The
+    /// run's `repo` URL is normalized to its canonical identity (host/path), so it
+    /// matches regardless of HTTPS vs SSH or a trailing `.git`.
+    async fn resolve_git_token(&self, run: &Run) -> Option<String> {
+        let repo = run.repo.as_deref()?;
+        let id = repo_identity_from_url(repo).map(|i| i.id())?;
+        self.git_tokens.read().await.get(&id).cloned()
     }
 
     /// Resolve the run's provider and read its API key from the configured Secret.
@@ -91,23 +110,28 @@ impl SandboxRuntime {
         format!("run-{}", id.0)
     }
 
-    fn sandbox_object(&self, run: &Run, api_key: Option<&str>) -> DynamicObject {
+    fn sandbox_object(&self, run: &Run, api_key: Option<&str>, git_token: Option<&str>) -> DynamicObject {
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
             serde_json::json!({ "name": "TENANT_ID", "value": run.tenant.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
         ];
         // The model is agent-specific (from the run's `model`); no global fallback.
-        if let Some(model) = run.model.as_deref() {
-            if !model.is_empty() {
-                env.push(serde_json::json!({ "name": "MODEL", "value": model }));
-            }
+        if let Some(model) = run.model.as_deref()
+            && !model.is_empty()
+        {
+            env.push(serde_json::json!({ "name": "MODEL", "value": model }));
         }
-        // The repo to clone and work on (from the run's `repo` field).
-        if let Some(repo) = run.repo.as_deref() {
-            if !repo.is_empty() {
-                env.push(serde_json::json!({ "name": "REPO_URL", "value": repo }));
-            }
+        // The repo to clone and work on (from the run's `repo` field). Normalize to a
+        // canonical HTTPS URL so the token (which only authenticates over HTTPS)
+        // applies even when the run was triggered with an SSH or `.git`-suffixed URL.
+        if let Some(repo) = run.repo.as_deref()
+            && !repo.is_empty()
+        {
+            let clone_url = repo_identity_from_url(repo)
+                .map(|id| id.url())
+                .unwrap_or_else(|| repo.to_string());
+            env.push(serde_json::json!({ "name": "REPO_URL", "value": clone_url }));
         }
         // The control plane's in-cluster URL, so the harness can report events back.
         let control_url = std::env::var("CAT_HERDER_CONTROL_URL")
@@ -122,6 +146,14 @@ impl SandboxRuntime {
         };
         if let Some(k) = key {
             env.push(serde_json::json!({ "name": "LLM_API_KEY", "value": k }));
+        }
+
+        // Git token scoped to this run's repo (resolved per-repo; see §10). Injected
+        // only when the run targets a registered repo, so a token is never broadened.
+        if let Some(t) = git_token
+            && !t.is_empty()
+        {
+            env.push(serde_json::json!({ "name": "GIT_TOKEN", "value": t }));
         }
 
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
@@ -149,8 +181,12 @@ impl SandboxRuntime {
 impl AgentRuntime for SandboxRuntime {
     async fn spawn(&self, run: &Run) -> DomainResult<()> {
         let api_key = self.resolve_api_key(run).await;
+        let git_token = self.resolve_git_token(run).await;
         self.api
-            .create(&PostParams::default(), &self.sandbox_object(run, api_key.as_deref()))
+            .create(
+                &PostParams::default(),
+                &self.sandbox_object(run, api_key.as_deref(), git_token.as_deref()),
+            )
             .await?;
         Ok(())
     }

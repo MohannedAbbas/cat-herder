@@ -80,6 +80,7 @@ export interface RunRecord {
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
+  prUrl: string | null
 }
 
 /** An LLM provider. The API key is referenced by Secret name, never returned. */
@@ -113,4 +114,30 @@ export interface AuditEntry {
 export interface Tool {
   id: string
   description: string
+}
+
+/** A git host option (e.g. GitHub/GitLab/Codeberg), driven by the settings store. */
+export interface GitHost {
+  host: string
+  label: string
+}
+
+/** A git repository an agent can clone. The token is never returned; `hasToken`
+ * reports whether one is stored (encrypted) server-side. */
+export interface GitRepo {
+  id: string
+  name: string
+  host: string
+  url: string
+  enabled: boolean
+  hasToken: boolean
+}
+
+/** Write model for a git repo. `host` + `repo` (path) are required; the canonical
+ * id/name/url are derived server-side. `token` is write-only. */
+export interface GitRepoWrite {
+  host: string
+  repo: string
+  enabled: boolean
+  token?: string
 }

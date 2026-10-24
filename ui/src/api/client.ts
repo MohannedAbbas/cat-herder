@@ -1,6 +1,9 @@
 import type {
   AgentTemplate,
   AuditEntry,
+  GitHost,
+  GitRepo,
+  GitRepoWrite,
   Model,
   Provider,
   RunRecord,
@@ -50,9 +53,18 @@ export interface CatHerderApi {
   saveTool(id: string, tool: Tool): Promise<Tool>
   deleteTool(id: string): Promise<void>
 
+  // admin — repos
+  listRepos(): Promise<GitRepo[]>
+  listGitHosts(): Promise<GitHost[]>
+  saveRepo(repo: GitRepoWrite): Promise<GitRepo>
+  deleteRepo(id: string): Promise<void>
+
   // admin — webhook secret
   getWebhookSecret(): Promise<{ secret: string | null }>
   regenerateWebhookSecret(): Promise<{ secret: string }>
+
+  // admin — encryption key
+  rotateEncryptionKey(): Promise<void>
 
   // admin — audit
   listAudit(): Promise<AuditEntry[]>

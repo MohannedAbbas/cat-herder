@@ -4,23 +4,27 @@
 //! persisted in Postgres when `CAT_HERDER_DATABASE_URL` is set, otherwise in-memory.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    router, AppState, AgentRepo, AuditRepo, Auth, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
-    SettingRepo, ToolRepo,
+    router, AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, GIT_HOSTS_SETTING, GitHubOAuth,
+    GitHubPrClient, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, ProviderRepo, RunRepo,
+    SessionRepo, SettingRepo, ToolRepo,
 };
 use cat_herder_application::reconcile_once;
-use cat_herder_domain::ports::ProviderRepository;
+use cat_herder_domain::api::default_git_hosts;
+use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
+use tokio::sync::RwLock;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
     InMemoryProviderRepository, InMemorySettingRepository, InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresSettingRepository, PostgresStore, PostgresToolRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresGitRepoRepository,
+    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
+    PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
 };
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -32,6 +36,39 @@ fn agent_models() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Decrypt each enabled repo's token and push a `repo id → token` map into the
+/// runtime. Tokens for disabled repos (or ones that fail to decrypt) are dropped, so
+/// a token is only ever made available for the repo it was registered against.
+async fn refresh_git_tokens(
+    runtime: &SandboxRuntime,
+    repos: &GitRepoRepo,
+    cipher: &Arc<RwLock<AesGcmCipher>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let cipher = cipher.read().await;
+    let mut map = HashMap::new();
+    for repo in repos.list().await? {
+        if !repo.enabled {
+            continue;
+        }
+        if let Some(ct) = &repo.token_ciphertext
+            && let Ok(token) = cipher.decrypt(ct)
+        {
+            map.insert(repo.id, token);
+        }
+    }
+    runtime.update_git_tokens(map).await;
+    Ok(())
+}
+
+/// Seed the supported git hosts into settings if not already present.
+async fn ensure_git_hosts(settings: &SettingRepo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if settings.get(GIT_HOSTS_SETTING).await?.is_none() {
+        let hosts = default_git_hosts();
+        settings.set(GIT_HOSTS_SETTING, &serde_json::to_string(&hosts)?).await?;
+    }
+    Ok(())
+}
+
 /// The repositories (run/agent/session/provider/model), all in-memory or all Postgres.
 struct Repos {
     run: RunRepo,
@@ -39,6 +76,7 @@ struct Repos {
     providers: ProviderRepo,
     models: ModelRepo,
     tools: ToolRepo,
+    git_repos: GitRepoRepo,
     sessions: SessionRepo,
     audit: AuditRepo,
     settings: SettingRepo,
@@ -52,6 +90,7 @@ impl Repos {
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
             tools: ToolRepo::InMemory(InMemoryToolRepository::default()),
+            git_repos: GitRepoRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             audit: AuditRepo::InMemory(InMemoryAuditRepository::default()),
             settings: SettingRepo::InMemory(InMemorySettingRepository::default()),
@@ -81,6 +120,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
                     tools: ToolRepo::Postgres(PostgresToolRepository::new(&store)),
+                    git_repos: GitRepoRepo::Postgres(PostgresGitRepoRepository::new(&store)),
                     sessions: SessionRepo::Postgres(PostgresSessionRepository::new(&store)),
                     audit: AuditRepo::Postgres(PostgresAuditRepository::new(&store)),
                     settings: SettingRepo::Postgres(PostgresSettingRepository::new(&store)),
@@ -109,7 +149,7 @@ async fn main() {
 
     // The runtime is optional at startup — if the cluster/client is unavailable we
     // still serve read endpoints (POST /v1/runs will return 503).
-    let runtime = match SandboxRuntime::new(namespace, harness_image).await {
+    let runtime = match SandboxRuntime::new(namespace.clone(), harness_image).await {
         Ok(rt) => Some(rt),
         Err(e) => {
             eprintln!("warning: execution runtime unavailable: {e}");
@@ -118,6 +158,34 @@ async fn main() {
     };
 
     let repos = build_repos(&agent_models()).await;
+
+    // Seed the git-host list (github/gitlab/codeberg) into settings so the repo form
+    // dropdown is driven by the settings store, not hardcoded.
+    if let Err(e) = ensure_git_hosts(&repos.settings).await {
+        eprintln!("warning: failed to seed git hosts: {e}");
+    }
+
+    // Encryption key for git tokens — read from (or generated into) a Kubernetes
+    // Secret, so it's separated from the ciphertext and managed under k8s RBAC.
+    // Required: fail loudly if the key store is unavailable.
+    let secret_name =
+        std::env::var("CAT_HERDER_ENCRYPTION_SECRET").unwrap_or_else(|_| "cat-herder-encryption".into());
+    let secret_key =
+        std::env::var("CAT_HERDER_ENCRYPTION_SECRET_KEY").unwrap_or_else(|_| "key".into());
+    let key_store = Arc::new(
+        KeySecretStore::connect(&namespace, &secret_name, &secret_key)
+            .await
+            .expect("failed to connect to the encryption-key Secret"),
+    );
+    let cipher = {
+        let key = key_store
+            .load_or_create()
+            .await
+            .expect("failed to initialize the encryption key");
+        Arc::new(RwLock::new(
+            AesGcmCipher::from_base64_key(&key).expect("generated encryption key is invalid"),
+        ))
+    };
 
     // Load providers into the runtime so it can resolve each provider's API key from
     // its Secret at spawn time, and keep the mapping fresh (admin edits).
@@ -131,6 +199,24 @@ async fn main() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 if let Ok(list) = providers.list().await {
                     rt.update_providers(&list).await;
+                }
+            }
+        });
+    }
+
+    // Resolve repo-scoped git tokens (decrypt + map URL → token) into the runtime,
+    // refreshed so admin edits take effect without a restart.
+    if let Some(rt) = runtime.clone() {
+        let git_repos = repos.git_repos.clone();
+        let cipher = cipher.clone();
+        if let Err(e) = refresh_git_tokens(&rt, &git_repos, &cipher).await {
+            eprintln!("git token refresh error: {e}");
+        }
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                if let Err(e) = refresh_git_tokens(&rt, &git_repos, &cipher).await {
+                    eprintln!("git token refresh error: {e}");
                 }
             }
         });
@@ -159,17 +245,46 @@ async fn main() {
         std::env::var("CAT_HERDER_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
     let auth = Auth::new(admin_user, &admin_password);
 
+    // Optional GitHub OAuth SSO. Enabled only when the client id/secret and the
+    // redirect base URL are all configured; the allow-list gates who may sign in.
+    // Password login above remains available regardless.
+    let github_oauth = OAuthConfig::from_env().map(|cfg| {
+        eprintln!(
+            "GitHub OAuth SSO enabled ({} allowed user(s))",
+            cfg.allowed_users.len()
+        );
+        GitHubOAuth::new(cfg)
+    });
+    if github_oauth.is_none() {
+        eprintln!("GitHub OAuth SSO disabled (GITHUB_OAUTH_* not fully configured)");
+    }
+
+    // Optional GitHub PR creation from the agent's diff. The write token lives only
+    // here in the control plane (never injected into the sandbox).
+    let pr_client = std::env::var("GITHUB_WRITE_TOKEN")
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+        .map(|token| {
+            eprintln!("GitHub PR creation enabled");
+            Arc::new(GitHubPrClient::new(token))
+        });
+
     let state = AppState {
         repo: repos.run,
         agents: repos.agents,
         providers: repos.providers,
         models: repos.models,
         tools: repos.tools,
+        git_repos: repos.git_repos,
         sessions: repos.sessions,
         audit: repos.audit,
         settings: repos.settings,
         auth,
+        github_oauth,
         runtime,
+        cipher,
+        key_store: Some(key_store),
+        pr_client,
     };
 
     let app = router(state);

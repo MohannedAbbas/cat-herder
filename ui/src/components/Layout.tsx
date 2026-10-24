@@ -55,6 +55,9 @@ export default function Layout() {
                 <NavLink to="/admin/tools" className={navLinkClass}>
                   Tools
                 </NavLink>
+                <NavLink to="/admin/repos" className={navLinkClass}>
+                  Repos
+                </NavLink>
                 <NavLink to="/admin/webhooks" className={navLinkClass}>
                   Webhooks
                 </NavLink>

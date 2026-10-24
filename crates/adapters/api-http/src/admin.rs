@@ -1,16 +1,21 @@
 //! Admin + auth HTTP handlers (see `PLAN.md` §3/§14). Everything under `/v1/admin`
 //! requires an authenticated admin session (HttpOnly cookie).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 
-use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Tool, new_webhook_secret};
+use cat_herder_domain::api::{
+    AgentTemplate, AuditEntry, GitHost, GitRepo, Model, Provider, Tool, default_git_hosts,
+    new_webhook_secret, repo_identity,
+};
+use cat_herder_domain::entities::GitRepo as GitRepoEntity;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, ModelRepository, ProviderRepository, SettingRepository,
-    ToolRepository,
+    AgentRepository, AuditRepository, GitRepoRepository, ModelRepository, ProviderRepository,
+    SettingRepository, ToolRepository,
 };
 
 use super::AppState;
@@ -45,14 +50,9 @@ pub async fn login(
 ) -> Result<(StatusCode, CookieJar, Json<serde_json::Value>), (StatusCode, String)> {
     match state.auth.login(&creds.username, &creds.password).await {
         Some(token) => {
-            let cookie = Cookie::build(("session", token))
-                .http_only(true)
-                .same_site(axum_extra::extract::cookie::SameSite::Lax)
-                .path("/")
-                .build();
             Ok((
                 StatusCode::OK,
-                jar.add(cookie),
+                jar.add(session_cookie(token)),
                 Json(serde_json::json!({ "ok": true })),
             ))
         }
@@ -64,7 +64,6 @@ pub async fn logout(
     State(state): State<AppState>,
     jar: CookieJar,
 ) -> (StatusCode, CookieJar) {
-    let jar = jar;
     if let Some(c) = jar.get("session") {
         state.auth.logout(c.value()).await;
     }
@@ -82,6 +81,74 @@ pub async fn me(State(state): State<AppState>, jar: CookieJar) -> Json<serde_jso
         "authenticated": authenticated,
         "username": if authenticated { serde_json::json!("admin") } else { serde_json::Value::Null },
     }))
+}
+
+// --- GitHub OAuth SSO ------------------------------------------------------
+
+/// Query params on the OAuth callback (`?code=...&state=...`).
+#[derive(Debug, Deserialize)]
+pub struct GitHubCallback {
+    pub code: String,
+    /// CSRF token that `github_login` stashed in a short-lived cookie.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+fn session_cookie(token: String) -> Cookie<'static> {
+    Cookie::build(("session", token))
+        .http_only(true)
+        .same_site(axum_extra::extract::cookie::SameSite::Lax)
+        .path("/")
+        .build()
+}
+
+/// Begin the GitHub OAuth flow: set a CSRF `state` cookie and redirect to GitHub.
+pub async fn github_login(State(state): State<AppState>, jar: CookieJar) -> Response {
+    match state.github_oauth.as_ref() {
+        Some(oauth) => {
+            let csrf = uuid::Uuid::new_v4().to_string();
+            let cookie = Cookie::build(("gh_oauth_state", csrf.clone()))
+                .http_only(true)
+                .same_site(axum_extra::extract::cookie::SameSite::Lax)
+                .path("/")
+                .build();
+            // Append the CSRF state to GitHub's authorize URL.
+            let url = format!("{}&state={}", oauth.config().authorize_url(), csrf);
+            (jar.add(cookie), Redirect::temporary(url.as_str())).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "GitHub OAuth not configured").into_response(),
+    }
+}
+
+/// Complete the GitHub OAuth flow: verify `state`, exchange the code, fetch the
+/// user, enforce the allow-list, then issue a normal admin session.
+pub async fn github_callback(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(params): axum::extract::Query<GitHubCallback>,
+) -> Response {
+    let Some(oauth) = state.github_oauth.as_ref() else {
+        return (StatusCode::NOT_FOUND, "GitHub OAuth not configured").into_response();
+    };
+
+    // CSRF check: the callback state must match the cookie set at login.
+    let expected = jar.get("gh_oauth_state").map(|c| c.value().to_string());
+    if expected.is_none() || expected.as_deref() != params.state.as_deref() {
+        return (StatusCode::BAD_REQUEST, "invalid OAuth state").into_response();
+    }
+    let clear_state = Cookie::build(("gh_oauth_state", "")).path("/").build();
+
+    match oauth.authenticate(&params.code).await {
+        Ok(_login) => {
+            let token = state.auth.create_session().await;
+            let response = Redirect::to("/").into_response();
+            (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
+        }
+        Err(super::oauth::AuthOutcome::NotAllowed) => {
+            (StatusCode::FORBIDDEN, "GitHub user not authorized").into_response()
+        }
+        Err(_) => (StatusCode::BAD_GATEWAY, "GitHub authentication failed").into_response(),
+    }
 }
 
 // --- agents ----------------------------------------------------------------
@@ -272,6 +339,198 @@ pub async fn delete_tool(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     audit(&state, &actor, "tool.delete", "tool", &id).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- git repos -------------------------------------------------------------
+
+/// Write model for `PUT /v1/admin/repos`. Only the host + repo path are required; the
+/// canonical `id`/`name`/`url` are derived server-side. The token is write-only.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepoWrite {
+    /// Git host (e.g. `github.com`), from the configured git-hosts list.
+    pub host: String,
+    /// Repo path, e.g. `org/repo` or `group/subgroup/repo`.
+    pub repo: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Access token. Blank/omitted on update keeps the existing token.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// Query model for `DELETE /v1/admin/repos?id=HOST/PATH`.
+#[derive(Debug, Deserialize)]
+pub struct DeleteRepoQuery {
+    pub id: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub async fn list_repos(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<Vec<GitRepo>>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    let repos = state
+        .git_repos
+        .list()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(repos.iter().map(GitRepo::from).collect()))
+}
+
+/// The configured git hosts (from settings), used to populate the repo form dropdown.
+pub async fn list_git_hosts(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<Vec<GitHost>>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    let hosts = state
+        .settings
+        .get(super::GIT_HOSTS_SETTING)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(default_git_hosts);
+    Ok(Json(hosts))
+}
+
+pub async fn upsert_repo(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(write): Json<GitRepoWrite>,
+) -> Result<Json<GitRepo>, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+
+    let identity = repo_identity(&write.host, &write.repo).ok_or((
+        StatusCode::BAD_REQUEST,
+        "invalid repository; expected a git host + repo path (e.g. github.com + org/repo)"
+            .to_string(),
+    ))?;
+    let id = identity.id();
+    let name = identity.path.clone();
+    let url = identity.url();
+
+    // A provided token is encrypted; otherwise the existing ciphertext (if any) is
+    // kept so a plain metadata edit doesn't wipe the credential.
+    let token_ciphertext = match write.token.as_deref() {
+        Some(t) if !t.is_empty() => {
+            let encrypted = {
+                let cipher = state.cipher.read().await;
+                cipher.encrypt(t)
+            };
+            Some(encrypted.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?)
+        }
+        _ => state
+            .git_repos
+            .get(&id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .and_then(|r| r.token_ciphertext),
+    };
+
+    let entity = GitRepoEntity {
+        id,
+        name,
+        url,
+        token_ciphertext,
+        enabled: write.enabled,
+    };
+    let saved = state
+        .git_repos
+        .save(&entity)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "repo.upsert", "repo", &saved.id).await;
+    Ok(Json(GitRepo::from(&saved)))
+}
+
+pub async fn delete_repo(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Query(query): Query<DeleteRepoQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    let id = query.id;
+    state
+        .git_repos
+        .delete(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "repo.delete", "repo", &id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- encryption key rotation -----------------------------------------------
+
+/// Rotate the encryption key: generate a fresh key, re-encrypt every stored git
+/// token under it, write the new key to its Secret, and swap the in-memory cipher.
+pub async fn rotate_encryption_key(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+
+    let store = state.key_store.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "encryption key store not configured".to_string(),
+    ))?;
+
+    let old_key = store.load().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let old_cipher = old_key
+        .as_deref()
+        .map(super::crypto::AesGcmCipher::from_base64_key)
+        .transpose()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let new_key = super::crypto::AesGcmCipher::generate_key_base64()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let new_cipher = super::crypto::AesGcmCipher::from_base64_key(&new_key)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Phase 1: decrypt + re-encrypt every stored token IN MEMORY (no persistence yet).
+    // If any step fails here, nothing has been written and the old key is untouched.
+    let mut reencrypted: Vec<GitRepoEntity> = Vec::new();
+    if let Some(old) = &old_cipher {
+        let repos = state
+            .git_repos
+            .list()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        for repo in repos {
+            if let Some(ct) = &repo.token_ciphertext {
+                let plaintext =
+                    old.decrypt(ct).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                let new_ct =
+                    new_cipher.encrypt(&plaintext).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                let mut updated = repo.clone();
+                updated.token_ciphertext = Some(new_ct);
+                reencrypted.push(updated);
+            }
+        }
+    }
+
+    // Phase 2: persist the new key FIRST — a failure here (e.g. RBAC) leaves both
+    // the Secret and the stored tokens unchanged.
+    store.store(&new_key).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Phase 3: save the re-encrypted tokens under the now-persisted new key.
+    for updated in reencrypted {
+        state
+            .git_repos
+            .save(&updated)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    // Phase 4: make the new key the active in-memory cipher.
+    *state.cipher.write().await = new_cipher;
+
+    audit(&state, &actor, "encryption-key.rotate", "settings", "encryption_key").await;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // --- webhook secret --------------------------------------------------------

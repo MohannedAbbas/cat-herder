@@ -42,12 +42,19 @@ impl Auth {
         if !ok {
             return None;
         }
+        Some(self.create_session().await)
+    }
+
+    /// Issue a session without a password check. Used by SSO providers (e.g. GitHub
+    /// OAuth) *after* they have independently authenticated the identity against an
+    /// allow-list. Reuses the same in-memory session store as password login.
+    pub async fn create_session(&self) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         self.sessions
             .write()
             .await
             .insert(token.clone(), Instant::now() + SESSION_TTL);
-        Some(token)
+        token
     }
 
     pub async fn valid_session(&self, token: &str) -> bool {
@@ -59,5 +66,42 @@ impl Auth {
 
     pub async fn logout(&self, token: &str) {
         self.sessions.write().await.remove(token);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn password_login_issues_valid_session() {
+        let auth = Auth::new("admin", "hunter2");
+        assert!(auth.login("admin", "wrong").await.is_none());
+        let token = auth.login("admin", "hunter2").await.expect("login ok");
+        assert!(auth.valid_session(&token).await);
+        auth.logout(&token).await;
+        assert!(!auth.valid_session(&token).await);
+    }
+
+    #[tokio::test]
+    async fn create_session_issues_valid_session_without_password() {
+        // Simulates the SSO path: a session minted after external authentication.
+        let auth = Auth::new("admin", "hunter2");
+        let token = auth.create_session().await;
+        assert!(auth.valid_session(&token).await);
+    }
+
+    #[tokio::test]
+    async fn create_session_tokens_are_unique() {
+        let auth = Auth::new("admin", "hunter2");
+        let a = auth.create_session().await;
+        let b = auth.create_session().await;
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn unknown_token_is_invalid() {
+        let auth = Auth::new("admin", "hunter2");
+        assert!(!auth.valid_session("nope").await);
     }
 }

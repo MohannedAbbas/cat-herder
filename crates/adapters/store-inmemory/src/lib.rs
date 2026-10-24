@@ -9,10 +9,10 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool, now_iso,
 };
 use cat_herder_domain::catalog;
-use cat_herder_domain::entities::{Run, RunId, TenantId};
+use cat_herder_domain::entities::{GitRepo, Run, RunId, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
+    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
 };
 use tokio::sync::RwLock;
 
@@ -269,6 +269,32 @@ impl ToolRepository for InMemoryToolRepository {
     }
 }
 
+/// In-memory git repositories (with encrypted tokens). No seed data.
+#[derive(Clone, Default)]
+pub struct InMemoryGitRepoRepository {
+    repos: Arc<RwLock<HashMap<String, GitRepo>>>,
+}
+
+impl GitRepoRepository for InMemoryGitRepoRepository {
+    async fn list(&self) -> DomainResult<Vec<GitRepo>> {
+        Ok(self.repos.read().await.values().cloned().collect())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<GitRepo>> {
+        Ok(self.repos.read().await.get(id).cloned())
+    }
+
+    async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo> {
+        self.repos.write().await.insert(repo.id.clone(), repo.clone());
+        Ok(repo.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.repos.write().await.remove(id);
+        Ok(())
+    }
+}
+
 /// In-memory key-value settings.
 #[derive(Clone)]
 pub struct InMemorySettingRepository {
@@ -377,6 +403,7 @@ mod tests {
             language: None,
             started_at: None,
             finished_at: None,
+            pr_url: None,
         }
     }
 
@@ -422,5 +449,22 @@ mod tests {
         let sess = repo.get("sess-01").await.unwrap().unwrap();
         assert_eq!(sess.runs.len(), 3);
         assert!(repo.get("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn git_repo_save_get_delete_roundtrip() {
+        let repo = InMemoryGitRepoRepository::default();
+        let r = GitRepo {
+            id: "cat-herder".into(),
+            name: "Cat Herder".into(),
+            url: "https://github.com/org/cat-herder.git".into(),
+            token_ciphertext: Some("v1:abc".into()),
+            enabled: true,
+        };
+        repo.save(&r).await.unwrap();
+        assert_eq!(repo.list().await.unwrap().len(), 1);
+        assert!(repo.get("cat-herder").await.unwrap().unwrap().token_ciphertext.is_some());
+        repo.delete("cat-herder").await.unwrap();
+        assert!(repo.get("cat-herder").await.unwrap().is_none());
     }
 }

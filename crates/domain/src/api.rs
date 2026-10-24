@@ -110,6 +110,38 @@ pub struct Tool {
     pub description: String,
 }
 
+/// A git repository as exposed by the admin API. The token is never returned;
+/// `has_token` reports whether one is stored (encrypted) server-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepo {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub url: String,
+    pub enabled: bool,
+    pub has_token: bool,
+}
+
+impl From<&crate::entities::GitRepo> for GitRepo {
+    fn from(repo: &crate::entities::GitRepo) -> Self {
+        let host = repo
+            .id
+            .split_once('/')
+            .map(|(host, _)| host)
+            .unwrap_or_default()
+            .to_string();
+        Self {
+            id: repo.id.clone(),
+            name: repo.name.clone(),
+            host,
+            url: repo.url.clone(),
+            enabled: repo.enabled,
+            has_token: repo.token_ciphertext.is_some(),
+        }
+    }
+}
+
 /// Request body for `POST /v1/runs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRunRequest {
@@ -151,6 +183,7 @@ pub struct RunResponse {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub pr_url: Option<String>,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -169,6 +202,7 @@ impl From<&crate::entities::Run> for RunResponse {
             created_at: to_iso(run.created_at),
             started_at: run.started_at.map(to_iso),
             finished_at: run.finished_at.map(to_iso),
+            pr_url: run.pr_url.clone(),
         }
     }
 }
@@ -229,9 +263,128 @@ pub fn is_safe_repo_url(url: &str) -> bool {
     scheme == "https" || scheme == "ssh"
 }
 
+/// A git host option for the repo form, e.g. GitHub/GitLab/Codeberg. The list is
+/// seeded into the settings store (`git_hosts`) so it's configurable, not hardcoded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHost {
+    pub host: String,
+    pub label: String,
+}
+
+/// Default supported git hosts (seeded into settings on first boot).
+pub fn default_git_hosts() -> Vec<GitHost> {
+    vec![
+        GitHost { host: "github.com".into(), label: "GitHub".into() },
+        GitHost { host: "gitlab.com".into(), label: "GitLab".into() },
+        GitHost { host: "codeberg.org".into(), label: "Codeberg".into() },
+    ]
+}
+
+/// A transport-agnostic git repository identity: a host plus a repo path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoIdentity {
+    pub host: String,
+    pub path: String,
+}
+
+impl RepoIdentity {
+    /// Canonical unique id, e.g. `gitlab.com/group/subgroup/repo`.
+    pub fn id(&self) -> String {
+        format!("{}/{}", self.host, self.path)
+    }
+
+    /// Canonical HTTPS clone URL.
+    pub fn url(&self) -> String {
+        format!("https://{}/{}", self.host, self.path)
+    }
+}
+
+/// Whether `host` is a plausible git hostname (DNS name; no scheme/user). Case is
+/// ignored — callers lowercase it for canonicalization.
+pub fn is_valid_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+}
+
+/// GitHub paths are case-insensitive; other hosts (GitLab/Codeberg) are
+/// case-sensitive. Fold accordingly so spellings of the *same* repo collapse to one
+/// identity without corrupting case-sensitive hosts.
+fn fold_path(host: &str, path: &str) -> String {
+    if host == "github.com" {
+        path.to_ascii_lowercase()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Trim + validate a repo path (1+ segments; alphanumeric + `-._`), stripping a
+/// trailing `.git` or `/`.
+fn clean_path(input: &str) -> Option<String> {
+    let mut s = input.trim();
+    s = s.trim_end_matches('/');
+    s = s.strip_suffix(".git").unwrap_or(s);
+    if s.is_empty() || s.starts_with('/') {
+        return None;
+    }
+    let segments: Vec<&str> = s.split('/').collect();
+    if segments.len() < 2 || segments.iter().any(|seg| seg.is_empty()) {
+        return None;
+    }
+    let valid = segments.iter().all(|seg| {
+        seg.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    });
+    if !valid {
+        return None;
+    }
+    Some(segments.join("/"))
+}
+
+/// Build a canonical identity from an explicit host + repo path (the form inputs).
+pub fn repo_identity(host: &str, path: &str) -> Option<RepoIdentity> {
+    let host = host.trim().to_ascii_lowercase();
+    if !is_valid_host(&host) {
+        return None;
+    }
+    let path = clean_path(path)?;
+    let path = fold_path(&host, &path);
+    Some(RepoIdentity { host, path })
+}
+
+/// Extract `(host, path)` from a URL (HTTPS or SSH), before validation.
+fn parse_url_host_path(url: &str) -> Option<(String, String)> {
+    let s = url.trim();
+    if let Some(rest) = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")) {
+        let (host, path) = rest.split_once('/')?;
+        return Some((host.to_ascii_lowercase(), path.to_string()));
+    }
+    // SSH scp-like: git@host:path
+    if let Some(rest) = s.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        return Some((host.to_ascii_lowercase(), path.to_string()));
+    }
+    // SSH URL: ssh://git@host/path
+    if let Some(rest) = s.strip_prefix("ssh://").and_then(|r| r.strip_prefix("git@")) {
+        let (host, path) = rest.split_once('/')?;
+        return Some((host.to_ascii_lowercase(), path.to_string()));
+    }
+    None
+}
+
+/// Parse a full repo URL (HTTPS or SSH) into a canonical identity, for matching a
+/// run's `repo` against a registered repo regardless of transport or `.git` suffix.
+pub fn repo_identity_from_url(url: &str) -> Option<RepoIdentity> {
+    let (host, path) = parse_url_host_path(url)?;
+    repo_identity(&host, &path)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_safe_repo_url;
+    use super::{
+        default_git_hosts, is_safe_repo_url, is_valid_host, repo_identity, repo_identity_from_url,
+    };
 
     #[test]
     fn repo_url_scheme_validation() {
@@ -244,5 +397,74 @@ mod tests {
         assert!(!is_safe_repo_url("-oProxyCommand=sh"));
         assert!(!is_safe_repo_url("http://host/repo"));
         assert!(!is_safe_repo_url(""));
+    }
+
+    #[test]
+    fn default_git_hosts_are_seeded() {
+        let hosts = default_git_hosts();
+        let names: Vec<&str> = hosts.iter().map(|h| h.host.as_str()).collect();
+        assert_eq!(names, ["github.com", "gitlab.com", "codeberg.org"]);
+    }
+
+    #[test]
+    fn repo_identity_builds_id_and_url() {
+        let id = repo_identity("GitHub.com", "MohannedAbbas/cat-herder").unwrap();
+        assert_eq!(id.id(), "github.com/mohannedabbas/cat-herder");
+        assert_eq!(id.url(), "https://github.com/mohannedabbas/cat-herder");
+    }
+
+    #[test]
+    fn repo_identity_preserves_case_on_non_github() {
+        let id = repo_identity("gitlab.com", "Group/Sub/Repo").unwrap();
+        assert_eq!(id.id(), "gitlab.com/Group/Sub/Repo");
+    }
+
+    #[test]
+    fn repo_identity_strips_git_suffix() {
+        let id = repo_identity("github.com", "org/repo.git").unwrap();
+        assert_eq!(id.path, "org/repo");
+    }
+
+    #[test]
+    fn repo_identity_rejects_invalid() {
+        assert!(repo_identity("", "org/repo").is_none());
+        assert!(repo_identity("github.com", "").is_none());
+        assert!(repo_identity("github.com", "single-segment").is_none());
+        assert!(repo_identity("github.com", "a//b").is_none());
+        assert!(repo_identity("github.com", "a/b c").is_none());
+        assert!(repo_identity("https://github.com", "a/b").is_none(), "host must not carry a scheme");
+    }
+
+    #[test]
+    fn repo_identity_from_url_parses_https_ssh_and_short() {
+        let https = repo_identity_from_url("https://github.com/Org/Repo.git").unwrap();
+        assert_eq!(https.id(), "github.com/org/repo");
+
+        let ssh_scp = repo_identity_from_url("git@github.com:Org/Repo.git").unwrap();
+        assert_eq!(ssh_scp.id(), "github.com/org/repo");
+
+        let ssh_url = repo_identity_from_url("ssh://git@gitlab.com/Group/Sub/Repo.git").unwrap();
+        assert_eq!(ssh_url.id(), "gitlab.com/Group/Sub/Repo");
+
+        assert_eq!(https, ssh_scp, "HTTPS and SSH must collapse to one identity");
+    }
+
+    #[test]
+    fn repo_identity_from_url_maps_ssh_to_https_url() {
+        // The runtime rewrites SSH → HTTPS so the PAT (HTTPS-only) applies.
+        let scp = repo_identity_from_url("git@github.com:Org/Repo.git").unwrap();
+        assert_eq!(scp.url(), "https://github.com/org/repo");
+
+        let ssh = repo_identity_from_url("ssh://git@gitlab.com/Group/Sub/Repo.git").unwrap();
+        assert_eq!(ssh.url(), "https://gitlab.com/Group/Sub/Repo");
+    }
+
+    #[test]
+    fn is_valid_host_checks_format() {
+        assert!(is_valid_host("github.com"));
+        assert!(is_valid_host("codeberg.org"));
+        assert!(is_valid_host("GitHub.com"), "case is ignored at validation");
+        assert!(!is_valid_host("https://github.com"));
+        assert!(!is_valid_host("github.com/path"));
     }
 }

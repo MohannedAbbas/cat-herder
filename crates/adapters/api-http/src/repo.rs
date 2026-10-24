@@ -3,20 +3,20 @@
 //! production persistence (wired in `crates/bin/cat-herder`).
 
 use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use cat_herder_domain::entities::{Run, RunId, TenantId};
+use cat_herder_domain::entities::{GitRepo, Run, RunId, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, DomainResult, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
+    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
 };
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
-    InMemoryProviderRepository, InMemoryRunRepository, InMemorySessionRepository,
-    InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryGitRepoRepository,
+    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
+    InMemorySessionRepository, InMemorySettingRepository, InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresSettingRepository, PostgresToolRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresGitRepoRepository,
+    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
+    PostgresSessionRepository, PostgresSettingRepository, PostgresToolRepository,
 };
 
 #[derive(Clone)]
@@ -228,6 +228,42 @@ impl ToolRepository for ToolRepo {
 }
 
 #[derive(Clone)]
+pub enum GitRepoRepo {
+    InMemory(InMemoryGitRepoRepository),
+    Postgres(PostgresGitRepoRepository),
+}
+
+impl GitRepoRepository for GitRepoRepo {
+    async fn list(&self) -> DomainResult<Vec<GitRepo>> {
+        match self {
+            GitRepoRepo::InMemory(r) => r.list().await,
+            GitRepoRepo::Postgres(p) => p.list().await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<GitRepo>> {
+        match self {
+            GitRepoRepo::InMemory(r) => r.get(id).await,
+            GitRepoRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo> {
+        match self {
+            GitRepoRepo::InMemory(r) => r.save(repo).await,
+            GitRepoRepo::Postgres(p) => p.save(repo).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            GitRepoRepo::InMemory(r) => r.delete(id).await,
+            GitRepoRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum SettingRepo {
     InMemory(InMemorySettingRepository),
     Postgres(PostgresSettingRepository),
@@ -315,6 +351,7 @@ mod tests {
             language: None,
             started_at: None,
             finished_at: None,
+            pr_url: None,
         }
     }
 
