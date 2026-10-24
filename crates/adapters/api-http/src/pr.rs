@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 /// A changed file reported by the harness.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct FileChange {
     pub path: String,
     /// `added` | `modified` | `deleted`.
@@ -325,4 +324,33 @@ fn urlencode(input: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_change_deserializes_harness_shape() {
+        // The harness sends snake_case keys.
+        let json = r#"{"path":"README.md","status":"modified","content_base64":"aGVsbG8="}"#;
+        let c: FileChange = serde_json::from_str(json).expect("valid harness payload");
+        assert_eq!(c.path, "README.md");
+        assert_eq!(c.status, "modified");
+        assert_eq!(c.content_base64.as_deref(), Some("aGVsbG8="));
+    }
+
+    #[test]
+    fn file_change_deleted_has_no_content() {
+        let json = r#"{"path":"old.txt","status":"deleted"}"#;
+        let c: FileChange = serde_json::from_str(json).expect("valid harness payload");
+        assert_eq!(c.status, "deleted");
+        assert!(c.content_base64.is_none());
+    }
+
+    #[test]
+    fn gitlab_project_path_is_percent_encoded() {
+        assert_eq!(form_urlencode_path("group/subgroup/repo"), "group%2Fsubgroup%2Frepo");
+        assert_eq!(form_urlencode_path("owner/repo"), "owner%2Frepo");
+    }
 }
