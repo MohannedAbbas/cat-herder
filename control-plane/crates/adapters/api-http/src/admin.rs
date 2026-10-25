@@ -88,13 +88,27 @@ pub async fn me(State(state): State<AppState>, jar: CookieJar) -> Json<serde_jso
 /// render. Public (login page is unauthenticated); leaks only provider names.
 pub async fn sso_providers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let mut providers = Vec::with_capacity(2);
-    if state.github_oauth.is_some() {
+    if state.mock_oauth.is_some() {
+        // Dev-only mock mode pretends both providers are configured.
         providers.push("github");
-    }
-    if state.gitlab_oauth.is_some() {
         providers.push("gitlab");
+    } else {
+        if state.github_oauth.is_some() {
+            providers.push("github");
+        }
+        if state.gitlab_oauth.is_some() {
+            providers.push("gitlab");
+        }
     }
     Json(serde_json::json!({ "providers": providers }))
+}
+
+/// Dev-only mock OAuth: issue an admin session directly for the mock username and
+/// redirect to `/` (mirrors a successful callback) without contacting the provider.
+async fn mock_login(state: &AppState, jar: CookieJar, username: &str) -> Response {
+    let token = state.auth.create_session_for(username.to_string()).await;
+    let response = Redirect::to("/").into_response();
+    (jar.add(session_cookie(token)), response).into_response()
 }
 
 // --- GitHub OAuth SSO ------------------------------------------------------
@@ -118,6 +132,9 @@ fn session_cookie(token: String) -> Cookie<'static> {
 
 /// Begin the GitHub OAuth flow: set a CSRF `state` cookie and redirect to GitHub.
 pub async fn github_login(State(state): State<AppState>, jar: CookieJar) -> Response {
+    if let Some(mock_user) = state.mock_oauth.clone() {
+        return mock_login(&state, jar, &mock_user).await;
+    }
     match state.github_oauth.as_ref() {
         Some(oauth) => {
             let csrf = uuid::Uuid::new_v4().to_string();
@@ -178,6 +195,9 @@ pub struct GitLabCallback {
 
 /// Begin the GitLab OAuth flow: set a CSRF `state` cookie and redirect to GitLab.
 pub async fn gitlab_login(State(state): State<AppState>, jar: CookieJar) -> Response {
+    if let Some(mock_user) = state.mock_oauth.clone() {
+        return mock_login(&state, jar, &mock_user).await;
+    }
     match state.gitlab_oauth.as_ref() {
         Some(oauth) => {
             let csrf = uuid::Uuid::new_v4().to_string();

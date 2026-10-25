@@ -55,6 +55,26 @@ other logins still work.
 Helm wires these from `oauth.github` / `oauth.gitlab` in [values.yaml](/deploy/helm-chart.md)
 (client id/secret from a Secret with keys `client-id` / `client-secret`).
 
+## Dev-only mock mode (`CAT_HERDER_OAUTH_MOCK`)
+
+For exercising the SSO login flow locally **without** registering a real GitHub/GitLab
+OAuth app, set `CAT_HERDER_OAUTH_MOCK=true` (env) on the control plane. In mock mode:
+
+- `GET /v1/auth/sso-providers` reports **both** `["github", "gitlab"]` regardless of
+  whether real OAuth is configured, so the UI renders both buttons.
+- `GET /v1/auth/{github,gitlab}/login` **skips** the redirect to the real provider and
+  instead mints an admin session directly via `Auth::create_session_for(...)` for the
+  mock username, then redirects to `/` (exactly like a successful callback).
+- The mock username comes from `CAT_HERDER_OAUTH_MOCK_USERNAME` (default `"dev-user"`).
+- The `/callback` routes are unchanged — they are only hit by the real flow.
+
+`AppState.mock_oauth: Option<String>` carries the mock username (present only when the
+flag is on). With Helm, enable it via `oauth.mock.enabled: true` (and optionally
+`oauth.mock.username`); the chart injects `CAT_HERDER_OAUTH_MOCK` /
+`CAT_HERDER_OAUTH_MOCK_USERNAME`.
+
+> **This bypasses real authentication — it is dev-only and MUST be off in production.**
+
 ## Notes
 
 - Sessions are in-memory: an API restart logs admins out.

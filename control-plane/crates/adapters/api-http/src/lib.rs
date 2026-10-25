@@ -67,6 +67,11 @@ pub struct AppState {
     pub github_oauth: Option<GitHubOAuth>,
     /// Optional GitLab OAuth SSO provider (present when its env vars are set).
     pub gitlab_oauth: Option<GitLabOAuth>,
+    /// Dev-only mock OAuth mode. When `Some(username)`, both GitHub and GitLab SSO are
+    /// reported as enabled and their `/login` routes skip the real provider redirect,
+    /// issuing an admin session directly for `username`. Set via `CAT_HERDER_OAUTH_MOCK`
+    /// (+ `CAT_HERDER_OAUTH_MOCK_USERNAME`); must be off in production.
+    pub mock_oauth: Option<String>,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
@@ -94,6 +99,7 @@ impl Default for AppState {
             auth: Auth::new("admin", "admin"),
             github_oauth: None,
             gitlab_oauth: None,
+            mock_oauth: None,
             runtime: None,
             cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
             key_store: None,

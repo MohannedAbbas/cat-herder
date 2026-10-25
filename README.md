@@ -72,6 +72,8 @@ The control plane is configured via environment variables:
 | `GITLAB_OAUTH_CLIENT_ID` / `GITLAB_OAUTH_CLIENT_SECRET` | GitLab OAuth application credentials. |
 | `GITLAB_OAUTH_REDIRECT_URL` | Public base URL of the control plane; the callback path `/v1/auth/gitlab/callback` is appended. |
 | `GITLAB_OAUTH_ALLOWED_USERS` | Comma-separated GitLab usernames allowed to become admin. |
+| `CAT_HERDER_OAUTH_MOCK` | Dev-only: when truthy (`true`/`1`/`yes`/`on`), pretend both SSO providers are configured and skip the provider redirect (see below). Default false. **Never enable in production.** |
+| `CAT_HERDER_OAUTH_MOCK_USERNAME` | Mock SSO username issued in mock mode (default `dev-user`). |
 
 ### GitHub OAuth SSO
 
@@ -118,6 +120,23 @@ endpoint. Signed-in SSO sessions report the provider login from `GET /v1/auth/me
 For local dev, Tilt exposes the API on `:8080`; set `oauth.github.redirectUrl` /
 `oauth.gitlab.redirectUrl` to `http://localhost:8080` and register the matching
 callback URL with the provider.
+
+### Dev-only mock SSO (no OAuth app required)
+
+To exercise the SSO login flow locally **without registering a real GitHub/GitLab
+OAuth app**, enable mock mode on the control plane with
+`CAT_HERDER_OAUTH_MOCK=true` (username via `CAT_HERDER_OAUTH_MOCK_USERNAME`, default
+`dev-user`). While enabled:
+
+- `GET /v1/auth/sso-providers` reports both `["github", "gitlab"]`, so the UI shows
+  both buttons.
+- `GET /v1/auth/{github,gitlab}/login` skips the provider redirect and mints an admin
+  session directly as the mock username, then redirects to `/` (like a successful
+  callback). The `/callback` routes are unchanged.
+
+With Helm set `oauth.mock.enabled: true` (optionally `oauth.mock.username`); the chart
+injects the two env vars. **This bypasses real authentication — dev-only, MUST be off
+in production.**
 
 ## Toolchain notes
 

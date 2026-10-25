@@ -163,6 +163,15 @@ oauth:
     secret: cat-herder-gitlab-oauth
     redirectUrl: ""
     allowedUsers: []
+  # DEV-ONLY mock OAuth. When enabled, the control plane pretends GitHub and GitLab
+  # SSO are both configured WITHOUT any real client id/secret: both providers are
+  # reported by /v1/auth/sso-providers and their `/login` routes skip the provider
+  # redirect, minting an admin session directly as `username`. Handy for exercising
+  # the SSO login flow locally (no OAuth app registration needed).
+  # MUST be off in production — it bypasses real authentication.
+  mock:
+    enabled: false
+    username: dev-user
 
 ingress:
   enabled: false

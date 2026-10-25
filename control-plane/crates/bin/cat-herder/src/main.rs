@@ -36,6 +36,18 @@ fn agent_models() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Parse a boolean env var: true for `1`/`true`/`yes`/`on` (case-insensitive),
+/// false when unset or anything else.
+fn parse_bool_env(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .ok()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
 /// Decrypt each enabled repo's token and push a `repo id → token` map into the
 /// runtime. Tokens for disabled repos (or ones that fail to decrypt) are dropped, so
 /// a token is only ever made available for the repo it was registered against.
@@ -290,6 +302,23 @@ async fn main() {
         eprintln!("GitLab OAuth SSO disabled (GITLAB_OAUTH_* not fully configured)");
     }
 
+    // Dev-only mock OAuth: when CAT_HERDER_OAUTH_MOCK is truthy, pretend both GitHub
+    // and GitLab SSO are configured and have their `/login` routes mint an admin
+    // session directly for CAT_HERDER_OAUTH_MOCK_USERNAME (no real OAuth app needed).
+    // MUST be off in production.
+    let mock_oauth = parse_bool_env("CAT_HERDER_OAUTH_MOCK").then(|| {
+        let username = std::env::var("CAT_HERDER_OAUTH_MOCK_USERNAME")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "dev-user".to_string());
+        eprintln!(
+            "warning: MOCK OAuth enabled (CAT_HERDER_OAUTH_MOCK) — SSO signs in as \
+             '{username}' without a real provider; dev-only, MUST be off in production"
+        );
+        username
+    });
+
     let state = AppState {
         repo: repos.run,
         agents: repos.agents,
@@ -303,6 +332,7 @@ async fn main() {
         auth,
         github_oauth,
         gitlab_oauth,
+        mock_oauth,
         runtime,
         cipher,
         key_store: Some(key_store),

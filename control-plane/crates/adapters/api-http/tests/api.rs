@@ -780,6 +780,71 @@ async fn sso_providers_lists_both_when_configured() {
 }
 
 #[tokio::test]
+async fn sso_providers_reports_both_when_mock_enabled() {
+    // Mock mode pretends both providers are configured without any OAuth config.
+    let mut state = AppState::default();
+    state.mock_oauth = Some("dev-user".into());
+    assert_eq!(sso_providers(router(state)).await, vec!["github", "gitlab"]);
+}
+
+#[tokio::test]
+async fn github_login_mock_issues_session_and_redirects_home() {
+    let mut state = AppState::default();
+    state.mock_oauth = Some("dev-user".into());
+    // Share the in-memory session store between the login and the follow-up /me call.
+    let shared = state.clone();
+    let res = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/github/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Redirects to `/` (same as a successful callback), not to the provider.
+    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("/"),
+    );
+
+    // A session cookie was issued.
+    let set_cookie = res
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("session="), "missing session cookie");
+    let token = set_cookie
+        .split(';')
+        .next()
+        .and_then(|kv| kv.strip_prefix("session="))
+        .expect("session token")
+        .to_string();
+
+    // The session is valid and reports the mock username via /v1/auth/me.
+    let res = router(shared)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/me")
+                .header(axum::http::header::COOKIE, format!("session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["authenticated"], serde_json::Value::Bool(true));
+    assert_eq!(v["username"], serde_json::Value::String("dev-user".into()));
+}
+
+#[tokio::test]
 async fn github_callback_rejects_missing_state_cookie() {
     // No gh_oauth_state cookie => CSRF check fails before any GitHub call.
     let (status, _body) =

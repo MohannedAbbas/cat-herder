@@ -40,6 +40,7 @@ control plane, UI, bundled Postgres, RBAC, the sandbox egress NetworkPolicy, and
 | `dependencies.nats/redis/minio` | present but disabled (not deployed) |
 | `agentSandbox.enabled` / `networkPolicy.*` | [egress policy](/concepts/egress-policy.md) |
 | `oauth.github` / `oauth.gitlab` | SSO toggles (Secret name, redirectUrl, allowedUsers) — [SSO](/concepts/sso.md) |
+| `oauth.mock.enabled` / `oauth.mock.username` | DEV-ONLY mock SSO (injects `CAT_HERDER_OAUTH_MOCK*`); bypasses real auth, off in production — [SSO](/concepts/sso.md) |
 | `ingress.*` | optional Ingress (`/v1` → API, `/` → UI) |
 
 Image refs are single strings so [Tilt](/deploy/tilt.md) can inject locally built images.

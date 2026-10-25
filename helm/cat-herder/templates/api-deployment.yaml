@@ -89,6 +89,14 @@ spec:
             - name: GITLAB_OAUTH_ALLOWED_USERS
               value: {{ join "," .Values.oauth.gitlab.allowedUsers | quote }}
             {{- end }}
+            {{- if .Values.oauth.mock.enabled }}
+            # DEV-ONLY mock OAuth: bypasses real SSO and mints an admin session
+            # directly. MUST be off in production.
+            - name: CAT_HERDER_OAUTH_MOCK
+              value: "true"
+            - name: CAT_HERDER_OAUTH_MOCK_USERNAME
+              value: {{ .Values.oauth.mock.username | default "dev-user" | quote }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
           readinessProbe:
