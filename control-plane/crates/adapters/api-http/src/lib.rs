@@ -15,7 +15,7 @@ use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
     repo_identity_from_url,
 };
-use cat_herder_domain::entities::{Run, RunId, RunState, TenantId};
+use cat_herder_domain::entities::{Run, RunId, RunState};
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, GitRepoRepository, RunRepository, RunRequest,
     SessionRepository, SettingRepository,
@@ -191,7 +191,6 @@ async fn create_run(
         .ok_or((StatusCode::BAD_REQUEST, "agent_id or model is required".to_string()))?;
 
     let run_req = RunRequest {
-        tenant: TenantId(1), // placeholder until multi-tenancy is wired
         kind: req.kind,
         task_spec: req.task_spec,
         dedup_key: String::new(),
@@ -211,7 +210,7 @@ async fn create_run(
 }
 
 async fn list_runs(State(state): State<AppState>) -> Json<Vec<RunResponse>> {
-    let runs = state.repo.list_by_tenant(TenantId(1)).await.unwrap_or_default();
+    let runs = state.repo.list_all().await.unwrap_or_default();
     Json(runs.iter().map(RunResponse::from).collect())
 }
 

@@ -199,7 +199,6 @@ impl SandboxRuntime {
     fn sandbox_object(&self, run: &Run, api_key: Option<&str>, git_token: Option<&str>) -> DynamicObject {
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
-            serde_json::json!({ "name": "TENANT_ID", "value": run.tenant.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
         ];
         // The model is agent-specific (from the run's `model`); no global fallback.

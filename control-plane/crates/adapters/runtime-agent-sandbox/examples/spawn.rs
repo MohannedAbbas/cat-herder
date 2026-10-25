@@ -5,7 +5,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
@@ -27,7 +27,6 @@ async fn main() -> DomainResult<()> {
 
     let run = Run {
         id: RunId(999),
-        tenant: TenantId(1),
         kind: RunKind::Agent,
         state: RunState::Queued,
         task_spec: "smoke test".into(),

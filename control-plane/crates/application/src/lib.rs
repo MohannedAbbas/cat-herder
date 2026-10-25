@@ -31,7 +31,6 @@ where
 {
     let run = Run {
         id: RunId(0), // assigned by the repository
-        tenant: req.tenant,
         kind: req.kind,
         state: RunState::Queued,
         task_spec: req.task_spec,
@@ -204,7 +203,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cat_herder_domain::entities::{RunKind, TenantId};
+    use cat_herder_domain::entities::RunKind;
     use cat_herder_domain::reconcile::RuntimeStatus;
     use cat_herder_store_inmemory::{InMemoryRunRepository, InMemorySessionRepository};
 
@@ -235,7 +234,6 @@ mod tests {
 
     fn req() -> RunRequest {
         RunRequest {
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             task_spec: "test".into(),
             dedup_key: String::new(),

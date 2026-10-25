@@ -31,7 +31,7 @@ does not write its own operator.
 
 | Var | Source |
 |---|---|
-| `RUN_ID`, `TENANT_ID` | the run |
+| `RUN_ID` | the run |
 | `TASK_SPEC` | the run's task |
 | `MODEL` | the run's `model` (`provider:model`), if set |
 | `REPO_URL` | the run's `repo`, normalized to canonical HTTPS |

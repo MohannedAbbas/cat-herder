@@ -20,7 +20,6 @@ trigger (REST, MCP, or webhook).
 ## Fields (`domain::entities::Run`)
 
 - `id: RunId(u64)` — assigned by the repository (`0` means "assign on save").
-- `tenant: TenantId(u64)` — multi-tenancy placeholder (always `TenantId(1)` today).
 - `kind: RunKind` — `agent` | `workflow` (snake_case in JSON).
 - `state: RunState` — see [Run lifecycle](/concepts/run-lifecycle.md).
 - `task_spec: String` — the rendered task (untrusted event content is marked per PLAN §11.6).

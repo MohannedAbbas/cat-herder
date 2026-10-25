@@ -9,7 +9,7 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool, now_iso,
 };
 use cat_herder_domain::catalog;
-use cat_herder_domain::entities::{GitRepo, Run, RunId, TenantId};
+use cat_herder_domain::entities::{GitRepo, Run, RunId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
     ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
@@ -44,18 +44,6 @@ impl RunRepository for InMemoryRunRepository {
 
     async fn get(&self, id: RunId) -> DomainResult<Option<Run>> {
         Ok(self.inner.read().await.get(&id).cloned())
-    }
-
-    async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>> {
-        let runs: Vec<Run> = self
-            .inner
-            .read()
-            .await
-            .values()
-            .filter(|r| r.tenant == tenant)
-            .cloned()
-            .collect();
-        Ok(runs)
     }
 
     async fn list_all(&self) -> DomainResult<Vec<Run>> {
@@ -394,10 +382,9 @@ mod tests {
     use cat_herder_domain::entities::{RunKind, RunState};
     use std::time::SystemTime;
 
-    fn run(tenant: TenantId) -> Run {
+    fn run() -> Run {
         Run {
             id: RunId(0),
-            tenant,
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "test".into(),
@@ -419,20 +406,10 @@ mod tests {
     #[tokio::test]
     async fn save_assigns_id_and_get_returns_it() {
         let repo = InMemoryRunRepository::new();
-        let saved = repo.save(&run(TenantId(7))).await.unwrap();
+        let saved = repo.save(&run()).await.unwrap();
         assert_ne!(saved.id, RunId(0));
         let got = repo.get(saved.id).await.unwrap().unwrap();
         assert_eq!(got.id, saved.id);
-        assert_eq!(got.tenant, TenantId(7));
-    }
-
-    #[tokio::test]
-    async fn list_filters_by_tenant() {
-        let repo = InMemoryRunRepository::new();
-        repo.save(&run(TenantId(7))).await.unwrap();
-        repo.save(&run(TenantId(99))).await.unwrap();
-        assert_eq!(repo.list_by_tenant(TenantId(7)).await.unwrap().len(), 1);
-        assert_eq!(repo.list_by_tenant(TenantId(99)).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

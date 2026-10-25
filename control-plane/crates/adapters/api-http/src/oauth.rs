@@ -388,15 +388,14 @@ pub enum AuthOutcome {
 
 impl IdentityProvider for OAuthClient {
     /// Not used by the browser flow; validates a provider *access token* by resolving
-    /// the user it belongs to and requiring that user to be allow-listed. Returns a
-    /// fixed tenant (single-tenant control plane today).
+    /// the user it belongs to and requiring that user to be allow-listed.
     async fn validate(
         &self,
         token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<cat_herder_domain::entities::TenantId> {
+    ) -> cat_herder_domain::ports::DomainResult<()> {
         let user = self.fetch_user(token).await?;
         if self.config.is_allowed(&user.login) {
-            Ok(cat_herder_domain::entities::TenantId(1))
+            Ok(())
         } else {
             Err("user not in allow-list".into())
         }
@@ -433,7 +432,7 @@ impl IdentityProvider for GitHubOAuth {
     async fn validate(
         &self,
         token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<cat_herder_domain::entities::TenantId> {
+    ) -> cat_herder_domain::ports::DomainResult<()> {
         self.0.validate(token).await
     }
 }
@@ -468,7 +467,7 @@ impl IdentityProvider for GitLabOAuth {
     async fn validate(
         &self,
         token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<cat_herder_domain::entities::TenantId> {
+    ) -> cat_herder_domain::ports::DomainResult<()> {
         self.0.validate(token).await
     }
 }

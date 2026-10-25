@@ -3,7 +3,7 @@
 
 use cat_herder_application::start_run;
 use cat_herder_domain::api::RunResponse;
-use cat_herder_domain::entities::{RunKind, TenantId};
+use cat_herder_domain::entities::RunKind;
 use cat_herder_domain::ports::{AgentRepository, RunRepository, RunRequest, SessionRepository};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -135,7 +135,6 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
             };
 
             let req = RunRequest {
-                tenant: TenantId(1),
                 kind,
                 task_spec,
                 dedup_key: String::new(),
@@ -155,7 +154,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 Err(e) => (format!("run failed: {e}"), true),
             }
         }
-        "list_runs" => match state.repo.list_by_tenant(TenantId(1)).await {
+        "list_runs" => match state.repo.list_all().await {
             Ok(runs) => {
                 let out: Vec<RunResponse> = runs.iter().map(RunResponse::from).collect();
                 (serde_json::to_string(&out).unwrap_or_default(), false)

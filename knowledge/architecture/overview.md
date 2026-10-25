@@ -48,7 +48,7 @@ in the [binary](/crates/bin-cat-herder.md).
    `AgentRuntime::spawn`.
 3. The [runtime adapter](/crates/runtime-agent-sandbox.md) creates a `Sandbox` CR
    (`run-<id>`) whose inline podTemplate runs the harness image. It injects env:
-   `RUN_ID`, `TENANT_ID`, `TASK_SPEC`, `MODEL`, `REPO_URL`, `CAT_HERDER_CONTROL_URL`,
+   `RUN_ID`, `TASK_SPEC`, `MODEL`, `REPO_URL`, `CAT_HERDER_CONTROL_URL`,
    `LLM_API_KEY` (resolved from the provider's Secret), and `GIT_TOKEN` (the repo's
    decrypted read token, only if the run targets a registered repo).
 4. The [harness](/harness/agent-harness.md) serves `/healthz`, maps `LLM_API_KEY` to the

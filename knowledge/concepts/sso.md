@@ -79,7 +79,7 @@ flag is on). With Helm, enable it via `oauth.mock.enabled: true` (and optionally
 
 - Sessions are in-memory: an API restart logs admins out.
 - `OAuthClient` also implements the `IdentityProvider` port (`validate` a provider access
-  token → fixed tenant), though the browser flow is the primary path.
+  token → allow-listed user), though the browser flow is the primary path.
 
 ## Related
 

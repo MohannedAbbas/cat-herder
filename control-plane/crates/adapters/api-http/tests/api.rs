@@ -184,7 +184,7 @@ async fn mcp_list_agents_tool_works() {
 
 #[tokio::test]
 async fn post_finished_event_marks_run_succeeded() {
-    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
     use cat_herder_domain::ports::RunRepository;
     use std::time::SystemTime;
 
@@ -193,7 +193,6 @@ async fn post_finished_event_marks_run_succeeded() {
         .repo
         .save(&Run {
             id: RunId(0),
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             state: RunState::Running,
             task_spec: "event test".into(),
@@ -229,7 +228,7 @@ async fn post_finished_event_marks_run_succeeded() {
 
 #[tokio::test]
 async fn post_finished_event_failed_marks_run_failed() {
-    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
     use cat_herder_domain::ports::RunRepository;
     use std::time::SystemTime;
 
@@ -238,7 +237,6 @@ async fn post_finished_event_failed_marks_run_failed() {
         .repo
         .save(&Run {
             id: RunId(0),
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             state: RunState::Running,
             task_spec: "event test".into(),
@@ -272,7 +270,7 @@ async fn post_finished_event_failed_marks_run_failed() {
 
 #[tokio::test]
 async fn post_stuck_event_marks_run_stuck() {
-    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
     use cat_herder_domain::ports::RunRepository;
     use std::time::SystemTime;
 
@@ -281,7 +279,6 @@ async fn post_stuck_event_marks_run_stuck() {
         .repo
         .save(&Run {
             id: RunId(0),
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             state: RunState::Running,
             task_spec: "event test".into(),
@@ -327,7 +324,7 @@ async fn post_event_unknown_run_returns_404() {
 
 #[tokio::test]
 async fn post_nonterminal_event_is_acknowledged_without_state_change() {
-    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
     use cat_herder_domain::ports::RunRepository;
     use std::time::SystemTime;
 
@@ -336,7 +333,6 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
         .repo
         .save(&Run {
             id: RunId(0),
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             state: RunState::Running,
             task_spec: "event test".into(),

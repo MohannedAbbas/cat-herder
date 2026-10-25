@@ -4,10 +4,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// Opaque identifiers (newtypes so they cannot be mixed up).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TenantId(pub u64);
-
+/// Opaque identifier (newtype so it cannot be mixed up with other ids).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RunId(pub u64);
 
@@ -50,7 +47,6 @@ pub enum ReviewVerdict {
 #[derive(Debug, Clone)]
 pub struct Run {
     pub id: RunId,
-    pub tenant: TenantId,
     pub kind: RunKind,
     pub state: RunState,
     pub task_spec: String,

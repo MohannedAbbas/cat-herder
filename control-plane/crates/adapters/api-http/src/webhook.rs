@@ -4,7 +4,7 @@
 //! which map their own payloads onto [`WebhookPayload`] and inherit the rest of the
 //! pipeline (dedup key → `start_run`). See `PLAN.md` §5/§11.5.
 
-use cat_herder_domain::entities::{RunKind, TenantId};
+use cat_herder_domain::entities::RunKind;
 use cat_herder_domain::ports::RunRequest;
 use serde::Deserialize;
 
@@ -42,7 +42,6 @@ fn default_max_concurrency() -> u32 {
 /// Map a webhook payload into the normalized run request (`PLAN.md` §5).
 pub fn normalize(payload: WebhookPayload) -> RunRequest {
     RunRequest {
-        tenant: TenantId(1), // placeholder until multi-tenancy is wired
         kind: payload.kind,
         task_spec: payload.task_spec,
         dedup_key: payload.dedup_key,
@@ -85,18 +84,5 @@ mod tests {
         assert_eq!(req.model.as_deref(), Some("openai/gpt-5.5"));
         assert_eq!(req.repo.as_deref(), Some("org/repo"));
         assert_eq!(req.language.as_deref(), Some("rust"));
-    }
-
-    #[test]
-    fn normalize_uses_tenant_placeholder() {
-        let mut p = payload();
-        p.actor = None;
-        p.model = None;
-        p.repo = None;
-        p.language = None;
-        let req = normalize(p);
-        assert_eq!(req.tenant, TenantId(1));
-        assert_eq!(req.actor, None);
-        assert_eq!(req.repo, None);
     }
 }

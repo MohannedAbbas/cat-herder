@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cat_herder_domain::entities::{Run, RunId, TenantId};
+use cat_herder_domain::entities::{Run, RunId};
 use cat_herder_domain::ports::{DomainResult, RunRepository};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
@@ -26,7 +26,6 @@ impl PostgresRunRepository {
 
 impl RunRepository for PostgresRunRepository {
     async fn save(&self, run: &Run) -> DomainResult<Run> {
-        let tenant = run.tenant.0 as i64;
         let kind = encode_kind(run.kind);
         let state = encode_state(run.state);
         let created_ms = millis(run.created_at);
@@ -35,11 +34,10 @@ impl RunRepository for PostgresRunRepository {
 
         let id: i64 = if run.id == RunId(0) {
             sqlx::query_scalar(
-                "INSERT INTO runs (tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
+                "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
                  trigger, actor, model, repo, language, started_at, finished_at, pr_url, report) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id",
             )
-            .bind(tenant)
             .bind(&kind)
             .bind(&state)
             .bind(&run.task_spec)
@@ -59,11 +57,11 @@ impl RunRepository for PostgresRunRepository {
             .await?
         } else {
             sqlx::query_scalar(
-                "INSERT INTO runs (id, tenant_id, kind, state, task_spec, session_id, max_concurrency, created_at, \
+                "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
                  trigger, actor, model, repo, language, started_at, finished_at, pr_url, report) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
                  ON CONFLICT (id) DO UPDATE SET \
-                   tenant_id = EXCLUDED.tenant_id, kind = EXCLUDED.kind, state = EXCLUDED.state, \
+                   kind = EXCLUDED.kind, state = EXCLUDED.state, \
                    task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
                    max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
                    trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
@@ -73,7 +71,6 @@ impl RunRepository for PostgresRunRepository {
                  RETURNING id",
             )
             .bind(run.id.0 as i64)
-            .bind(tenant)
             .bind(&kind)
             .bind(&state)
             .bind(&run.task_spec)
@@ -107,14 +104,6 @@ impl RunRepository for PostgresRunRepository {
         row.as_ref().map(run_from_row).transpose().map_err(Into::into)
     }
 
-    async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>> {
-        let rows = sqlx::query("SELECT * FROM runs WHERE tenant_id = $1 ORDER BY id")
-            .bind(tenant.0 as i64)
-            .fetch_all(&self.pool)
-            .await?;
-        rows.iter().map(run_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
     async fn list_all(&self) -> DomainResult<Vec<Run>> {
         let rows = sqlx::query("SELECT * FROM runs ORDER BY id")
             .fetch_all(&self.pool)
@@ -126,7 +115,6 @@ impl RunRepository for PostgresRunRepository {
 fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
     Ok(Run {
         id: RunId(row.try_get::<i64, _>("id")? as u64),
-        tenant: TenantId(row.try_get::<i64, _>("tenant_id")? as u64),
         kind: decode_kind(&row.try_get::<String, _>("kind")?),
         state: decode_state(&row.try_get::<String, _>("state")?),
         task_spec: row.try_get("task_spec")?,
@@ -191,7 +179,6 @@ mod tests {
 
         let run = Run {
             id: RunId(0),
-            tenant: TenantId(42),
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "persist me".into(),
@@ -213,7 +200,6 @@ mod tests {
 
         let got = repo.get(saved.id).await.expect("get").expect("row exists");
         assert_eq!(got.id, saved.id);
-        assert_eq!(got.tenant, TenantId(42));
         assert_eq!(got.task_spec, "persist me");
         assert_eq!(got.session_id.as_deref(), Some(session_id.as_str()));
         assert_eq!(got.trigger, "webhook");
@@ -231,6 +217,6 @@ mod tests {
         assert_eq!(after.state, RunState::Succeeded);
         assert_eq!(after.report.as_deref(), Some("# Report\n\nAll done."));
 
-        assert!(repo.list_by_tenant(TenantId(42)).await.unwrap().iter().any(|r| r.id == saved.id));
+        assert!(repo.list_all().await.unwrap().iter().any(|r| r.id == saved.id));
     }
 }

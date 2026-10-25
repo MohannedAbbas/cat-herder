@@ -138,7 +138,7 @@ fn run_from_row(row: &PgRow) -> Result<SessionRun, sqlx::Error> {
 mod tests {
     use super::*;
     use cat_herder_domain::ports::SessionRepository;
-    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
     use std::time::SystemTime;
 
     // Live test against a real Postgres; skipped unless CAT_HERDER_TEST_DATABASE_URL set.
@@ -222,7 +222,6 @@ mod tests {
 
         let lifecycle = Run {
             id: RunId(777),
-            tenant: TenantId(1),
             kind: RunKind::Agent,
             state: RunState::Succeeded,
             task_spec: "sync me".into(),

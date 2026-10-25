@@ -173,7 +173,6 @@ mod tests {
     fn transition_to_valid_state_succeeds_and_mutates() {
         let mut run = crate::entities::Run {
             id: crate::entities::RunId(1),
-            tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),
@@ -198,7 +197,6 @@ mod tests {
     fn transition_to_invalid_state_errors_without_mutating() {
         let mut run = crate::entities::Run {
             id: crate::entities::RunId(1),
-            tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),
@@ -225,7 +223,6 @@ mod tests {
     fn happy_path_walk_reaches_succeeded() {
         let mut run = crate::entities::Run {
             id: crate::entities::RunId(1),
-            tenant: crate::entities::TenantId(1),
             kind: crate::entities::RunKind::Agent,
             state: Queued,
             task_spec: "test".into(),

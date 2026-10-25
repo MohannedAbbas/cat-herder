@@ -3,7 +3,7 @@
 //! production persistence (wired in `crates/bin/cat-herder`).
 
 use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use cat_herder_domain::entities::{GitRepo, Run, RunId, TenantId};
+use cat_herder_domain::entities::{GitRepo, Run, RunId};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
     ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
@@ -37,13 +37,6 @@ impl RunRepository for RunRepo {
         match self {
             RunRepo::InMemory(r) => r.get(id).await,
             RunRepo::Postgres(p) => p.get(id).await,
-        }
-    }
-
-    async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>> {
-        match self {
-            RunRepo::InMemory(r) => r.list_by_tenant(tenant).await,
-            RunRepo::Postgres(p) => p.list_by_tenant(tenant).await,
         }
     }
 
@@ -334,10 +327,9 @@ mod tests {
     use cat_herder_domain::entities::{RunKind, RunState};
     use std::time::SystemTime;
 
-    fn run(tenant: TenantId) -> Run {
+    fn run() -> Run {
         Run {
             id: RunId(0),
-            tenant,
             kind: RunKind::Agent,
             state: RunState::Queued,
             task_spec: "delegate".into(),
@@ -359,10 +351,9 @@ mod tests {
     #[tokio::test]
     async fn inmemory_run_delegates_save_get_list() {
         let repo = RunRepo::InMemory(InMemoryRunRepository::new());
-        let saved = repo.save(&run(TenantId(7))).await.unwrap();
+        let saved = repo.save(&run()).await.unwrap();
         assert_ne!(saved.id, RunId(0));
         assert!(repo.get(saved.id).await.unwrap().is_some());
-        assert_eq!(repo.list_by_tenant(TenantId(7)).await.unwrap().len(), 1);
         assert_eq!(repo.list_all().await.unwrap().len(), 1);
     }
 

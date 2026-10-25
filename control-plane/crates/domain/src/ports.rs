@@ -5,7 +5,7 @@
 //! per `PLAN.md` §5.
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use crate::entities::{GitRepo, Run, RunId, RunState, TenantId};
+use crate::entities::{GitRepo, Run, RunId, RunState};
 use crate::reconcile::RuntimeStatus;
 
 pub type DomainResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -13,7 +13,6 @@ pub type DomainResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 /// Normalized trigger input (see `PLAN.md` §5).
 #[derive(Debug, Clone)]
 pub struct RunRequest {
-    pub tenant: TenantId,
     pub kind: crate::entities::RunKind,
     /// Rendered task spec — event-derived content is already marked untrusted (§11.6).
     pub task_spec: String,
@@ -47,8 +46,7 @@ pub trait RunRepository {
     /// stored run.
     async fn save(&self, run: &Run) -> DomainResult<Run>;
     async fn get(&self, id: RunId) -> DomainResult<Option<Run>>;
-    async fn list_by_tenant(&self, tenant: TenantId) -> DomainResult<Vec<Run>>;
-    /// All runs (used by the reconciler).
+    /// All runs.
     async fn list_all(&self) -> DomainResult<Vec<Run>>;
 }
 
@@ -135,7 +133,7 @@ pub trait ModelProvider {
 }
 
 pub trait IdentityProvider {
-    async fn validate(&self, token: &str) -> DomainResult<TenantId>;
+    async fn validate(&self, token: &str) -> DomainResult<()>;
 }
 
 pub trait CredentialBroker {
@@ -143,5 +141,5 @@ pub trait CredentialBroker {
 }
 
 pub trait Notifier {
-    async fn notify(&self, tenant: TenantId, message: &str) -> DomainResult<()>;
+    async fn notify(&self, message: &str) -> DomainResult<()>;
 }
