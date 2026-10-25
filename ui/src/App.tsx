@@ -31,10 +31,38 @@ export default function App() {
           <Route index element={<Navigate to="/runs" replace />} />
           <Route path="/runs" element={<RunListPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
-          <Route path="/sessions" element={<SessionListPage />} />
-          <Route path="/sessions/:id" element={<SessionDetailPage />} />
-          <Route path="/agents" element={<AgentListPage />} />
-          <Route path="/agents/:id" element={<AgentDetailPage />} />
+          <Route
+            path="/sessions"
+            element={
+              <RequireAdmin>
+                <SessionListPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/sessions/:id"
+            element={
+              <RequireAdmin>
+                <SessionDetailPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/agents"
+            element={
+              <RequireAdmin>
+                <AgentListPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/agents/:id"
+            element={
+              <RequireAdmin>
+                <AgentDetailPage />
+              </RequireAdmin>
+            }
+          />
           <Route path="/login" element={<LoginPage />} />
           <Route
             path="/admin"

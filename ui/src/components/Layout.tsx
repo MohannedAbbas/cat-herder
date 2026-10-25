@@ -31,15 +31,15 @@ export default function Layout() {
             <NavLink to="/runs" className={navLinkClass}>
               Runs
             </NavLink>
-            <NavLink to="/sessions" className={navLinkClass}>
-              Sessions
-            </NavLink>
-            <NavLink to="/agents" className={navLinkClass}>
-              Agents
-            </NavLink>
 
             {authenticated && (
               <>
+                <NavLink to="/sessions" className={navLinkClass}>
+                  Sessions
+                </NavLink>
+                <NavLink to="/agents" className={navLinkClass}>
+                  Agents
+                </NavLink>
                 <div className="mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                   Admin
                 </div>
