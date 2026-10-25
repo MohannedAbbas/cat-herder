@@ -48,6 +48,8 @@ export const httpApi: CatHerderApi = {
     request('/v1/auth/login', json('POST', { username, password })).then(() => undefined),
   logout: () => request('/v1/auth/logout', json('POST')).then(() => undefined),
   me: () => request<AuthInfo>('/v1/auth/me'),
+  ssoProviders: () =>
+    request<{ providers: string[] }>('/v1/auth/sso-providers').then((r) => r.providers ?? []),
 
   saveAgent: (id, agent) => request<AgentTemplate>(`/v1/admin/agents/${id}`, json('PUT', agent)),
   deleteAgent: (id) => request<void>(`/v1/admin/agents/${id}`, { method: 'DELETE' }),

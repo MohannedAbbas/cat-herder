@@ -371,6 +371,7 @@ export const mockApi: CatHerderApi = {
     return delay(undefined)
   },
   me: () => delay<AuthInfo>({ authenticated, username: authenticated ? 'admin' : null }),
+  ssoProviders: () => delay<string[]>(['github', 'gitlab']),
 
   saveAgent: (id, agent) => {
     const i = agents.findIndex((a) => a.id === id)

@@ -107,6 +107,18 @@ Register the GitLab application callback URL as
 `<GITLAB_OAUTH_REDIRECT_URL>/v1/auth/gitlab/callback`. When the variables are not
 fully configured, the GitLab routes return `404` and password login still works.
 
+### SSO discovery & the UI
+
+`GET /v1/auth/sso-providers` (public) returns `{"providers": ["github", "gitlab"]}`
+listing only the providers that are configured (an empty list when none are). The UI
+login page calls it on mount and, when any are enabled, shows a "Sign in with GitHub" /
+"Sign in with GitLab" button that redirects to the matching `/v1/auth/<provider>/login`
+endpoint. Signed-in SSO sessions report the provider login from `GET /v1/auth/me`.
+
+For local dev, Tilt exposes the API on `:8080`; set `oauth.github.redirectUrl` /
+`oauth.gitlab.redirectUrl` to `http://localhost:8080` and register the matching
+callback URL with the provider.
+
 ## Toolchain notes
 
 - Rust 1.95+ and Python 3.12+ (via `uv`) are the primary toolchains.

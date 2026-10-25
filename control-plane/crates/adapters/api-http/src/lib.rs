@@ -119,6 +119,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/login", post(admin::login))
         .route("/v1/auth/logout", post(admin::logout))
         .route("/v1/auth/me", get(admin::me))
+        .route("/v1/auth/sso-providers", get(admin::sso_providers))
         .route("/v1/auth/github/login", get(admin::github_login))
         .route("/v1/auth/github/callback", get(admin::github_callback))
         .route("/v1/auth/gitlab/login", get(admin::gitlab_login))

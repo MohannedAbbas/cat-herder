@@ -73,14 +73,28 @@ pub async fn logout(
 
 pub async fn me(State(state): State<AppState>, jar: CookieJar) -> Json<serde_json::Value> {
     let token = jar.get("session").map(|c| c.value().to_string());
-    let authenticated = match token {
-        Some(t) => state.auth.valid_session(&t).await,
-        None => false,
+    let username = match token {
+        Some(t) => state.auth.session_username(&t).await,
+        None => None,
     };
+    let authenticated = username.is_some();
     Json(serde_json::json!({
         "authenticated": authenticated,
-        "username": if authenticated { serde_json::json!("admin") } else { serde_json::Value::Null },
+        "username": username.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
     }))
+}
+
+/// Report which SSO providers are configured so the UI knows which buttons to
+/// render. Public (login page is unauthenticated); leaks only provider names.
+pub async fn sso_providers(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let mut providers = Vec::with_capacity(2);
+    if state.github_oauth.is_some() {
+        providers.push("github");
+    }
+    if state.gitlab_oauth.is_some() {
+        providers.push("gitlab");
+    }
+    Json(serde_json::json!({ "providers": providers }))
 }
 
 // --- GitHub OAuth SSO ------------------------------------------------------
@@ -139,8 +153,8 @@ pub async fn github_callback(
     let clear_state = Cookie::build(("gh_oauth_state", "")).path("/").build();
 
     match oauth.authenticate(&params.code).await {
-        Ok(_login) => {
-            let token = state.auth.create_session().await;
+        Ok(login) => {
+            let token = state.auth.create_session_for(login).await;
             let response = Redirect::to("/").into_response();
             (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
         }
@@ -203,8 +217,8 @@ pub async fn gitlab_callback(
         .build();
 
     match oauth.authenticate(&params.code).await {
-        Ok(_login) => {
-            let token = state.auth.create_session().await;
+        Ok(login) => {
+            let token = state.auth.create_session_for(login).await;
             let response = Redirect::to("/").into_response();
             (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
         }

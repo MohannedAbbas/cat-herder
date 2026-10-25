@@ -25,7 +25,14 @@ session**. They sit *alongside* the seeded username/password login
    (`gh_oauth_state` / `gl_oauth_state`) and redirects to the authorize URL.
 2. `GET /v1/auth/<provider>/callback?code=…&state=…` → verifies `state` matches the
    cookie, exchanges the code, fetches the user, and **only if the login is in the
-   allow-list** issues a normal admin session (reusing `Auth::create_session`).
+   allow-list** issues a normal admin session (via `Auth::create_session_for`, which
+   remembers the provider login so `GET /v1/auth/me` reports it).
+
+Clients discover which providers are enabled via the public
+`GET /v1/auth/sso-providers` → `{"providers": ["github", "gitlab"]}` (only configured
+providers; empty list when none). The UI login page renders one button per provider
+that redirects to `/v1/auth/<provider>/login`. For local dev, set the provider's
+`redirectUrl` to `http://localhost:8080` (Tilt exposes the API there).
 
 ## Providers
 

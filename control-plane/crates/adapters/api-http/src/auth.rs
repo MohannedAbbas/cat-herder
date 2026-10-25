@@ -13,6 +13,14 @@ use tokio::sync::RwLock;
 
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// A stored session: when it expires and, for SSO sessions, the signed-in login.
+#[derive(Clone, Debug)]
+struct SessionEntry {
+    expiry: Instant,
+    /// Provider login (GitHub/GitLab) for SSO sessions; `None` for password logins.
+    login: Option<String>,
+}
+
 /// Session lifetime, overridable via `CAT_HERDER_SESSION_TTL_SECS` (e.g. `3600`).
 /// Falls back to the 24h default when unset, blank, or unparsable.
 fn session_ttl_from_env() -> Duration {
@@ -28,7 +36,10 @@ fn session_ttl_from_env() -> Duration {
 pub struct Auth {
     admin_username: String,
     admin_password_hash: String,
-    sessions: Arc<RwLock<HashMap<String, Instant>>>,
+    /// Session token → (expiry, optional sign-in identity). The identity is the
+    /// provider login for SSO-issued sessions and `None` for password logins (which
+    /// are reported as the admin username).
+    sessions: Arc<RwLock<HashMap<String, SessionEntry>>>,
     /// How long an issued session token stays valid.
     session_ttl: Duration,
 }
@@ -73,18 +84,44 @@ impl Auth {
     /// OAuth) *after* they have independently authenticated the identity against an
     /// allow-list. Reuses the same in-memory session store as password login.
     pub async fn create_session(&self) -> String {
+        self.insert_session(None).await
+    }
+
+    /// Issue a session for an already-authenticated SSO identity, remembering the
+    /// provider login so `me()` can report who signed in. Like [`Self::create_session`],
+    /// the caller must have independently authenticated (and allow-listed) the login.
+    pub async fn create_session_for(&self, login: impl Into<String>) -> String {
+        self.insert_session(Some(login.into())).await
+    }
+
+    async fn insert_session(&self, login: Option<String>) -> String {
         let token = uuid::Uuid::new_v4().to_string();
-        self.sessions
-            .write()
-            .await
-            .insert(token.clone(), Instant::now() + self.session_ttl);
+        let entry = SessionEntry {
+            expiry: Instant::now() + self.session_ttl,
+            login,
+        };
+        self.sessions.write().await.insert(token.clone(), entry);
         token
     }
 
     pub async fn valid_session(&self, token: &str) -> bool {
         match self.sessions.read().await.get(token) {
-            Some(expiry) => *expiry > Instant::now(),
+            Some(entry) => entry.expiry > Instant::now(),
             None => false,
+        }
+    }
+
+    /// The identity behind the session: the stored SSO login when present, otherwise
+    /// the seeded admin username. `None` when the token is unknown or expired.
+    pub async fn session_username(&self, token: &str) -> Option<String> {
+        match self.sessions.read().await.get(token) {
+            Some(entry) if entry.expiry > Instant::now() => Some(
+                entry
+                    .login
+                    .clone()
+                    .unwrap_or_else(|| self.admin_username.clone()),
+            ),
+            _ => None,
         }
     }
 
@@ -113,6 +150,17 @@ mod tests {
         let auth = Auth::new("admin", "hunter2");
         let token = auth.create_session().await;
         assert!(auth.valid_session(&token).await);
+    }
+
+    #[tokio::test]
+    async fn sso_session_reports_provider_login() {
+        // SSO sessions remember the provider login; password sessions the admin user.
+        let auth = Auth::new("admin", "hunter2");
+        let sso = auth.create_session_for("octocat").await;
+        assert_eq!(auth.session_username(&sso).await.as_deref(), Some("octocat"));
+        let pw = auth.login("admin", "hunter2").await.unwrap();
+        assert_eq!(auth.session_username(&pw).await.as_deref(), Some("admin"));
+        assert_eq!(auth.session_username("unknown").await, None);
     }
 
     #[tokio::test]

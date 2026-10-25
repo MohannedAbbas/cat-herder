@@ -142,13 +142,22 @@ agentSandbox:
 # /v1/auth/github/callback. The client id/secret come from the Secret named in
 # `secret` (keys `client-id` and `client-secret`); the allow-list is the comma
 # separated set of GitHub logins permitted to become admin. `redirectUrl` is the
-# public base URL of the control plane (the callback path is appended).
+# public base URL of the control plane (the callback path is appended), and must
+# match the OAuth App's registered callback exactly.
+#
+# Local dev (Tilt exposes the API on :8080 and the UI proxies /v1 to it): set
+#   redirectUrl: "http://localhost:8080"
+# and register the callback URL http://localhost:8080/v1/auth/github/callback with
+# the GitHub OAuth App. The UI detects enabled providers via GET /v1/auth/sso-providers
+# and shows a "Sign in with GitHub" button.
 oauth:
   github:
     enabled: false
     secret: cat-herder-github-oauth
     redirectUrl: ""
     allowedUsers: []
+  # GitLab SSO mirrors GitHub. For local dev set redirectUrl to
+  # "http://localhost:8080" and register http://localhost:8080/v1/auth/gitlab/callback.
   gitlab:
     enabled: false
     secret: cat-herder-gitlab-oauth

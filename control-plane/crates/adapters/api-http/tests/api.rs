@@ -734,6 +734,51 @@ async fn github_login_unconfigured_returns_404() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+// --- SSO provider discovery ------------------------------------------------
+
+fn oauth_cfg(provider_kind: &str) -> OAuthConfig {
+    OAuthConfig {
+        client_id: "test-client".into(),
+        client_secret: "test-secret".into(),
+        redirect_url: "https://cat.example.com".into(),
+        allowed_users: vec!["octocat".into()],
+        provider: if provider_kind == "gitlab" { &GITLAB } else { &GITHUB },
+        base_url: None,
+    }
+}
+
+async fn sso_providers(app: Router) -> Vec<String> {
+    let (status, body) = send(app, "/v1/auth/sso-providers").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    v["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn sso_providers_empty_when_none_configured() {
+    assert!(sso_providers(app()).await.is_empty());
+}
+
+#[tokio::test]
+async fn sso_providers_lists_github_only() {
+    let mut state = AppState::default();
+    state.github_oauth = Some(GitHubOAuth::new(oauth_cfg("github")));
+    assert_eq!(sso_providers(router(state)).await, vec!["github"]);
+}
+
+#[tokio::test]
+async fn sso_providers_lists_both_when_configured() {
+    let mut state = AppState::default();
+    state.github_oauth = Some(GitHubOAuth::new(oauth_cfg("github")));
+    state.gitlab_oauth = Some(GitLabOAuth::new(oauth_cfg("gitlab")));
+    assert_eq!(sso_providers(router(state)).await, vec!["github", "gitlab"]);
+}
+
 #[tokio::test]
 async fn github_callback_rejects_missing_state_cookie() {
     // No gh_oauth_state cookie => CSRF check fails before any GitHub call.

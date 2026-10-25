@@ -33,6 +33,8 @@ export interface CatHerderApi {
   login(username: string, password: string): Promise<void>
   logout(): Promise<void>
   me(): Promise<AuthInfo>
+  /** SSO providers enabled on the control plane, e.g. `['github', 'gitlab']`. */
+  ssoProviders(): Promise<string[]>
 
   // admin — agents
   saveAgent(id: string, agent: AgentTemplate): Promise<AgentTemplate>
