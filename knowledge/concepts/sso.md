@@ -6,9 +6,9 @@ tags: [security, auth, oauth, sso, github, gitlab, admin]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: oauth, resource: /crates/adapters/api-http/src/oauth.rs, title: oauth.rs }
-  - { id: admin, resource: /crates/adapters/api-http/src/admin.rs, title: admin.rs (login/callback) }
-  - { id: auth, resource: /crates/adapters/api-http/src/auth.rs, title: auth.rs }
+  - { id: oauth, resource: /control-plane/crates/adapters/api-http/src/oauth.rs, title: oauth.rs }
+  - { id: admin, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: admin.rs (login/callback) }
+  - { id: auth, resource: /control-plane/crates/adapters/api-http/src/auth.rs, title: auth.rs }
   - { id: readme, resource: /README.md, title: README.md }
 ---
 

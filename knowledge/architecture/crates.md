@@ -6,9 +6,9 @@ tags: [rust, cargo, hexagonal, ports-and-adapters, workspace]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: cargo, resource: /Cargo.toml, title: workspace Cargo.toml }
-  - { id: domain-lib, resource: /crates/domain/src/lib.rs, title: domain lib.rs }
-  - { id: ports, resource: /crates/domain/src/ports.rs, title: ports.rs }
+  - { id: cargo, resource: /control-plane/Cargo.toml, title: workspace Cargo.toml }
+  - { id: domain-lib, resource: /control-plane/crates/domain/src/lib.rs, title: domain lib.rs }
+  - { id: ports, resource: /control-plane/crates/domain/src/ports.rs, title: ports.rs }
 ---
 
 # Hexagonal crate structure
@@ -33,13 +33,13 @@ composition root.
 
 | Crate (`Cargo.toml` name) | Dir | Kind | Doc |
 |---|---|---|---|
-| `cat-herder-domain` | `crates/domain` | core | [domain](/crates/domain.md) |
-| `cat-herder-application` | `crates/application` | services | [application](/crates/application.md) |
-| `cat-herder-api-http` | `crates/adapters/api-http` | driven/driving adapter | [api-http](/crates/api-http.md) |
-| `cat-herder-runtime-agent-sandbox` | `crates/adapters/runtime-agent-sandbox` | driven | [runtime](/crates/runtime-agent-sandbox.md) |
-| `cat-herder-store-postgres` | `crates/adapters/store-postgres` | driven | [store-postgres](/crates/store-postgres.md) |
-| `cat-herder-store-inmemory` | `crates/adapters/store-inmemory` | driven | [store-inmemory](/crates/store-inmemory.md) |
-| `cat-herder` | `crates/bin/cat-herder` | binary | [bin](/crates/bin-cat-herder.md) |
+| `cat-herder-domain` | `control-plane/crates/domain` | core | [domain](/crates/domain.md) |
+| `cat-herder-application` | `control-plane/crates/application` | services | [application](/crates/application.md) |
+| `cat-herder-api-http` | `control-plane/crates/adapters/api-http` | driven/driving adapter | [api-http](/crates/api-http.md) |
+| `cat-herder-runtime-agent-sandbox` | `control-plane/crates/adapters/runtime-agent-sandbox` | driven | [runtime](/crates/runtime-agent-sandbox.md) |
+| `cat-herder-store-postgres` | `control-plane/crates/adapters/store-postgres` | driven | [store-postgres](/crates/store-postgres.md) |
+| `cat-herder-store-inmemory` | `control-plane/crates/adapters/store-inmemory` | driven | [store-inmemory](/crates/store-inmemory.md) |
+| `cat-herder` | `control-plane/crates/bin/cat-herder` | binary | [bin](/crates/bin-cat-herder.md) |
 
 ## Port → adapter map
 

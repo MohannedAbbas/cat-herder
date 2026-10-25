@@ -6,8 +6,8 @@ tags: [git, pull-request, merge-request, github, gitlab, codeberg, workflow]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: pr, resource: /crates/adapters/api-http/src/pr.rs, title: pr.rs }
-  - { id: lib, resource: /crates/adapters/api-http/src/lib.rs, title: lib.rs (maybe_open_pr) }
+  - { id: pr, resource: /control-plane/crates/adapters/api-http/src/pr.rs, title: pr.rs }
+  - { id: lib, resource: /control-plane/crates/adapters/api-http/src/lib.rs, title: lib.rs (maybe_open_pr) }
   - { id: harness, resource: /agent-harness/src/cat_herder_harness/server.py, title: server.py (collect_changes) }
 ---
 

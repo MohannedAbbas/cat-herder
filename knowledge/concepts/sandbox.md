@@ -6,7 +6,7 @@ tags: [sandbox, kubernetes, crd, agent-sandbox, runtime]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: runtime, resource: /crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime lib.rs }
+  - { id: runtime, resource: /control-plane/crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime lib.rs }
   - { id: template, resource: /helm/cat-herder/templates/sandbox-template.yaml, title: sandbox-template.yaml }
 ---
 

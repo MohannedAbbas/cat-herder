@@ -1005,20 +1005,21 @@ dedicated strategies:
 
 ```
 cat-herder/
-├─ crates/
-│  ├─ domain/                       # entities + ports + use cases (no infra types)
-│  ├─ application/                  # orchestrator, reconcile loop, policy, budget
-│  ├─ adapters/
-│  │  ├─ api-http/ api-mcp/ api-grpc/
-│  │  ├─ trigger-webhook/ trigger-github/ trigger-slack/
-│  │  ├─ trigger-scheduler/ trigger-mq/
-│  │  ├─ runtime-agent-sandbox/     # kube-rs -> Sandbox CRs (pinned v1beta1)
-│  │  ├─ runtime-docker/            # local dev only
-│  │  ├─ model-openai/ model-anthropic/ model-ollama/
-│  │  ├─ store-postgres/ store-nats/ store-minio/
-│  │  ├─ identity-oidc/ identity-saml/ credentials/   # broker: vault + GitHub App + cloud STS
-│  │  └─ notify/
-│  └─ bin/ cat-herder/ catctl/
+├─ control-plane/                   # Rust workspace: Cargo.toml / Cargo.lock + crates/
+│  └─ crates/
+│     ├─ domain/                    # entities + ports + use cases (no infra types)
+│     ├─ application/               # orchestrator, reconcile loop, policy, budget
+│     ├─ adapters/
+│     │  ├─ api-http/ api-mcp/ api-grpc/
+│     │  ├─ trigger-webhook/ trigger-github/ trigger-slack/
+│     │  ├─ trigger-scheduler/ trigger-mq/
+│     │  ├─ runtime-agent-sandbox/  # kube-rs -> Sandbox CRs (pinned v1beta1)
+│     │  ├─ runtime-docker/         # local dev only
+│     │  ├─ model-openai/ model-anthropic/ model-ollama/
+│     │  ├─ store-postgres/ store-nats/ store-minio/
+│     │  ├─ identity-oidc/ identity-saml/ credentials/   # broker: vault + GitHub App + cloud STS
+│     │  └─ notify/
+│     └─ bin/ cat-herder/ catctl/
 ├─ agent-harness/                   # Python: Deep Agents + LangGraph + coding tool pack
 │  ├─ Dockerfile  pyproject.toml
 │  ├─ src/ (harness server, grpc control surface, interrupt/resume bridge, event ingest)
@@ -1026,7 +1027,6 @@ cat-herder/
 ├─ sandbox/                         # toolchain image: git, ripgrep, runtimes, cred helper
 ├─ helm/cat-herder/                 # umbrella chart: control plane + deps + agent-sandbox
 ├─ deploy/  proto/  docs/
-└─ Cargo.toml (workspace)
 ```
 
 ---

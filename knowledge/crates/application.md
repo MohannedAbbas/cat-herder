@@ -6,11 +6,11 @@ tags: [rust, application, use-cases, orchestration, reconciler]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: lib, resource: /crates/application/src/lib.rs, title: lib.rs }
-  - { id: cargo, resource: /crates/application/Cargo.toml, title: Cargo.toml }
+  - { id: lib, resource: /control-plane/crates/application/src/lib.rs, title: lib.rs }
+  - { id: cargo, resource: /control-plane/crates/application/Cargo.toml, title: Cargo.toml }
 ---
 
-# `cat-herder-application` (`crates/application`)
+# `cat-herder-application` (`control-plane/crates/application`)
 
 Orchestrates domain ports into use cases. Functions are **generic** over the port
 implementations (`R: AgentRuntime, P: RunRepository, S: SessionRepository`) — no trait

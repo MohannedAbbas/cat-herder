@@ -6,16 +6,16 @@ tags: [rust, domain, ports, entities, state-machine, catalog]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: lib, resource: /crates/domain/src/lib.rs, title: lib.rs }
-  - { id: entities, resource: /crates/domain/src/entities.rs, title: entities.rs }
-  - { id: ports, resource: /crates/domain/src/ports.rs, title: ports.rs }
-  - { id: state, resource: /crates/domain/src/state.rs, title: state.rs }
-  - { id: api, resource: /crates/domain/src/api.rs, title: api.rs }
-  - { id: catalog, resource: /crates/domain/src/catalog.rs, title: catalog.rs }
-  - { id: cargo, resource: /crates/domain/Cargo.toml, title: Cargo.toml }
+  - { id: lib, resource: /control-plane/crates/domain/src/lib.rs, title: lib.rs }
+  - { id: entities, resource: /control-plane/crates/domain/src/entities.rs, title: entities.rs }
+  - { id: ports, resource: /control-plane/crates/domain/src/ports.rs, title: ports.rs }
+  - { id: state, resource: /control-plane/crates/domain/src/state.rs, title: state.rs }
+  - { id: api, resource: /control-plane/crates/domain/src/api.rs, title: api.rs }
+  - { id: catalog, resource: /control-plane/crates/domain/src/catalog.rs, title: catalog.rs }
+  - { id: cargo, resource: /control-plane/crates/domain/Cargo.toml, title: Cargo.toml }
 ---
 
-# `cat-herder-domain` (`crates/domain`)
+# `cat-herder-domain` (`control-plane/crates/domain`)
 
 Pure Rust, no I/O or framework dependencies (only `serde`, `chrono`, `uuid`). This is the
 center of the [hexagon](/architecture/crates.md); every other crate depends on it.

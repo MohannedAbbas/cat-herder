@@ -14,10 +14,10 @@ sources:
 
 | Path | What |
 |---|---|
-| `crates/` | Rust control plane — see [crates](/crates/index.md) |
-| `crates/domain`, `crates/application` | core + services |
-| `crates/adapters/{api-http,runtime-agent-sandbox,store-postgres,store-inmemory}` | adapters |
-| `crates/bin/cat-herder` | binary + `Dockerfile` |
+| `control-plane/crates/` | Rust control plane — see [crates](/crates/index.md) |
+| `control-plane/crates/domain`, `control-plane/crates/application` | core + services |
+| `control-plane/crates/adapters/{api-http,runtime-agent-sandbox,store-postgres,store-inmemory}` | adapters |
+| `control-plane/crates/bin/cat-herder` | binary + `Dockerfile` |
 | `agent-harness/` | Python harness + `Containerfile` + `uv.lock` + `workflows/` (empty `.gitkeep`) |
 | `sandbox/` | versioned sandbox toolchain `Containerfile` (debian + git/ripgrep/curl) |
 | `helm/cat-herder/` | umbrella Helm chart — see [Helm chart](/deploy/helm-chart.md) |

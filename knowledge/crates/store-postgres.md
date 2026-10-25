@@ -6,13 +6,13 @@ tags: [rust, postgres, sqlx, adapter, persistence, migrations]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: schema, resource: /crates/adapters/store-postgres/src/schema.rs, title: schema.rs }
-  - { id: codec, resource: /crates/adapters/store-postgres/src/codec.rs, title: codec.rs }
-  - { id: gitrepo, resource: /crates/adapters/store-postgres/src/git_repo.rs, title: git_repo.rs }
-  - { id: migrations, resource: /crates/adapters/store-postgres/migrations, title: migrations/ }
+  - { id: schema, resource: /control-plane/crates/adapters/store-postgres/src/schema.rs, title: schema.rs }
+  - { id: codec, resource: /control-plane/crates/adapters/store-postgres/src/codec.rs, title: codec.rs }
+  - { id: gitrepo, resource: /control-plane/crates/adapters/store-postgres/src/git_repo.rs, title: git_repo.rs }
+  - { id: migrations, resource: /control-plane/crates/adapters/store-postgres/migrations, title: migrations/ }
 ---
 
-# `cat-herder-store-postgres` (`crates/adapters/store-postgres`)
+# `cat-herder-store-postgres` (`control-plane/crates/adapters/store-postgres`)
 
 Production persistence (used when `CAT_HERDER_DATABASE_URL` is set). `sqlx` 0.8 with
 `runtime-tokio`, `postgres`, `migrate`, `macros`.

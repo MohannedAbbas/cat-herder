@@ -1,26 +1,29 @@
 .PHONY: build test coverage fmt lint run chart tilt harness-image sandbox-image
 
+# The Rust workspace lives in control-plane/ (see control-plane/Cargo.toml).
+WORKSPACE := control-plane
+
 build:
-	cargo build
+	cd $(WORKSPACE) && cargo build
 
 test:
-	cargo test
+	cd $(WORKSPACE) && cargo test
 
 # Measure test coverage and fail if line coverage is below 85%.
 # Excludes infra that needs a live cluster/DB (bin, kube runtime, Postgres adapters)
 # from the denominator; those are covered by DB-backed integration tests (see CI).
 # Requires: cargo install cargo-llvm-cov (and `llvm-tools-preview` rustup component).
 coverage:
-	cargo llvm-cov --fail-under-lines 85 --ignore-filename-regex 'bin/cat-herder|runtime-agent-sandbox|store-postgres' --html
+	cd $(WORKSPACE) && cargo llvm-cov --fail-under-lines 85 --ignore-filename-regex 'bin/cat-herder|runtime-agent-sandbox|store-postgres' --html
 
 fmt:
-	cargo fmt
+	cd $(WORKSPACE) && cargo fmt
 
 lint:
-	cargo clippy --workspace -- -D warnings
+	cd $(WORKSPACE) && cargo clippy --workspace -- -D warnings
 
 run:
-	cargo run -p cat-herder
+	cd $(WORKSPACE) && cargo run -p cat-herder
 
 chart:
 	helm lint helm/cat-herder

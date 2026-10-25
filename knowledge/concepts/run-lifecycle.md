@@ -6,15 +6,15 @@ tags: [lifecycle, state-machine, run, reconciler, events]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: state, resource: /crates/domain/src/state.rs, title: state.rs }
-  - { id: reconcile, resource: /crates/domain/src/reconcile.rs, title: reconcile.rs }
-  - { id: app, resource: /crates/application/src/lib.rs, title: application lib.rs }
-  - { id: bin, resource: /crates/bin/cat-herder/src/main.rs, title: main.rs (reconciler loop) }
+  - { id: state, resource: /control-plane/crates/domain/src/state.rs, title: state.rs }
+  - { id: reconcile, resource: /control-plane/crates/domain/src/reconcile.rs, title: reconcile.rs }
+  - { id: app, resource: /control-plane/crates/application/src/lib.rs, title: application lib.rs }
+  - { id: bin, resource: /control-plane/crates/bin/cat-herder/src/main.rs, title: main.rs (reconciler loop) }
 ---
 
 # Run lifecycle
 
-The lifecycle state machine in [`crates/domain/src/state.rs`](/crates/domain.md) is the
+The lifecycle state machine in [`control-plane/crates/domain/src/state.rs`](/crates/domain.md) is the
 single source of truth. `Run::transition(to)` enforces valid edges and stamps
 `started_at` on entry to `Running` and `finished_at` on `Succeeded` or any terminal
 state.

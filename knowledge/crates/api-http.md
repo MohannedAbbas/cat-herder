@@ -6,18 +6,18 @@ tags: [rust, axum, rest, http, adapter, auth, oauth, admin, mcp]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: lib, resource: /crates/adapters/api-http/src/lib.rs, title: lib.rs }
-  - { id: admin, resource: /crates/adapters/api-http/src/admin.rs, title: admin.rs }
-  - { id: auth, resource: /crates/adapters/api-http/src/auth.rs, title: auth.rs }
-  - { id: oauth, resource: /crates/adapters/api-http/src/oauth.rs, title: oauth.rs }
-  - { id: crypto, resource: /crates/adapters/api-http/src/crypto.rs, title: crypto.rs }
-  - { id: repo, resource: /crates/adapters/api-http/src/repo.rs, title: repo.rs }
-  - { id: mcp, resource: /crates/adapters/api-http/src/mcp.rs, title: mcp.rs }
-  - { id: webhook, resource: /crates/adapters/api-http/src/webhook.rs, title: webhook.rs }
-  - { id: tests, resource: /crates/adapters/api-http/tests/api.rs, title: tests/api.rs }
+  - { id: lib, resource: /control-plane/crates/adapters/api-http/src/lib.rs, title: lib.rs }
+  - { id: admin, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: admin.rs }
+  - { id: auth, resource: /control-plane/crates/adapters/api-http/src/auth.rs, title: auth.rs }
+  - { id: oauth, resource: /control-plane/crates/adapters/api-http/src/oauth.rs, title: oauth.rs }
+  - { id: crypto, resource: /control-plane/crates/adapters/api-http/src/crypto.rs, title: crypto.rs }
+  - { id: repo, resource: /control-plane/crates/adapters/api-http/src/repo.rs, title: repo.rs }
+  - { id: mcp, resource: /control-plane/crates/adapters/api-http/src/mcp.rs, title: mcp.rs }
+  - { id: webhook, resource: /control-plane/crates/adapters/api-http/src/webhook.rs, title: webhook.rs }
+  - { id: tests, resource: /control-plane/crates/adapters/api-http/tests/api.rs, title: tests/api.rs }
 ---
 
-# `cat-herder-api-http` (`crates/adapters/api-http`)
+# `cat-herder-api-http` (`control-plane/crates/adapters/api-http`)
 
 Serves the REST API (default `:8080`) and hosts the composition-time repository
 selectors, the cryptography, and the PR client. `lib.rs` defines `AppState` and `router`.

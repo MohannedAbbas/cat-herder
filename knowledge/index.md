@@ -6,7 +6,7 @@ okf_version: "0.2"
 
 Open Knowledge Format (v0.2) bundle for **cat-herder**, a Kubernetes-native control
 plane and governance layer for AI coding agents. It has a Rust control plane
-(`crates/`), a Python agent harness (`agent-harness/`) that runs inside sandbox pods, a
+(`control-plane/crates/`), a Python agent harness (`agent-harness/`) that runs inside sandbox pods, a
 Helm chart (`helm/cat-herder/`), and a React dashboard (`ui/`).
 
 New here? Read [Architecture overview](/architecture/overview.md) then

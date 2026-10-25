@@ -1,5 +1,5 @@
 # Multi-stage build for the Cat Herder control plane.
-# Build context is the repo root.
+# Build context is control-plane/ (the Rust workspace root).
 
 # --- build ---
 FROM rust:1.95-slim AS build

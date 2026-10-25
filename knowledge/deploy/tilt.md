@@ -31,7 +31,7 @@ Local dev on a **k3s** cluster using [Tilt](https://tilt.dev). `make tilt` == `t
 - `allow_k8s_contexts('default')`; `default_registry('127.0.0.1:5000')`.
 - Three `custom_build`s (podman build + push, `skips_local_docker=True`) because podman's
   Docker socket lacks Tilt's required BuildKit gRPC interface:
-  - `cat-herder` ← `crates/bin/cat-herder/Dockerfile` (context = repo root)
+  - `cat-herder` ← `control-plane/crates/bin/cat-herder/Dockerfile` (context = repo root)
   - `cat-herder-agent-harness` ← `agent-harness/Containerfile`
   - `cat-herder-ui` ← `ui/Dockerfile`
 - `helm_resource('cat-herder', 'helm/cat-herder', namespace='cat-herder',

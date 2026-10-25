@@ -7,9 +7,9 @@ status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
   - { id: gitlog, resource: /README.md, title: commit "Stop managing the namespace in the chart" }
-  - { id: runtime, resource: /crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime resources }
+  - { id: runtime, resource: /control-plane/crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime resources }
   - { id: values, resource: /helm/cat-herder/values.yaml, title: values.yaml }
-  - { id: auth, resource: /crates/adapters/api-http/src/auth.rs, title: auth.rs }
+  - { id: auth, resource: /control-plane/crates/adapters/api-http/src/auth.rs, title: auth.rs }
 ---
 
 # Gotchas

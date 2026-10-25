@@ -16,11 +16,12 @@ default_registry('127.0.0.1:5000')
 
 # --- Images ---------------------------------------------------------------
 
-# Control plane (deployed by the chart).
+# Control plane (deployed by the chart). Build context is control-plane/, so the
+# Dockerfile's COPY paths (Cargo.toml/Cargo.lock, crates/) resolve inside it.
 custom_build(
     'cat-herder',
-    'podman build -t $EXPECTED_REF -f crates/bin/cat-herder/Dockerfile . && podman push $EXPECTED_REF',
-    ['./crates', 'Cargo.toml', 'Cargo.lock'],
+    'podman build -t $EXPECTED_REF -f control-plane/crates/bin/cat-herder/Dockerfile control-plane && podman push $EXPECTED_REF',
+    ['./control-plane/crates', 'control-plane/Cargo.toml', 'control-plane/Cargo.lock'],
     skips_local_docker=True,
 )
 

@@ -8,7 +8,7 @@ generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
   - { id: netpol, resource: /helm/cat-herder/templates/sandbox-networkpolicy.yaml, title: sandbox-networkpolicy.yaml }
   - { id: values, resource: /helm/cat-herder/values.yaml, title: values.yaml (agentSandbox.networkPolicy) }
-  - { id: runtime, resource: /crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime pod labels }
+  - { id: runtime, resource: /control-plane/crates/adapters/runtime-agent-sandbox/src/lib.rs, title: runtime pod labels }
 ---
 
 # Egress denial

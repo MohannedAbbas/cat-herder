@@ -9,7 +9,7 @@ Kubernetes-native **control plane and governance layer** for AI coding agents.
 
 | Path | What |
 |---|---|
-| `crates/` | Rust control plane (hexagonal: `domain` → `application` → `adapters` → `bin`) |
+| `control-plane/` | Rust control plane (workspace + `crates/`, hexagonal: `domain` → `application` → `adapters` → `bin`) |
 | `agent-harness/` | Python Deep Agents + LangGraph harness (runs inside the sandbox pod) |
 | `sandbox/` | Versioned toolchain image (git, ripgrep, runtimes, credential helper) |
 | `knowledge/` | OKF knowledge base (skills/commands), seed |

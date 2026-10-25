@@ -8,7 +8,7 @@ generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
   - { id: readme, resource: /README.md, title: README.md }
   - { id: plan, resource: /PLAN.md, title: PLAN.md }
-  - { id: cargo, resource: /Cargo.toml, title: workspace Cargo.toml }
+  - { id: cargo, resource: /control-plane/Cargo.toml, title: workspace Cargo.toml }
 ---
 
 # Architecture overview
@@ -25,7 +25,7 @@ egress policy.
 
 | Component | Path | Role |
 |---|---|---|
-| Rust control plane | `crates/` | REST/MCP API, run state machine, reconciliation, admin, auth. Hexagonal: [`domain`](/crates/domain.md) → [`application`](/crates/application.md) → [`adapters`](/crates/api-http.md) → [`bin`](/crates/bin-cat-herder.md). |
+| Rust control plane | `control-plane/crates/` | REST/MCP API, run state machine, reconciliation, admin, auth. Hexagonal: [`domain`](/crates/domain.md) → [`application`](/crates/application.md) → [`adapters`](/crates/api-http.md) → [`bin`](/crates/bin-cat-herder.md). |
 | Agent harness | `agent-harness/` | Python Deep Agents/LangGraph service inside each sandbox pod. See [Agent harness](/harness/agent-harness.md). |
 | Sandbox toolchain image | `sandbox/` | `debian:bookworm-slim` + git/ripgrep/curl, a versioned base image. |
 | Helm chart | `helm/cat-herder/` | Umbrella chart: API, UI, Postgres, RBAC, NetworkPolicy, SandboxTemplate. See [Helm chart](/deploy/helm-chart.md). |

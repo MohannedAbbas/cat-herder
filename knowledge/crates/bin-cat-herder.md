@@ -6,11 +6,11 @@ tags: [rust, binary, composition-root, entrypoint, reconciler]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: main, resource: /crates/bin/cat-herder/src/main.rs, title: main.rs }
-  - { id: dockerfile, resource: /crates/bin/cat-herder/Dockerfile, title: Dockerfile }
+  - { id: main, resource: /control-plane/crates/bin/cat-herder/src/main.rs, title: main.rs }
+  - { id: dockerfile, resource: /control-plane/crates/bin/cat-herder/Dockerfile, title: Dockerfile }
 ---
 
-# `cat-herder` (`crates/bin/cat-herder`)
+# `cat-herder` (`control-plane/crates/bin/cat-herder`)
 
 The composition root. Reads env, builds the adapters, starts background loops, and serves
 the Axum router on `0.0.0.0:8080`.

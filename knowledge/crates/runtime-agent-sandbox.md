@@ -6,12 +6,12 @@ tags: [rust, kubernetes, kube-rs, adapter, runtime, sandbox]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: lib, resource: /crates/adapters/runtime-agent-sandbox/src/lib.rs, title: lib.rs }
-  - { id: example, resource: /crates/adapters/runtime-agent-sandbox/examples/spawn.rs, title: examples/spawn.rs }
-  - { id: cargo, resource: /crates/adapters/runtime-agent-sandbox/Cargo.toml, title: Cargo.toml }
+  - { id: lib, resource: /control-plane/crates/adapters/runtime-agent-sandbox/src/lib.rs, title: lib.rs }
+  - { id: example, resource: /control-plane/crates/adapters/runtime-agent-sandbox/examples/spawn.rs, title: examples/spawn.rs }
+  - { id: cargo, resource: /control-plane/crates/adapters/runtime-agent-sandbox/Cargo.toml, title: Cargo.toml }
 ---
 
-# `cat-herder-runtime-agent-sandbox` (`crates/adapters/runtime-agent-sandbox`)
+# `cat-herder-runtime-agent-sandbox` (`control-plane/crates/adapters/runtime-agent-sandbox`)
 
 The production execution substrate. Uses `kube` 4.2 + `k8s-openapi` (v1_32) to drive the
 agent-sandbox **`Sandbox`** CRD. All agent-sandbox API churn is contained here (the

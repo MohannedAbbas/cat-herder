@@ -6,10 +6,10 @@ tags: [rust, in-memory, adapter, persistence, testing]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: lib, resource: /crates/adapters/store-inmemory/src/lib.rs, title: lib.rs }
+  - { id: lib, resource: /control-plane/crates/adapters/store-inmemory/src/lib.rs, title: lib.rs }
 ---
 
-# `cat-herder-store-inmemory` (`crates/adapters/store-inmemory`)
+# `cat-herder-store-inmemory` (`control-plane/crates/adapters/store-inmemory`)
 
 Driven adapter: simple `Arc<RwLock<HashMap<…>>>` repositories. Two uses:
 

@@ -6,14 +6,14 @@ tags: [domain, run, entity, lifecycle]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: entities, resource: /crates/domain/src/entities.rs, title: entities.rs }
-  - { id: api, resource: /crates/domain/src/api.rs, title: api.rs (RunResponse) }
-  - { id: runs-sql, resource: /crates/adapters/store-postgres/migrations/0001_create_runs.sql, title: runs table }
+  - { id: entities, resource: /control-plane/crates/domain/src/entities.rs, title: entities.rs }
+  - { id: api, resource: /control-plane/crates/domain/src/api.rs, title: api.rs (RunResponse) }
+  - { id: runs-sql, resource: /control-plane/crates/adapters/store-postgres/migrations/0001_create_runs.sql, title: runs table }
 ---
 
 # Run
 
-A `Run` ([`crates/domain/src/entities.rs`](/crates/domain.md)) is one execution. It is
+A `Run` ([`control-plane/crates/domain/src/entities.rs`](/crates/domain.md)) is one execution. It is
 created by [`start_run`](/crates/application.md) from a `RunRequest` produced by a
 trigger (REST, MCP, or webhook).
 

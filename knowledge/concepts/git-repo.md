@@ -6,10 +6,10 @@ tags: [git, credentials, security, identity, encryption]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: api, resource: /crates/domain/src/api.rs, title: api.rs (RepoIdentity, GitRepo) }
-  - { id: entities, resource: /crates/domain/src/entities.rs, title: GitRepo entity }
-  - { id: admin, resource: /crates/adapters/api-http/src/admin.rs, title: admin.rs (upsert_repo) }
-  - { id: bin, resource: /crates/bin/cat-herder/src/main.rs, title: refresh_git_tokens }
+  - { id: api, resource: /control-plane/crates/domain/src/api.rs, title: api.rs (RepoIdentity, GitRepo) }
+  - { id: entities, resource: /control-plane/crates/domain/src/entities.rs, title: GitRepo entity }
+  - { id: admin, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: admin.rs (upsert_repo) }
+  - { id: bin, resource: /control-plane/crates/bin/cat-herder/src/main.rs, title: refresh_git_tokens }
 ---
 
 # GitRepo

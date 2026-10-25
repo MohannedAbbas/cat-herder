@@ -6,16 +6,16 @@ tags: [catalog, providers, models, agents, tools, seed-data]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: catalog, resource: /crates/domain/src/catalog.rs, title: catalog.rs }
-  - { id: api, resource: /crates/domain/src/api.rs, title: api.rs }
-  - { id: seed, resource: /crates/adapters/store-postgres/src/schema.rs, title: seed() }
+  - { id: catalog, resource: /control-plane/crates/domain/src/catalog.rs, title: catalog.rs }
+  - { id: api, resource: /control-plane/crates/domain/src/api.rs, title: api.rs }
+  - { id: seed, resource: /control-plane/crates/adapters/store-postgres/src/schema.rs, title: seed() }
   - { id: values, resource: /helm/cat-herder/values.yaml, title: values.yaml (agents.models) }
 ---
 
 # Provider / Model / Agent catalog
 
 Reference data seeded on first boot (both Postgres and in-memory) from
-[`crates/domain/src/catalog.rs`](/crates/domain.md), and editable via the admin API / UI.
+[`control-plane/crates/domain/src/catalog.rs`](/crates/domain.md), and editable via the admin API / UI.
 
 ## Model string convention
 

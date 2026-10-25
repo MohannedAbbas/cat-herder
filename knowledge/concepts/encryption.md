@@ -6,9 +6,9 @@ tags: [security, encryption, aes-gcm, kubernetes, secret, key-rotation]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: crypto, resource: /crates/adapters/api-http/src/crypto.rs, title: crypto.rs }
-  - { id: keystore, resource: /crates/adapters/api-http/src/key_store.rs, title: key_store.rs }
-  - { id: rotate, resource: /crates/adapters/api-http/src/admin.rs, title: rotate_encryption_key }
+  - { id: crypto, resource: /control-plane/crates/adapters/api-http/src/crypto.rs, title: crypto.rs }
+  - { id: keystore, resource: /control-plane/crates/adapters/api-http/src/key_store.rs, title: key_store.rs }
+  - { id: rotate, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: rotate_encryption_key }
   - { id: rbac, resource: /helm/cat-herder/templates/rbac.yaml, title: rbac.yaml }
 ---
 
