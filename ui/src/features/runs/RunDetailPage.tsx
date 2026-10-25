@@ -39,10 +39,7 @@ export default function RunDetailPage() {
 
   return (
     <div>
-      <PageHeader
-        title={run ? `Run #${run.id}` : 'Run'}
-        subtitle={run ? run.taskSpec : undefined}
-      />
+      <PageHeader title={run ? `Run #${run.id}` : 'Run'} />
 
       {isLoading && <Loading />}
       {error && <ErrorState message={error.message} />}
