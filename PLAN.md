@@ -428,6 +428,45 @@ documented follow-on, not v1.
 Both checkpoint to the same external Postgres via the control plane (§6), so
 pause/resume, retries, and HITL work identically.
 
+### Configurable workflows (agent-type pipelines)
+
+Beyond a single agent, a run can follow a **workflow**: an ordered, user-configurable
+sequence of **steps**, each bound to an **agent type**. v1 ships three agent types and a
+**global default workflow** that chains them:
+
+```mermaid
+flowchart LR
+    A[Coding agent] --> B[Document agent] --> C[Review agent]
+```
+
+- **Agent types (v1)**
+  - `coding` — implement the task against the durable workspace (§6), producing a diff.
+  - `document` — write/maintain the knowledge base and docs (OKF, §7) for the change.
+  - `review` — review the accumulated diff for correctness/security/style, then
+    open/update the PR.
+  Each type resolves to an `AgentTemplate` (harness image, model, tool set, concurrency)
+  from the catalog (§15).
+
+- **Ordering & data flow** — steps run sequentially; each step's output (workspace diff
+  and artifacts) is the input to the next step, so `coding → document → review` is the
+  default pipeline.
+
+- **Uniqueness constraint** — an agent type may appear in **at most one step** of a
+  workflow (one step = one role). Enforced in the editor and again on save.
+
+- **Authoring vs execution** — the workflow is authored as an ordered step list
+  (`WorkflowDefinition`, §15); at start time a `workflow` run compiles the steps into the
+  LangGraph `StateGraph` run kind (§7 "Run kinds") and each step is tracked as a sub-run
+  (or step state) so progress and per-step artifacts are visible in the run view.
+
+#### Workflow UI
+
+- A new **Workflow** tab lists available workflows as a table.
+- Opening a workflow shows the **workflow edit page**, which renders the pipeline as a
+  **generated Mermaid diagram** (live, from the step list) and an **expandable step
+  editor**: add/remove/reorder steps; each step selects an agent type from a dropdown.
+- Changing a step's agent type validates the uniqueness constraint (no agent type twice).
+
 ### Harness control surface (self-built, OSS only)
 We **embed OSS LangGraph** in our own `agent-harness` server — there is no
 managed/proprietary LangGraph Platform or Server. The control surface
@@ -892,6 +931,8 @@ flowchart TB
 - `GET /v1/runs/{id}/events` — SSE/WebSocket stream over the canonical event log.
 - `POST /v1/approvals/{id}/respond`.
 - `GET /v1/agents` — template catalog; `POST /v1/triggers` — register triggers.
+- `GET /v1/workflows`, `PUT /v1/workflows/{id}`, `DELETE /v1/workflows/{id}` — the
+  configurable workflow catalog (§7); `POST /v1/runs` accepts a `workflow_ref`.
 - `GET /v1/mcp` — MCP endpoint. Auth: `/.well-known/*`, `POST /v1/auth/*`.
 - Ops: `/healthz`, `/readyz`, `/metrics`.
 
@@ -931,7 +972,8 @@ and are not a versioning/security surface for external callers.
 Tenant ──< Team ──< User ──< Role ──< Policy
 AgentTemplate (name, image ref, runtime tier, resource limits, harness config:
                model, tools, skills, memory, permissions, interrupt_on, max_concurrency)
-WorkflowDefinition (compiled LangGraph graph; used when Run.kind = workflow)
+WorkflowDefinition (id, name, is_default, ordered steps; used when Run.kind = workflow)
+WorkflowStep (workflow_id, position, agent_type)   # agent_type unique per workflow
 TaskTemplate (id, kind, prompt/workflow_ref, placeholder schema)      # event -> task mapping
 TriggerConfig (id, source, task_template_ref, secret_ref, cooldown, dedup_window)
 Run (id, kind, template/workflow, trigger, state, budget, credential_manifest,
