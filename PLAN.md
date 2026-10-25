@@ -37,6 +37,13 @@ the differentiators here. The differentiators are:
 managed services (no LangGraph Platform, no SaaS). The only ongoing costs are LLM usage
 and cluster infrastructure.
 
+**Distribution & integration surface:** cat-herder is **open source and self-hosted** —
+one instance per organization, installed like any CNCF cloud-native project (each org
+runs its own control plane). The northbound surface is **API-first: MCP + REST**, because
+that is what existing AI vendors (Claude Code/Desktop, ChatGPT connectors, OpenCode,
+DeepSeek clients, …) actually speak. Kubernetes CRDs are an **optional, later**
+declarative projection for GitOps-native teams — never the primary integration surface.
+
 The agent **brain is outsourced** (Deep Agents on LangGraph) and extended with a
 coding tool pack. That is a means, not the pitch. A full "Canvas"-style UI is
 explicitly out of scope for v1 (§21).
@@ -72,7 +79,7 @@ What cat-herder **owns** — and what makes it non-replaceable by the borrowed h
 
 - security for untrusted code — agent-sandbox isolation, egress allow-listing,
   ephemeral-storage caps, repo-scoped brokered credentials (§11);
-- durable, auditable, multi-tenant run/session/budget governance (§6, §12, §16);
+- durable, auditable run/session/budget governance (§6, §12, §16);
 - the git-native coding workflow and idempotent PR/MR creation (§7, §10);
 - human-in-the-loop approvals and review verdicts (§10);
 - the agent/tool/provider/model catalog and the trigger surface (§13, §15).
@@ -106,8 +113,9 @@ by a preference for rewriting Python. The boundary is a narrow control contract
 
 ### Goals
 1. **Rust control plane** — performant, type-safe API and orchestrator.
-2. **MCP server** — expose "run/list/approve" as MCP tools/resources (stdio +
-   Streamable HTTP).
+2. **API-first northbound surface (MCP + REST)** — external AI vendors (Claude,
+   ChatGPT, DeepSeek, OpenCode) integrate via MCP (stdio + Streamable HTTP) and REST;
+   this is the product's integration surface, not Kubernetes CRDs.
 3. **SSO + scoped credential brokering** — OIDC login; agents act on targets only via
    short-lived, sandbox-bound credentials (no raw user-token passthrough).
 4. **Kubernetes application** — the *entire* stack runs in-cluster (control plane,
@@ -126,6 +134,8 @@ by a preference for rewriting Python. The boundary is a narrow control contract
   these (§7).
 - A full conversation/Canvas front-end (thin approval dashboard only).
 - Codebase-wide indexing/LSP (deferred; §7 notes it as a follow-on).
+- A Kubernetes CRD-first operator — CRDs are an optional, later declarative projection
+  for GitOps-native teams, never the integration surface (§1, §13).
 
 ---
 
@@ -225,7 +235,7 @@ composition root with constructor injection (prefer generics/enum dispatch over
 ```mermaid
 flowchart LR
     subgraph Domain["DOMAIN CORE (pure Rust, no infra types)"]
-        Ent["Entities: Tenant, AgentTemplate, Run, ApprovalRequest, Budget, Event"]
+        Ent["Entities: AgentTemplate, Run, ApprovalRequest, Budget, Event"]
         UC["Use cases: StartRun, ResumeRun, Approve, CancelRun, ApplyPolicy, EnforceBudget"]
         P["PORT TRAITS (only where polymorphic)"]
     end
@@ -278,7 +288,7 @@ A trigger is only useful if an event becomes a *task*. `RunRequest` is the norma
 shape every trigger produces:
 
 ```
-RunRequest { tenant, source, kind: agent|workflow, task_spec, template/workflow_ref,
+RunRequest { source, kind: agent|workflow, task_spec, template/workflow_ref,
              budget, credential_manifest, dedup_key, actor }
 ```
 
@@ -374,7 +384,7 @@ sees its own edits.
 
 ### Reconciliation & crash recovery
 - The orchestrator is a **sharded, lease-based reconciler**: reconcile work is
-  partitioned by tenant (or `run_id` hash) across N leaders, each owning a shard via a
+  partitioned by `run_id` hash across N leaders, each owning a shard via a
   lease (Postgres advisory lock or NATS KV). Stateless workers per shard handle pod
   watch and event ingestion, so reconcile throughput scales horizontally instead of
   bottlenecking on one leader.
@@ -520,16 +530,16 @@ boundary (§1 "Dependency boundaries"): we build this thin wrapper ourselves and
 ### Memory & skills (central repository, OKF)
 `AGENTS.md` memory (preferences) and skills live in a **central, versioned repository**
 reachable through the control plane — not pod-local — so "improve over time" is durable
-across disposable pods and shared per tenant. **Skills and commands are packaged in the
+across disposable pods and shared. **Skills and commands are packaged in the
 Open Knowledge Format (OKF)** — Google's open spec for portable, agent-friendly
 knowledge (Markdown + YAML frontmatter: provenance, trust, lifecycle, staleness) —
 rather than ad-hoc prompt files. The OKF knowledge base is the versioned source of
 truth; a **Postgres + pgvector** index (or a LangGraph Store backend) makes it
-searchable and holds per-tenant memory state. The knowledge base has a **trust
+searchable and holds memory state. The knowledge base has a **trust
 boundary**: writes are gated (approved authors, reviewed before promotion), OKF
 provenance/trust/verification frontmatter is **enforced** (unverified or stale skills
-are not loaded, or are flagged), and tenants pin skill versions — a poisoned skill is a
-tenant-wide injection, so the knowledge repo is a protected, audited surface, not a
+are not loaded, or are flagged), and skill versions are pinned — a poisoned skill is an
+org-wide injection, so the knowledge repo is a protected, audited surface, not a
 free-form wiki.
 
 ---
@@ -677,7 +687,7 @@ credentials.** Design is least-privilege-by-default.
   GitHub); SAML 2.0 via adapter where required.
 - The control plane issues short-lived session JWTs to clients only.
 - **Directory sync & provisioning**: SCIM 2.0 for user/group provisioning from the IdP;
-  groups map to tenant roles/policies, so an SSO user lands in the right tenant with the
+  groups map to roles/policies, so an SSO user lands with the
   right permissions without manual role assignment.
 
 ### 11.3 Credential brokering — a JIT credentials controller
@@ -700,7 +710,7 @@ sequenceDiagram
 
     A->>T: request_credential(target=X, action=push, scope=write)
     T->>C: CredentialRequest{run_id, pod_id, target, action, scope}
-    C->>P: authorize (credential manifest + tenant policy + role)
+    C->>P: authorize (credential manifest + policy + role)
     alt denied
         P-->>C: deny -> tool returns refusal (audited)
     else allowed
@@ -729,7 +739,7 @@ return an opaque handle → revoke. Every request/mint/revoke is an audited even
 | Target | Credential | True "sandbox-bound"? |
 |---|---|---|
 | AWS / GCP / Azure | STS / workload-identity token | Yes — bound to the pod ServiceAccount |
-| GitHub / GitLab | App installation token (scoped to the App's install + permissions, ~1h TTL, revocable) — *not* the user's OAuth token | No (bearer) — scope = per-tenant App with minimal permissions, + TTL + revoke + egress deny |
+| GitHub / GitLab | App installation token (scoped to the App's install + permissions, ~1h TTL, revocable) — *not* the user's OAuth token | No (bearer) — scope = a minimal-permission App, + TTL + revoke + egress deny |
 | Database / internal API | short-lived dynamic secret from Vault | Yes — Vault binds to pod identity |
 | Kubernetes API | projected, expiring bound ServiceAccount token | Yes |
 
@@ -741,8 +751,8 @@ pod can't reach arbitrary endpoints. This survives both "untrusted code" and
 
 **Scope granularity (honest):** an installation token is scoped to *the App's install
 and permission set*, not per-repo/per-action. Scope is therefore enforced by using a
-**separate, minimal-permission App per tenant (or per repo set)**; the broker selects
-the App from the requested target and tenant. Where finer per-repo control is needed,
+**separate, minimal-permission App per repo set**; the broker selects
+the App from the requested target (and repo set). Where finer per-repo control is needed,
 use short-lived fine-grained PATs or narrowly-scoped OAuth tokens instead.
 
 **Caching & availability:** minted credentials are cached keyed by `(run_id, target)`
@@ -752,11 +762,10 @@ so availability comes from replicas, not one process. The git/HTTP client's cred
 helper also holds the materialized credential in memory for its TTL, so the model's
 repeated `credential` calls just return the cached handle.
 
-**Tenant isolation (credentials):** the broker enforces a **tenant boundary** — a run
-may only request targets within its tenant's manifest and its tenant-scoped providers
-(per-tenant vault namespace, per-tenant GitHub App, per-tenant cloud role). A
-cross-tenant mint request is refused and audited. (§11.4 covers pod networking; this
-covers credential minting.)
+**Credential scoping:** the broker enforces the run's **declared credential
+manifest** — a run may only request targets within its manifest and its configured
+providers (Vault namespace, GitHub App, cloud role). A request outside the manifest is
+refused and audited. (§11.4 covers pod networking; this covers credential minting.)
 
 **Approval-gating:** targets/actions *inside* the run's pre-approved manifest mint
 automatically. A request for a **new or escalated target** triggers an ApprovalRequest
@@ -764,7 +773,7 @@ via the HITL flow (§10) before the credential is issued.
 
 **Clone-scoped credentials (workspace materialization):** before the harness exists, the
 **control plane** mints a separate **read-only credential scoped to the task's declared
-repo set** (validated against tenant policy — not "any repo in the tenant") from the
+repo set** (validated against policy — not "any repo") from the
 broker to check out the workspace (§4.1). Multi-repo tasks declare the full set; any
 repo the agent wants *beyond* that set goes through the normal, approval-gated runtime
 credential flow (§10). The credential is read-only and revoked once the clone completes.
@@ -782,9 +791,9 @@ verifiable *which pod is asking* proof, strengthening cloud/Vault/mTLS binding.
 
 **Broker hardening (the broker is itself a high-value target):** the broker runs as a
 **separate service** with a narrow ServiceAccount and **no ambient cloud credentials**.
-Its own secrets (per-tenant GitHub App private keys, per-tenant Vault access,
-per-tenant cloud STS roles) live in a secrets manager, are **rotated**, and are
-**tenant-scoped** — so a broker compromise is bounded to a tenant, not global. Callers
+Its own secrets (GitHub App private keys, Vault access, cloud STS roles) live in a
+secrets manager, are **rotated**, and are **scoped** — so a broker compromise is
+bounded, not global. Callers
 are authenticated by **mTLS / SPIFFE SVID** (the harness sidecar's pod identity or the
 control plane's workload identity); the broker resolves `run_id` from the caller's
 verified identity + a control-plane-signed run token, so a forged `run_id` string mints
@@ -793,16 +802,19 @@ nothing. Authorization is enforced per request (policy engine, §20 Phase 1).
 ### 11.4 Network isolation & egress
 - **Egress default-deny** (Cilium FQDN / NetworkPolicy); the pod can reach only
   approved endpoints (LLM provider, declared MCP servers, declared git host).
-- **Tenant isolation**: namespace-per-tenant with NetworkPolicy + resource quotas by
-  default; **vCluster** for hard isolation (separate API surface). Isolation is a
-  first-class, day-one design, not a footnote.
+- **Control-plane / runner-plane separation**: runners (untrusted agent code) execute
+  in a dedicated **runner namespace**, separate from the control-plane namespace
+  (Secrets, Postgres, API), with resource quotas + Pod Security Standards on the runner
+  plane. This is blast-radius and resource governance — cat-herder is
+  single-instance-per-organization (§1), so there is no cross-organization
+  isolation to build (vCluster is out of scope for v1).
 
 ### 11.5 Trigger hardening (anti-fan-out)
 - **Signature verification** per source (webhook HMAC; GitHub App JWT + installation
   tokens; Slack signing secret), secrets stored in vault and rotated.
 - **Idempotency & dedup**: webhook delivery IDs / idempotency keys; replay cache of
   seen event IDs.
-- **Admission & cooldown**: per-source rate limiting and per-tenant **concurrency
+- **Admission & cooldown**: per-source rate limiting and global **concurrency
   caps** on spawned runs.
 - **Service-to-service**: mTLS (cert-manager) + workload identity (IRSA / Entra / GKE).
 
@@ -834,17 +846,17 @@ defense-in-depth *mitigations*, with scoped credentials (§11.3), egress default
 ### 11.7 Retention, deletion & compliance
 The control plane stores code (workspace snapshots), full agent conversations (event
 log + checkpoints), LLM traces, and credential metadata — so retention/deletion is a
-day-one concern, not a Phase-5 garnish. Policy: configurable retention per tenant; a
+day-one concern, not a Phase-5 garnish. Policy: configurable retention; a
 deletion API purges a run's events, checkpoints, snapshots, and artifacts (hard
 delete); no secrets in the event log by construction (§11.3); access/audit logs for the
 governance buyer.
 
 ### 11.8 Authorization model
-- **Decision points**: run creation (may this user/tenant start a run?); tool invocation
+- **Decision points**: run creation (may this user start a run?); tool invocation
   (may this run call this tool?); credential minting (may this run request this
   target/scope?); approval (who may approve what?); result review (who may mark a result
   approved?).
-- **Model**: RBAC for coarse roles (viewer/operator/admin per tenant) + attribute-based
+- **Model**: RBAC for coarse roles (viewer/operator/admin) + attribute-based
   rules for fine-grained policy (e.g., "push to `main` requires approval"; "prod-scoped
   credentials require a second approver").
 - **Language**: v1 uses a small declarative policy DSL over the §15 domain entities;
@@ -877,10 +889,10 @@ with the authority in the path, not in the harness:
    proxy round-trip. It is an optimization, **not** the enforcement authority.
 3. **Budget lease.** At run start the control plane seeds the counter from the run's
    budget (Postgres) and issues the harness the run's model identity + counter key.
-4. **Attribution.** Usage is reported back as events (§9) and rolled up per run/tenant
+4. **Attribution.** Usage is reported back as events (§9) and rolled up per run
    (§16); the control plane can preemptively zero the counter to revoke mid-run.
 
-- **Budgets**: per-run and per-tenant token/dollar caps (the lease + counter, above).
+- **Budgets**: per-run token/dollar caps (the lease + counter, above).
 - **Rate limits & circuit breakers**: per-model rate limiting; backoff on provider
   errors.
 - **Budget pause**: the proxy rejecting a call transitions the run to `BudgetPaused`
@@ -933,8 +945,9 @@ flowchart TB
 
 - **agent-sandbox** (SIG Apps) provides `Sandbox`, `SandboxTemplate`, `SandboxClaim`
   (+ `SandboxWarmPool`, unused in v1) + controller. We consume it; we do **not** write a
-  custom operator (the *reconciler* lives in the orchestrator, §6, not as a K8s CRD
-  controller).
+  custom operator (the *reconciler* lives in the orchestrator, §6). cat-herder is
+  **API-first (MCP + REST)**, not CRD-first: Kubernetes CRDs are an optional later
+  declarative projection for GitOps-native teams, never the integration surface (§1, §14).
 - **Cold-start latency model (no warm pools in v1):** every run is a **cold-start
   sandbox** — container + workspace materialization (content-addressed repo checkout
   from the MinIO clone cache onto a **durable RWX PVC**, snapshotted to MinIO at quiesced
@@ -962,7 +975,7 @@ flowchart TB
 - **Helm-deployable**: the whole topology is packaged as **one umbrella Helm chart**
   (subcharts for Postgres/NATS/Redis/MinIO and the agent-sandbox CRDs + controller), so
   `helm install cat-herder ./helm/cat-herder` yields a working cluster — values-driven
-  config for tenants, model providers, isolation tier, budgets, and SSO.
+  config for model providers, isolation tier, budgets, and SSO.
 
 ---
 
@@ -1005,15 +1018,18 @@ flowchart TB
 | sidecar unix socket | credential + budget requests from the harness (pod-local) | local socket + pod identity |
 | NATS JetStream | internal event transport (not a client API) | internal mTLS |
 
-Only two client-facing protocols (REST + MCP); gRPC, the sidecar, and NATS are internal
-and are not a versioning/security surface for external callers.
+Only two client-facing protocols (REST + MCP) are the product's integration surface —
+that's how external AI vendors (Claude, ChatGPT, DeepSeek, OpenCode, …) drive cat-herder.
+gRPC, the sidecar, and NATS are internal and are not a versioning/security surface for
+external callers. Kubernetes CRDs are not part of this surface: they are an optional,
+later declarative projection for GitOps-native teams (§1, §13).
 
 ---
 
 ## 15. Data model (infra-free domain core)
 
 ```
-Tenant ──< Team ──< User ──< Role ──< Policy
+User ──< Role ──< Policy
 AgentTemplate (name, image ref, runtime tier, resource limits, harness config:
                model, tools, skills, memory, permissions, interrupt_on, max_concurrency)
 WorkflowDefinition (id, name, is_default, ordered steps; used when Run.kind = workflow)
@@ -1030,7 +1046,7 @@ Event (run_id, seq, type, schema_version, timestamp, actor, payload)   # append-
 ApprovalRequest (run_id, resume_token, action, question, state, deadline, responder)
 ReviewDecision (run_id, reviewer, verdict: approved|rejected|changes_requested,
                 feedback, timestamp)                                  # result review (§10)
-Budget (tenant|run, cap, consumed, lease_allowance)
+Budget (run, cap, consumed, lease_allowance)
 CredentialRequest (run_id, target, action, scope, state)              # agent asks (JIT)
 CredentialGrant (request_id, run_id, target, audience, ttl, status,   # broker mints
                  flavor: runtime|clone)                               # clone = repo-set, read-only
@@ -1052,7 +1068,7 @@ observability:
 - **Run replay** — two distinct tools: **event replay** (play back the event log for UI
   inspection) and **deterministic reproduction** (re-run the agent with a recorded LLM
   trace + deterministic stub to reproduce a bug; §17).
-- **Cost attribution** — model usage from events, rolled up per run/tenant.
+- **Cost attribution** — model usage from events, rolled up per run.
 - **Cross-language correlation** — `run_id` propagated through OTel context across the
   Rust control plane and Python harness; pod logs/traces indexed by `run_id`.
 - **Artifact review** — patch/diff artifacts stored and surfaced via API; the review
@@ -1074,8 +1090,7 @@ dedicated strategies:
   "did it emit the right events."
 - **Deterministic reproduction** — recorded-trace replay with a deterministic LLM stub
   to reproduce non-deterministic bugs; golden-event assertions catch harness regressions.
-- **Broker tests** — mint/revoke lifecycle, policy-gating (deny cross-tenant and
-  out-of-manifest requests), TTL/revocation, and an assertion that **the secret never
+- **Broker tests** — mint/revoke lifecycle, policy-gating (deny out-of-manifest requests), TTL/revocation, and an assertion that **the secret never
   appears in model-visible tool output**.
 - **Contract tests** — the harness↔control-plane control surface (grpc/proto) and the
   event envelope, versioned (incl. the compat matrix, §9).
@@ -1174,8 +1189,7 @@ view.
   trigger hardening (dedup/cooldown/caps), approvals wired to LangGraph interrupts,
   **minimal read-only run/diff view (de-blind approvals)**, advanced policy (OPA/Cedar)
   on top of the Phase-1 RBAC/ABAC core.
-- **Phase 4 — MCP & scale**: MCP server, gRPC, LangGraph workflows, multi-tenant
-  isolation (namespace/vCluster), observability dashboards + cost attribution.
+- **Phase 4 — MCP & scale**: MCP server, gRPC, LangGraph workflows, observability dashboards + cost attribution.
 - **Phase 5 — Hardening**: load + chaos testing, cold-start optimization, codebase
   indexing (follow-on), HA/DR, formal compliance attestations (SOC2/GDPR).
 
@@ -1199,8 +1213,10 @@ view.
    context management. The real mitigation is version pinning + narrow API use
    (agent-sandbox `Sandbox`/`SandboxTemplate` only) + an upgrade-cadence policy, not a
    pretend fallback.
-8. **Multi-tenancy**: namespace-per-tenant default; vCluster for hard isolation —
-   confirm whether hard isolation is required day one.
+8. **Deployment model — decided**: single-instance-per-organization (self-hosted OSS, §1);
+   no tenant or team model — the system just orchestrates agent work for the org that
+   installed it. Runners execute in a dedicated runner namespace, separate from the
+   control plane (§11.4).
 9. **v1 approve-blind accepted**: tool approvals ship before the read-only diff view,
    so v1 approvers act without visual context; the governance guarantee is deferred to
    the read-only view (§10, §20). Confirm this is an acceptable interim risk.
@@ -1231,8 +1247,8 @@ view.
 | **T1·11** Warm pool vs. workspace | §13 — honest latency model; container vs. workspace split; content-addressed cache; late-bound identity. |
 | **T1·12** Observability is a bullet | §16 — run replay, cost attribution, cross-language `run_id` correlation, artifact review. |
 | **T1·13** No agent testing | §17 — eval harness, golden replay, contract tests, canary runs. |
-| **T1·14** Multi-tenancy footnote | §11.4 — isolation designed first (namespace-per-tenant, vCluster), egress default-deny. |
-| **T2 contradictions** | §6 (single authority), §15 (opaque handles, no infra leakage), §14 (MCP client clarified), §13 (reconciler, not operator). |
+| **T1·14** Isolation | §11.4 — control-plane/runner-plane namespace split; single-instance-per-org; egress default-deny. |
+| **T2 contradictions** | §6 (single authority), §15 (opaque handles, no infra leakage), §14 (MCP client clarified), §13 (API-first: reconciler, not CRD operator). |
 | **T3 strategic** | §1 — explicit positioning: control plane + governance, not a Canvas clone. |
 
 ---

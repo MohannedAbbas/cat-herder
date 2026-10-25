@@ -52,4 +52,4 @@ New here? Read [Architecture overview](/architecture/overview.md) then
 
 ### Knowledge / skills
 - [Skills index](/skills/index.md) — OKF skills (seed example).
-- [Agent memory seed](/AGENTS.md) — seed AGENTS.md for tenant defaults.
+- [Agent memory seed](/AGENTS.md) — seed AGENTS.md for organization defaults.
