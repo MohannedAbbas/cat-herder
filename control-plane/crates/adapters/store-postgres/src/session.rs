@@ -237,6 +237,7 @@ mod tests {
             started_at: Some(SystemTime::now()),
             finished_at: Some(SystemTime::now()),
             pr_url: None,
+            report: None,
         };
         repo.sync_run(&lifecycle).await.expect("sync_run");
 

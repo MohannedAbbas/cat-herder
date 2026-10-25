@@ -208,6 +208,7 @@ async fn post_finished_event_marks_run_succeeded() {
             started_at: None,
             finished_at: None,
             pr_url: None,
+            report: None,
         })
         .await
         .unwrap();
@@ -216,13 +217,14 @@ async fn post_finished_event_marks_run_succeeded() {
     let (status, body) = post_json(
         app,
         &format!("/v1/runs/{}/events", seeded.id.0),
-        r#"{"type":"finished","status":"succeeded"}"#,
+        r##"{"type":"finished","status":"succeeded","report":"# All done.\n"}"##,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert_eq!(v["state"], "succeeded");
     assert!(v["finishedAt"].is_string());
+    assert_eq!(v["report"], "# All done.\n");
 }
 
 #[tokio::test]
@@ -251,6 +253,7 @@ async fn post_finished_event_failed_marks_run_failed() {
             started_at: None,
             finished_at: None,
             pr_url: None,
+            report: None,
         })
         .await
         .unwrap();
@@ -304,6 +307,7 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             started_at: None,
             finished_at: None,
             pr_url: None,
+            report: None,
         })
         .await
         .unwrap();

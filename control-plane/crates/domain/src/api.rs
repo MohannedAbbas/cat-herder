@@ -186,6 +186,8 @@ pub struct RunResponse {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub pr_url: Option<String>,
+    /// The agent's final markdown report (from the harness `finished` event).
+    pub report: Option<String>,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -205,6 +207,7 @@ impl From<&crate::entities::Run> for RunResponse {
             started_at: run.started_at.map(to_iso),
             finished_at: run.finished_at.map(to_iso),
             pr_url: run.pr_url.clone(),
+            report: run.report.clone(),
         }
     }
 }

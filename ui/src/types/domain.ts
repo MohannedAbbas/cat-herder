@@ -81,6 +81,8 @@ export interface RunRecord {
   startedAt: string | null
   finishedAt: string | null
   prUrl: string | null
+  /** The agent's final markdown report (from the harness `finished` event). */
+  report: string | null
 }
 
 /** An LLM provider. The API key is referenced by Secret name, never returned. */

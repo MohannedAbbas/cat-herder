@@ -70,6 +70,8 @@ pub struct Run {
     pub finished_at: Option<SystemTime>,
     /// PR URL, set when the control plane opens a pull request from the agent's diff.
     pub pr_url: Option<String>,
+    /// The agent's final markdown report, set from the harness `finished` event.
+    pub report: Option<String>,
 }
 
 /// Result-review decision (see `PLAN.md` §10).

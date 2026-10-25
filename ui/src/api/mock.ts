@@ -224,6 +224,7 @@ const runs: RunRecord[] = [
     startedAt: '2026-10-23T09:16:00Z',
     finishedAt: null,
     prUrl: null,
+    report: null,
   },
   {
     id: 2,
@@ -240,6 +241,13 @@ const runs: RunRecord[] = [
     startedAt: '2026-10-22T15:32:00Z',
     finishedAt: '2026-10-22T16:12:00Z',
     prUrl: null,
+    report:
+      '## Summary\n\nMigrated the HTTP adapter from axum 0.7 to 0.8.\n\n' +
+      '- Updated routing and handler signatures\n' +
+      '- Bumped `axum`, `tower`, and `tower-http`\n\n' +
+      '### Verification\n\n' +
+      '```\ncargo build && cargo test\n```\n\n' +
+      'All tests pass. See the [migration guide](https://github.com/tokio-rs/axum).\n',
   },
   {
     id: 3,
@@ -256,6 +264,7 @@ const runs: RunRecord[] = [
     startedAt: '2026-10-21T11:02:00Z',
     finishedAt: '2026-10-21T11:35:00Z',
     prUrl: null,
+    report: null,
   },
   {
     id: 4,
@@ -272,6 +281,7 @@ const runs: RunRecord[] = [
     startedAt: null,
     finishedAt: null,
     prUrl: null,
+    report: null,
   },
 ]
 

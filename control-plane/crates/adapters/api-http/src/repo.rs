@@ -352,6 +352,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             pr_url: None,
+            report: None,
         }
     }
 

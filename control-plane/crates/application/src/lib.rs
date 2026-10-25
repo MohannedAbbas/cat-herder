@@ -46,6 +46,7 @@ where
         started_at: None,
         finished_at: None,
         pr_url: None,
+        report: None,
     };
 
     let mut run = repo.save(&run).await?; // Queued (id assigned)
@@ -119,9 +120,14 @@ pub enum Outcome {
 /// Use case: record the harness's completion of a run, advancing it to `Succeeded`
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
+///
+/// `report` is the agent's final markdown summary (from the harness `finished`
+/// event); when present it is persisted onto the run (even for an already-final
+/// run, so a late report is not lost).
 pub async fn complete_run<P, S>(
     run_id: RunId,
     outcome: Outcome,
+    report: Option<String>,
     repo: &P,
     sessions: &S,
 ) -> DomainResult<Run>
@@ -141,8 +147,16 @@ where
         Outcome::Failed => RunState::Failed,
     };
 
-    // Idempotent: don't overwrite a run that already reached a final state.
+    // Idempotent: don't overwrite a run that already reached a final state. Still
+    // persist a report that arrives now (e.g. a re-delivered `finished` event).
     if run.state == RunState::Succeeded || is_terminal(run.state) {
+        let Some(report) = report else { return Ok(run) };
+        if run.report.as_deref() == Some(report.as_str()) {
+            return Ok(run);
+        }
+        let mut run = run;
+        run.report = Some(report);
+        let run = repo.save(&run).await?;
         return Ok(run);
     }
 
@@ -157,6 +171,10 @@ where
         }
         // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
         _ => return Ok(run),
+    }
+
+    if report.is_some() {
+        run.report = report;
     }
 
     let run = repo.save(&run).await?;
@@ -289,12 +307,26 @@ mod tests {
             .unwrap();
         assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Running);
 
-        let done = complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap();
+        let done = complete_run(
+            run.id,
+            Outcome::Succeeded,
+            Some("# Done\n\nAll good.".into()),
+            &repo,
+            &sessions,
+        )
+        .await
+        .unwrap();
         assert_eq!(done.state, RunState::Succeeded);
+        assert_eq!(done.report.as_deref(), Some("# Done\n\nAll good."));
         assert!(done.finished_at.is_some());
         assert_eq!(
             sessions.get(&session_id).await.unwrap().unwrap().runs[0].state,
             RunState::Succeeded
+        );
+        // The report is persisted on the run.
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().report.as_deref(),
+            Some("# Done\n\nAll good.")
         );
     }
 
@@ -307,7 +339,7 @@ mod tests {
             .await
             .unwrap();
 
-        let done = complete_run(run.id, Outcome::Failed, &repo, &sessions).await.unwrap();
+        let done = complete_run(run.id, Outcome::Failed, None, &repo, &sessions).await.unwrap();
         assert_eq!(done.state, RunState::Failed);
     }
 
@@ -321,11 +353,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap().state,
+            complete_run(run.id, Outcome::Succeeded, None, &repo, &sessions).await.unwrap().state,
             RunState::Succeeded
         );
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, &repo, &sessions).await.unwrap().state,
+            complete_run(run.id, Outcome::Succeeded, None, &repo, &sessions).await.unwrap().state,
             RunState::Succeeded
         );
     }
@@ -334,6 +366,6 @@ mod tests {
     async fn complete_run_unknown_run_errors() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        assert!(complete_run(RunId(999), Outcome::Succeeded, &repo, &sessions).await.is_err());
+        assert!(complete_run(RunId(999), Outcome::Succeeded, None, &repo, &sessions).await.is_err());
     }
 }

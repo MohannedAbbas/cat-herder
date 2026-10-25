@@ -270,7 +270,7 @@ async fn post_run_event(
                 Some("failed") => Outcome::Failed,
                 _ => Outcome::Succeeded,
             };
-            let run = complete_run(run_id, outcome, &state.repo, &state.sessions)
+            let run = complete_run(run_id, outcome, report.clone(), &state.repo, &state.sessions)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
