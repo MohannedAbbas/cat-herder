@@ -41,6 +41,42 @@ The agent **brain is outsourced** (Deep Agents on LangGraph) and extended with a
 coding tool pack. That is a means, not the pitch. A full "Canvas"-style UI is
 explicitly out of scope for v1 (§21).
 
+### Dependency boundaries — the line we don't cross
+
+These boundaries separate what cat-herder **owns** (its product) from what it
+**borrows** (its execution substrate). They are product decisions, not implementation
+details: crossing one requires revisiting §1/§21 deliberately, never drifting in a PR.
+
+1. **The brain is a library inside the disposable harness, never a server in the
+   control plane.** Deep Agents / LangGraph are imported *inside* the per-run sandbox
+   pod, behind the narrow control contract (§6/§9). The Rust control plane never imports
+   or depends on Python or LangChain.
+2. **No self-hosted LangGraph Server / LangGraph Platform as a control-plane
+   component.** The control surface (start/pause/resume/cancel, event + checkpoint
+   streaming, heartbeat) is self-built and thin (§7). Adopting LangChain's own server
+   would move the vendor into exactly the layer that *is* the product — governance —
+   and cede the moat to a vendor whose commercial product is that server. LangChain is a
+   swappable execution detail; it must not become the substrate.
+3. **Execution is swappable behind `AgentRuntime`.** `spawn`/`status`/`signal`/
+   `terminate` (§5) are the *only* coupling the control plane has to how a run
+   executes. The brain can be replaced — raw LangGraph, a non-LangChain runtime —
+   without touching the domain, application, or stores.
+4. **Workflows: linear in the DB, complex in code.** UI-authored pipelines are an
+   ordered `WorkflowDefinition` (one agent type per step). Anything with real topology
+   (branches, loops, parallelism) is a versioned, code-first LangGraph graph referenced
+   by `workflow_ref` (§7). We do **not** serialize general graph topology into Postgres
+   or build a graph compiler.
+
+What cat-herder **owns** — and what makes it non-replaceable by the borrowed half above
+— is the governance layer, named here so it is never mistaken for the borrowed half:
+
+- security for untrusted code — agent-sandbox isolation, egress allow-listing,
+  ephemeral-storage caps, repo-scoped brokered credentials (§11);
+- durable, auditable, multi-tenant run/session/budget governance (§6, §12, §16);
+- the git-native coding workflow and idempotent PR/MR creation (§7, §10);
+- human-in-the-loop approvals and review verdicts (§10);
+- the agent/tool/provider/model catalog and the trigger surface (§13, §15).
+
 ---
 
 ## 2. What we're building (and how it differs from OpenHands)
@@ -428,6 +464,12 @@ documented follow-on, not v1.
 Both checkpoint to the same external Postgres via the control plane (§6), so
 pause/resume, retries, and HITL work identically.
 
+The two run kinds encode the workflow boundary (§1 "Dependency boundaries"): the
+**UI-authored** `workflow` is a *linear* step list (`WorkflowDefinition`), while
+anything with real topology — branches, loops, parallelism — is a **code-first** LangGraph
+graph versioned in `agent-harness/workflows/` and referenced by `workflow_ref`, not a
+serialized graph in Postgres.
+
 ### Configurable workflows (agent-type pipelines)
 
 Beyond a single agent, a run can follow a **workflow**: an ordered, user-configurable
@@ -471,7 +513,9 @@ flowchart LR
 We **embed OSS LangGraph** in our own `agent-harness` server — there is no
 managed/proprietary LangGraph Platform or Server. The control surface
 (start/pause/resume/cancel, event + checkpoint streaming, heartbeat) is a thin gRPC
-wrapper we build over the OSS `langgraph`/`deepagents` libraries.
+wrapper we build over the OSS `langgraph`/`deepagents` libraries. This is a hard
+boundary (§1 "Dependency boundaries"): we build this thin wrapper ourselves and do
+**not** adopt a self-hosted LangGraph Server as a control-plane component.
 
 ### Memory & skills (central repository, OKF)
 `AGENTS.md` memory (preferences) and skills live in a **central, versioned repository**
@@ -1163,6 +1207,10 @@ view.
 10. **Everything OSS or self-built**: no proprietary managed services (no LangGraph
     Platform, no SaaS); the only recurring costs are LLM usage and cluster
     infrastructure. Confirm this is a hard constraint.
+11. **Dependency boundary — decided**: LangChain/LangGraph is a library inside the
+    disposable harness, never a server in the control plane (see §1 "Dependency
+    boundaries"). Crossing that line is a product decision, not an implementation
+    choice.
 
 ---
 

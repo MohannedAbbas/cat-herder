@@ -36,6 +36,7 @@ does not write its own operator.
 | `MODEL` | the run's `model` (`provider:model`), if set |
 | `REPO_URL` | the run's `repo`, normalized to canonical HTTPS |
 | `CAT_HERDER_CONTROL_URL` | `$CAT_HERDER_CONTROL_URL` or `http://cat-herder-api.{ns}.svc.cluster.local` |
+| `STUCK_TIMEOUT_SECS` | the control plane's `stuckTimeoutSecs` (harness stuck watchdog threshold) |
 | `LLM_API_KEY` | the provider's Secret (resolved from the model prefix), else control-plane's `LLM_API_KEY` |
 | `GIT_TOKEN` | the repo's decrypted read token, only if the run targets a registered repo |
 
@@ -43,16 +44,33 @@ does not write its own operator.
 
 - Labels `app.kubernetes.io/name: cat-herder-harness`, `part-of: cat-herder` (the
   [egress NetworkPolicy](/concepts/egress-policy.md) selects on the name label).
-- Port `8080`; readiness probe `GET /healthz`.
+- Port `8080`; readiness probe `GET /healthz`; liveness probe `GET /livez`
+  (`periodSeconds: 30`, `timeoutSeconds: 5`, `failureThreshold: 3`) — the stuck-run
+  watchdog (see [run lifecycle](/concepts/run-lifecycle.md)).
+- `restartPolicy: Never` — one-shot workload: a liveness-killed/crashed container goes
+  terminal (`Finished=PodFailed`) instead of restart-looping.
+- `shutdownPolicy: Retain` + `shutdownTime` (`now + runTimeoutSecs`, default 3600s) — at
+  the deadline the controller marks the sandbox `Ready=False`/`SandboxExpired` but
+  retains it, so the reconciler can deterministically mark the run `timed_out` and then
+  delete the sandbox.
 - Resources: **request `ephemeral-storage: 2Gi`, limit `10Gi`** — a `cargo build` in the
   sandbox can write a multi-GiB `target/` + registry cache; see
   [gotchas](/operations/gotchas.md).
 
 ## Status → runtime status
 
-`status()` reads `status.conditions` for `type == "Ready"`, `status == "True"` →
-`RuntimeStatus::Ready`, otherwise `Pending`; a missing Sandbox yields `None`. The
-[reconciler](/concepts/run-lifecycle.md) maps this onto run states.
+`status()` reads `status.conditions`:
+
+| Condition | → `RuntimeStatus` |
+|---|---|
+| `Ready=True` | `Ready` |
+| `Finished=True`, reason `PodFailed` | `Failed` |
+| `Finished=True`, otherwise | `Succeeded` |
+| `Ready=False`, reason `SandboxExpired` | `Expired` |
+| anything else | `Pending` |
+| Sandbox CR missing | `None` |
+
+The [reconciler](/concepts/run-lifecycle.md) maps these onto run states.
 
 `signal()` patches a `cat-herder.dev/signal` annotation; `terminate()` deletes the
 Sandbox.

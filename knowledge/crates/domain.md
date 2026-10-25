@@ -26,7 +26,7 @@ center of the [hexagon](/architecture/crates.md); every other crate depends on i
 |---|---|
 | `entities.rs` | `TenantId`, `RunId`, `RunKind`, `RunState`, `ReviewVerdict`, `Run`, `ReviewDecision`, `GitRepo`. Infrastructure-free. See [Run](/concepts/run.md) & [GitRepo](/concepts/git-repo.md). |
 | `state.rs` | `can_transition`, `is_terminal`, `Run::transition`. See [Run lifecycle](/concepts/run-lifecycle.md). |
-| `reconcile.rs` | `RuntimeStatus { Pending, Ready }` and `reconcile_run(state, status)` → next state. |
+| `reconcile.rs` | `RuntimeStatus { Pending, Ready, Succeeded, Failed, Expired }` and `reconcile_run(state, status)` → the (possibly multi-step) transition sequence. |
 | `ports.rs` | Port traits + `RunRequest` + `DomainResult`. |
 | `api.rs` | API read models (JSON contract): `AgentTemplate`, `Session`/`SessionRun`/`SessionSummary`, `Provider`, `Model`, `Tool`, `GitRepo`, `AuditEntry`, `RuntimeTier`, `CreateRunRequest`, `RunResponse`; identity helpers `RepoIdentity`, `repo_identity`, `repo_identity_from_url`, `is_safe_repo_url`, `is_valid_host`; `default_git_hosts`; id/time helpers. |
 | `catalog.rs` | Seed data: `default_agents(model_overrides)`, `default_providers`, `default_models`, `default_tools`, `default_sessions`. See [catalog](/concepts/catalog.md). |

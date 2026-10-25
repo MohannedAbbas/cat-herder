@@ -25,15 +25,28 @@ It uses Deep Agents + LangGraph (`deepagents`, `langgraph`, `langchain`,
 
 ## Lifecycle (`main`)
 
-1. Start a `ThreadingHTTPServer` serving `GET /healthz` on a daemon thread → the pod
-   becomes Ready.
+1. Start a `ThreadingHTTPServer` serving `GET /healthz` (readiness) and `GET /livez`
+   (liveness, the stuck watchdog) on a daemon thread → the pod becomes Ready.
 2. If `TASK_SPEC` is empty → idle forever (health only). If `MODEL` is missing → report
    `finished`/`failed` and idle.
 3. `set_provider_key(model)` maps `LLM_API_KEY` to the provider env var LangChain reads
    (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`).
 4. If `REPO_URL` → `clone_repo`.
-5. Report `started`, run the agent, `collect_changes`, report `finished` (succeeded with
-   `report` + `changes`, or failed). Errors are caught so the pod stays alive.
+5. Report `started`, run the agent (streaming, with progress heartbeats), `collect_changes`,
+   report `finished` (succeeded with `report` + `changes`, or failed). Errors are caught
+   so the pod stays alive.
+
+## Stuck-run watchdog
+
+The agent runs in the main thread while the health server runs in a daemon thread. A
+module-level `last_activity` timestamp is bumped on each chunk the agent's stream yields
+(`agent.stream(..., stream_mode="values")`). `GET /livez` returns **503** when the agent
+is running but has been silent longer than `STUCK_TIMEOUT_SECS` (default 900s, injected
+by the control plane); otherwise 200. On the first stuck detection the harness also
+self-reports a `stuck` event (off-thread, best-effort) so the control plane marks the run
+terminal and deletes the sandbox promptly. The pod's kubelet `livenessProbe` targets
+`/livez` and, with `restartPolicy: Never`, is the backstop that kills a harness so wedged
+(GIL-bound) it can't even self-report — surfacing as `Finished=PodFailed` on the Sandbox.
 
 ## Cloning the repo
 
@@ -50,8 +63,9 @@ env=shell_env)`** — this gives one backend that is both a real filesystem root
 `/repo` and an `execute` shell running in `/repo` (so the agent can build/test; the
 harness image ships Rust + build tooling). `shell_env` is the process env **minus**
 `SECRET_ENV_KEYS` (`GIT_TOKEN`, `LLM_API_KEY`, and per-provider key vars), so the agent's
-shell cannot read the tokens via `env`. The agent is invoked with the task spec and the
-last message's content is returned as the report.
+shell cannot read the tokens via `env`. The agent is run with `agent.stream(...,
+stream_mode="values")` (each chunk bumps the stuck-watchdog heartbeat) and the last
+message's content is returned as the report.
 
 ## Reporting events
 

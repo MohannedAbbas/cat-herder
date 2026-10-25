@@ -12,6 +12,22 @@ spec:
       labels:
         app.kubernetes.io/name: cat-herder-harness
     spec:
+      # One-shot workload: on liveness-kill/crash the pod goes terminal instead of
+      # restart-looping forever.
+      restartPolicy: Never
       containers:
         - name: harness
           image: "{{ .Values.harness.image }}"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          # Stuck-run watchdog: the harness fails this probe when the agent stops
+          # making progress (see PLAN.md §6).
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3

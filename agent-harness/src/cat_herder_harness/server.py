@@ -15,6 +15,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -41,6 +42,57 @@ SECRET_ENV_KEYS = {
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
 }
+
+# --- stuck-run watchdog -----------------------------------------------------
+# The agent runs in this (main) thread while the health server runs in a daemon
+# thread. We track "last activity" and expose it on `/livez`: if the agent makes no
+# progress for STUCK_TIMEOUT_SECS, `/livez` returns 503 so the pod's liveness probe
+# (kubelet) kills it. The harness also self-reports a `stuck` event once, so the
+# control plane can mark the run terminal and delete the sandbox promptly.
+STUCK_TIMEOUT_SECS = float(os.environ.get("STUCK_TIMEOUT_SECS", "900"))
+
+_state_lock = threading.Lock()
+_last_activity = time.monotonic()
+_agent_running = False
+_agent_finished = False
+_stuck_reported = False
+
+
+def mark_activity() -> None:
+    """Record agent progress (called from the agent's stream as it advances)."""
+    global _last_activity
+    with _state_lock:
+        _last_activity = time.monotonic()
+
+
+def set_agent_running(running: bool) -> None:
+    global _agent_running
+    with _state_lock:
+        _agent_running = running
+
+
+def set_agent_finished(finished: bool) -> None:
+    global _agent_finished
+    with _state_lock:
+        _agent_finished = finished
+
+
+def is_stuck() -> bool:
+    """True when the agent is running, not finished, and has been silent too long."""
+    with _state_lock:
+        if not _agent_running or _agent_finished:
+            return False
+        return (time.monotonic() - _last_activity) > STUCK_TIMEOUT_SECS
+
+
+def report_stuck_once() -> None:
+    """Best-effort, one-shot `stuck` event to the control plane (off-thread)."""
+    global _stuck_reported
+    with _state_lock:
+        if _stuck_reported:
+            return
+        _stuck_reported = True
+    threading.Thread(target=lambda: report_event("stuck"), daemon=True).start()
 
 
 def report_event(
@@ -75,11 +127,20 @@ def report_event(
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
-            self.send_response(200)
-            body = b"ok\n"
+            # Readiness: the process is up and serving.
+            self._respond(200, b"ok\n")
+        elif self.path == "/livez":
+            # Liveness: the agent is making progress (or is idle/finished).
+            if is_stuck():
+                report_stuck_once()
+                self._respond(503, b"stuck\n")
+            else:
+                self._respond(200, b"ok\n")
         else:
-            self.send_response(404)
-            body = b"not found\n"
+            self._respond(404, b"not found\n")
+
+    def _respond(self, code: int, body: bytes) -> None:
+        self.send_response(code)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -198,7 +259,16 @@ def run_agent(task_spec: str, model: str) -> str:
         system_prompt="You are a coding agent.",
         backend=backend,
     )
-    result = agent.invoke({"messages": [{"role": "user", "content": task_spec}]})
+    # Stream so we can heartbeat progress; the stuck watchdog's `/livez` reads the
+    # last-activity timestamp we bump on each yielded chunk.
+    mark_activity()
+    result: dict = {}
+    for chunk in agent.stream(
+        {"messages": [{"role": "user", "content": task_spec}]},
+        stream_mode="values",
+    ):
+        mark_activity()
+        result = chunk
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if messages:
         last = messages[-1]
@@ -287,6 +357,7 @@ def main() -> None:
         clone_repo(REPO_URL)
 
     report_event("started")
+    set_agent_running(True)
     try:
         result = run_agent(task_spec, model)
         print(f"agent completed: {result}", flush=True)
@@ -295,8 +366,12 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 — keep the pod alive and log
         print(f"agent failed: {exc}", flush=True)
         report_event("finished", status="failed")
+    finally:
+        set_agent_running(False)
+        set_agent_finished(True)
 
-    # Keep the health server alive after the agent finishes.
+    # Keep the health server alive after the agent finishes (the control plane
+    # deletes the sandbox once the run is terminal; see the run lifecycle).
     threading.Event().wait()
 
 

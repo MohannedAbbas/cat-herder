@@ -49,24 +49,42 @@ to `awaiting_review`).
    `Scheduled → PodPending`; projects the run into the session display row; then calls
    `AgentRuntime::spawn` (creates the [Sandbox](/concepts/sandbox.md)).
 3. **Reconciler** (background loop every 10s in the [binary](/crates/bin-cat-herder.md))
-   calls `reconcile_once` over runs in `PodPending`/`Running`:
-   - Sandbox `Ready=True` → `pod_pending → running`
-   - Sandbox gone (`status == None`) → `running → succeeded`
-   and syncs the session display row. See `reconcile_run` in `reconcile.rs`.
+   calls `reconcile_once` over runs in `PodPending`/`Running`, mapping the sandbox's
+   status conditions onto lifecycle transitions (see `reconcile_run` in `reconcile.rs`):
+   - `Ready=True` → `pod_pending → running`
+   - `Finished=True` (`PodFailed`) → `running → stuck` (the stuck-run watchdog)
+   - `Ready=False` (`SandboxExpired`) → `running → timed_out` (the `shutdownTime` deadline)
+   - Sandbox gone (`status == None`) → `running → succeeded` (fallback)
+   When the reconciler itself reaches a terminal state it also deletes the Sandbox.
 4. **Harness events** (`POST /v1/runs/{id}/events`): `started` is acknowledged; a
    `finished` event with `status: "failed"` → `complete_run(Failed)`, otherwise
-   `complete_run(Succeeded)`. `complete_run` also fast-forwards
-   `PodPending → Running → terminal` and is idempotent for runs already final.
+   `complete_run(Succeeded)`; a `stuck` event → `complete_run(Stuck)`. `complete_run`
+   also fast-forwards `PodPending → Running → terminal` and is idempotent for runs
+   already final. On a `finished` or `stuck` event the control plane also deletes the
+   Sandbox (best-effort) so the run's pod is reclaimed — the outcome and report are
+   already persisted.
 5. On success with a non-empty `changes` list, the control plane opens a PR/MR in the
    background — see [PR/MR creation](/concepts/pr-creation.md). The run's `state` in the
    response is the pre-PR state; `pr_url` is set asynchronously.
 
+## Stuck-run watchdog
+
+Each run's Sandbox carries a `shutdownTime` hard deadline (`runTimeoutSecs`, default
+3600s) with `shutdownPolicy: Retain`: at the deadline the agent-sandbox controller marks
+the sandbox `Ready=False`/`SandboxExpired` but retains it, so the reconciler can
+deterministically observe the expiry, mark the run `timed_out`, and delete the sandbox.
+Separately, the [harness](/harness/agent-harness.md) tracks agent progress and fails its
+`/livez` probe after `stuckTimeoutSecs` (default 900s) of silence, self-reporting a
+`stuck` event; the pod's kubelet `livenessProbe` (`restartPolicy: Never`) is the backstop
+that turns a wedged harness into `Finished=PodFailed`. See [Sandbox](/concepts/sandbox.md).
+
 ## Notes / limitations
 
 - Human-in-the-loop states (`awaiting_input`, `budget_paused`, `awaiting_review`) and
-  signal/terminate exist in the domain and runtime (`signal` writes a
-  `cat-herder.dev/signal` annotation; `terminate` deletes the Sandbox) but are not yet
-  driven by API endpoints.
+  `signal` exist in the domain and runtime (`signal` writes a
+  `cat-herder.dev/signal` annotation) but are not yet driven by API endpoints.
+  `terminate` deletes the Sandbox and is invoked on `finished`/`stuck` events and by
+  the reconciler on terminal detection.
 - `Run::transition` failure maps to an error; `complete_run` leaves non-runnable states
   (queued/scheduled/etc.) untouched.
 

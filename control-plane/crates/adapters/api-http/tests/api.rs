@@ -271,6 +271,50 @@ async fn post_finished_event_failed_marks_run_failed() {
 }
 
 #[tokio::test]
+async fn post_stuck_event_marks_run_stuck() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState, TenantId};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let seeded = state
+        .repo
+        .save(&Run {
+            id: RunId(0),
+            tenant: TenantId(1),
+            kind: RunKind::Agent,
+            state: RunState::Running,
+            task_spec: "event test".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
+            pr_url: None,
+            report: None,
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let (status, body) = post_json(
+        app,
+        &format!("/v1/runs/{}/events", seeded.id.0),
+        r#"{"type":"stuck"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["state"], "stuck");
+    assert!(v["finishedAt"].is_string());
+}
+
+#[tokio::test]
 async fn post_event_unknown_run_returns_404() {
     let (status, _) = post_json(
         app(),

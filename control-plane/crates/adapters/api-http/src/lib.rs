@@ -17,8 +17,8 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::entities::{Run, RunId, RunState, TenantId};
 use cat_herder_domain::ports::{
-    AgentRepository, GitRepoRepository, RunRepository, RunRequest, SessionRepository,
-    SettingRepository,
+    AgentRepository, AgentRuntime, GitRepoRepository, RunRepository, RunRequest,
+    SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
@@ -228,8 +228,9 @@ async fn get_run(
     Ok(Json(RunResponse::from(&run)))
 }
 
-/// A harness-reported event (see `PLAN.md` §9). The only state-changing event today
-/// is `finished` (advances the run to `succeeded`/`failed`); others are acknowledged.
+/// A harness-reported event (see `PLAN.md` §9). State-changing events: `finished`
+/// (advances the run to `succeeded`/`failed`) and `stuck` (advances to `stuck`);
+/// others are acknowledged.
 #[derive(Debug, serde::Deserialize)]
 pub struct RunEvent {
     #[serde(rename = "type")]
@@ -274,10 +275,36 @@ async fn post_run_event(
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+            // The run's outcome and report are already persisted, so the sandbox has
+            // nothing left to do: reclaim it now rather than leave its pod running
+            // indefinitely. Deleting the Sandbox cascades (owner ref) to its pod.
+            // Best-effort — a failure here must not fail the already-recorded run.
+            if let Some(runtime) = &state.runtime {
+                if let Err(e) = runtime.terminate(run_id).await {
+                    eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
+                }
+            }
+
             // On success with a diff, open a PR in the background (the write token
             // lives here in the control plane, never in the sandbox).
             if outcome == Outcome::Succeeded {
                 maybe_open_pr(&state, &run, report, changes).await;
+            }
+
+            Ok(Json(RunResponse::from(&run)))
+        }
+        // The harness's own stuck watchdog reports `stuck` when the agent stops making
+        // progress: mark the run terminal and reclaim the sandbox (the liveness probe is
+        // the kubelet-side backstop if the harness itself is too wedged to report).
+        "stuck" => {
+            let run = complete_run(run_id, Outcome::Stuck, None, &state.repo, &state.sessions)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            if let Some(runtime) = &state.runtime {
+                if let Err(e) = runtime.terminate(run_id).await {
+                    eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
+                }
             }
 
             Ok(Json(RunResponse::from(&run)))

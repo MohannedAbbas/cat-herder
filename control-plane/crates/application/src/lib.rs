@@ -83,6 +83,10 @@ fn session_title(task_spec: &str) -> String {
 
 /// Reconcile all active runs against their execution status, advancing the lifecycle
 /// state machine where possible. Returns the number of runs advanced.
+///
+/// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
+/// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
+/// execution — mirroring the `finished` event path — so a dead sandbox doesn't linger.
 pub async fn reconcile_once<R, P, S>(runtime: &R, repo: &P, sessions: &S) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -93,17 +97,29 @@ where
 
     for run in repo.list_all().await? {
         match run.state {
-            RunState::PodPending | RunState::Running => {
-                let status = runtime.status(run.id).await?;
-                if let Some(next) = reconcile_run(run.state, status) {
-                    let mut updated = run.clone();
-                    updated.transition(next)?;
-                    repo.save(&updated).await?;
-                    sessions.sync_run(&updated).await?;
-                    advanced += 1;
-                }
+            RunState::PodPending | RunState::Running => {}
+            _ => continue,
+        }
+
+        let status = runtime.status(run.id).await?;
+        let transitions = reconcile_run(run.state, status);
+        if transitions.is_empty() {
+            continue;
+        }
+
+        let mut updated = run.clone();
+        for next in transitions {
+            updated.transition(next)?;
+        }
+        repo.save(&updated).await?;
+        sessions.sync_run(&updated).await?;
+        advanced += 1;
+
+        // Reclaim the execution once the run is done (details are already persisted).
+        if updated.state == RunState::Succeeded || is_terminal(updated.state) {
+            if let Err(e) = runtime.terminate(updated.id).await {
+                eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
             }
-            _ => {}
         }
     }
 
@@ -115,6 +131,8 @@ where
 pub enum Outcome {
     Succeeded,
     Failed,
+    /// The harness detected its own agent stopped making progress (stuck watchdog).
+    Stuck,
 }
 
 /// Use case: record the harness's completion of a run, advancing it to `Succeeded`
@@ -145,6 +163,7 @@ where
     let target = match outcome {
         Outcome::Succeeded => RunState::Succeeded,
         Outcome::Failed => RunState::Failed,
+        Outcome::Stuck => RunState::Stuck,
     };
 
     // Idempotent: don't overwrite a run that already reached a final state. Still

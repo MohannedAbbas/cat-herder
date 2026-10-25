@@ -39,6 +39,14 @@ controlPlane:
   image: ghcr.io/your-org/cat-herder:0.1.0
   replicas: 1
   port: 8080
+  # Stuck-run watchdog (PLAN.md §6). The runtime adapter writes both timeouts onto
+  # each run's Sandbox:
+  #   - stuckTimeoutSecs -> the harness reports `stuck` (and its pod liveness probe
+  #     fails) when the agent makes no progress this long.
+  #   - runTimeoutSecs   -> the Sandbox's `shutdownTime` hard deadline; the
+  #     agent-sandbox controller garbage-collects a runaway sandbox on its own.
+  stuckTimeoutSecs: 900
+  runTimeoutSecs: 3600
 
 harness:
   image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0
@@ -170,7 +178,7 @@ oauth:
   # the SSO login flow locally (no OAuth app registration needed).
   # MUST be off in production — it bypasses real authentication.
   mock:
-    enabled: false
+    enabled: true
     username: dev-user
 
 ingress:

@@ -29,10 +29,18 @@ pub struct SandboxPodConfig {
     pub container_port: i32,
     /// HTTP readiness-probe path.
     pub readiness_path: String,
+    /// HTTP liveness-probe path (the harness reports stuck here).
+    pub liveness_path: String,
     /// Ephemeral-storage request (e.g. `2Gi`) — scheduling-time guarantee.
     pub ephemeral_storage_request: String,
     /// Ephemeral-storage limit (e.g. `10Gi`) — bounds one run's disk use.
     pub ephemeral_storage_limit: String,
+    /// Inactivity threshold in seconds: the harness self-reports `stuck` (and the pod
+    /// liveness probe kills it) when the agent makes no progress this long.
+    pub stuck_timeout_secs: u64,
+    /// Hard deadline in seconds, written to the Sandbox's `shutdownTime` so the
+    /// agent-sandbox controller garbage-collects a runaway sandbox on its own.
+    pub run_timeout_secs: u64,
 }
 
 impl Default for SandboxPodConfig {
@@ -40,8 +48,11 @@ impl Default for SandboxPodConfig {
         Self {
             container_port: 8080,
             readiness_path: "/healthz".into(),
+            liveness_path: "/livez".into(),
             ephemeral_storage_request: "2Gi".into(),
             ephemeral_storage_limit: "10Gi".into(),
+            stuck_timeout_secs: 900,
+            run_timeout_secs: 3600,
         }
     }
 }
@@ -50,23 +61,33 @@ impl SandboxPodConfig {
     /// Load from env, falling back to [`Default`] for any unset/blank/invalid value.
     ///
     /// Recognised vars:
-    ///   - `CAT_HERDER_HARNESS_PORT` (container port; also the readiness-probe port)
+    ///   - `CAT_HERDER_HARNESS_PORT` (container port; also the probe port)
     ///   - `CAT_HERDER_READINESS_PATH`
+    ///   - `CAT_HERDER_LIVENESS_PATH`
     ///   - `CAT_HERDER_EPHEMERAL_STORAGE_REQUEST`
     ///   - `CAT_HERDER_EPHEMERAL_STORAGE_LIMIT`
+    ///   - `CAT_HERDER_STUCK_TIMEOUT_SECS`
+    ///   - `CAT_HERDER_RUN_TIMEOUT_SECS`
     pub fn from_env() -> Self {
         let defaults = Self::default();
         let non_blank = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+        let parse_secs = |k: &str| non_blank(k).and_then(|s| s.trim().parse().ok());
         Self {
             container_port: non_blank("CAT_HERDER_HARNESS_PORT")
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(defaults.container_port),
             readiness_path: non_blank("CAT_HERDER_READINESS_PATH")
                 .unwrap_or(defaults.readiness_path),
+            liveness_path: non_blank("CAT_HERDER_LIVENESS_PATH")
+                .unwrap_or(defaults.liveness_path),
             ephemeral_storage_request: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_REQUEST")
                 .unwrap_or(defaults.ephemeral_storage_request),
             ephemeral_storage_limit: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_LIMIT")
                 .unwrap_or(defaults.ephemeral_storage_limit),
+            stuck_timeout_secs: parse_secs("CAT_HERDER_STUCK_TIMEOUT_SECS")
+                .unwrap_or(defaults.stuck_timeout_secs),
+            run_timeout_secs: parse_secs("CAT_HERDER_RUN_TIMEOUT_SECS")
+                .unwrap_or(defaults.run_timeout_secs),
         }
     }
 }
@@ -203,6 +224,13 @@ impl SandboxRuntime {
             .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));
         env.push(serde_json::json!({ "name": "CAT_HERDER_CONTROL_URL", "value": control_url }));
 
+        // The inactivity threshold the harness's own stuck watchdog uses (kept in lock
+        // step with the pod liveness probe below via `self.pod`).
+        env.push(serde_json::json!({
+            "name": "STUCK_TIMEOUT_SECS",
+            "value": self.pod.stuck_timeout_secs.to_string(),
+        }));
+
         // The provider's API key (resolved from its Secret) wins; otherwise fall back
         // to the global LLM_API_KEY from the control plane's env.
         let key = match api_key {
@@ -224,6 +252,14 @@ impl SandboxRuntime {
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
         obj.data = serde_json::json!({
             "spec": {
+                // Hard deadline: at `shutdownTime` the agent-sandbox controller marks
+                // the sandbox expired (`Ready=False`, reason `SandboxExpired`) but
+                // RETAINS it, so the reconciler can deterministically observe expiry,
+                // mark the run `timed_out`, and delete the sandbox itself. (`Delete`
+                // would remove it before the reconciler polls, losing the terminal
+                // state and falling through to the "gone -> succeeded" fallback.)
+                "shutdownPolicy": "Retain",
+                "shutdownTime": self.shutdown_time(),
                 "podTemplate": {
                     // Non-system labels are propagated by the agent-sandbox controller
                     // onto the pod it builds from this inline template; the egress
@@ -235,6 +271,9 @@ impl SandboxRuntime {
                         },
                     },
                     "spec": {
+                        // One-shot workload: on liveness-kill/crash the pod goes terminal
+                        // (Finished=PodFailed) instead of restart-looping forever.
+                        "restartPolicy": "Never",
                         "containers": [{
                             "name": "harness",
                             "image": self.harness_image,
@@ -251,12 +290,28 @@ impl SandboxRuntime {
                             "readinessProbe": {
                                 "httpGet": { "path": self.pod.readiness_path, "port": self.pod.container_port },
                             },
+                            // Stuck-run watchdog: the harness fails this probe when the
+                            // agent stops making progress; kubelet then kills the
+                            // container (restartPolicy Never -> pod Failed).
+                            "livenessProbe": {
+                                "httpGet": { "path": self.pod.liveness_path, "port": self.pod.container_port },
+                                "periodSeconds": 30,
+                                "timeoutSeconds": 5,
+                                "failureThreshold": 3,
+                            },
                         }],
                     },
                 },
             },
         });
         obj
+    }
+
+    /// RFC-3339 deadline for the Sandbox's `shutdownTime`: now + `run_timeout_secs`.
+    fn shutdown_time(&self) -> String {
+        let deadline = chrono::Utc::now()
+            + chrono::Duration::seconds(self.pod.run_timeout_secs as i64);
+        deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 }
 
@@ -278,16 +333,37 @@ impl AgentRuntime for SandboxRuntime {
         match self.api.get_opt(&name).await? {
             None => Ok(None),
             Some(obj) => {
-                let ready = obj.data["status"]["conditions"]
-                    .as_array()
-                    .and_then(|conds| conds.iter().find(|c| c["type"] == "Ready"))
-                    .and_then(|c| c["status"].as_str())
-                    == Some("True");
-                Ok(Some(if ready {
-                    RuntimeStatus::Ready
-                } else {
-                    RuntimeStatus::Pending
-                }))
+                let conditions = obj.data["status"]["conditions"].as_array();
+                let find = |ty: &str| {
+                    conditions.and_then(|conds| conds.iter().find(|c| c["type"].as_str() == Some(ty)))
+                };
+
+                // Ready=True is the authoritative "running/ready" signal.
+                if find("Ready").and_then(|c| c["status"].as_str()) == Some("True") {
+                    return Ok(Some(RuntimeStatus::Ready));
+                }
+
+                // Finished=True means the backing pod reached a terminal phase (present
+                // only while the owned pod is in a terminal phase).
+                if let Some(finished) = find("Finished")
+                    && finished["status"].as_str() == Some("True")
+                {
+                    let status = match finished["reason"].as_str() {
+                        Some("PodFailed") => RuntimeStatus::Failed,
+                        _ => RuntimeStatus::Succeeded,
+                    };
+                    return Ok(Some(status));
+                }
+
+                // Ready=False + SandboxExpired => the `shutdownTime` deadline was hit.
+                if let Some(ready) = find("Ready")
+                    && ready["status"].as_str() == Some("False")
+                    && ready["reason"].as_str() == Some("SandboxExpired")
+                {
+                    return Ok(Some(RuntimeStatus::Expired));
+                }
+
+                Ok(Some(RuntimeStatus::Pending))
             }
         }
     }

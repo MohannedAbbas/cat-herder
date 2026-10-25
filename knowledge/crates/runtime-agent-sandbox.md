@@ -38,9 +38,11 @@ Constructors: `new(namespace, harness_image)` (uses the default kube client) and
 ## `AgentRuntime` impl
 
 - `spawn(run)` — `create` a `Sandbox` named `run-{id}` with an inline podTemplate, env,
-  resources, and readiness probe. See [Sandbox](/concepts/sandbox.md) for the full env
-  table and disk budget.
-- `status(id)` — `get_opt`; `Ready=True` condition → `Ready`, else `Pending`, gone → `None`.
+  resources, readiness/liveness probes, `restartPolicy: Never`, and a `shutdownTime`
+  hard deadline. See [Sandbox](/concepts/sandbox.md) for the full env table and disk
+  budget.
+- `status(id)` — `get_opt`; reads `status.conditions` → `Ready` / `Succeeded` /
+  `Failed` / `Expired` / `Pending`; a missing Sandbox → `None`.
 - `signal(id, state)` — merge-patches annotation `cat-herder.dev/signal`.
 - `terminate(id)` — deletes the Sandbox.
 

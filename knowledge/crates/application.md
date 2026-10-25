@@ -32,12 +32,14 @@ Returns the run in `PodPending`; the reconciler advances it further.
 ## `reconcile_once(runtime, repo, sessions) -> usize`
 
 Iterates all runs; for those in `PodPending`/`Running`, reads `runtime.status`, applies
-`reconcile_run`, and on a valid transition saves the run and calls `sessions.sync_run`.
-Returns the number advanced. Called every 10s by the [binary](/crates/bin-cat-herder.md).
+`reconcile_run` (which may fast-forward through several states), saves the run and calls
+`sessions.sync_run`. On reaching a final state it also calls `runtime.terminate` to reclaim
+the sandbox. Returns the number advanced. Called every 10s by the
+[binary](/crates/bin-cat-herder.md).
 
 ## `complete_run(run_id, outcome, repo, sessions) -> Run`
 
-Records the harness's completion (`Outcome::Succeeded | Failed`):
+Records the harness's completion (`Outcome::Succeeded | Failed | Stuck`):
 
 - Idempotent: a run already `Succeeded` or terminal is returned unchanged.
 - `Running` → target directly; `PodPending` → `Running` → target.

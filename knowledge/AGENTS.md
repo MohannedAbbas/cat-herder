@@ -6,7 +6,8 @@ tags: [knowledge, agents-md, seed, okf]
 status: draft
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
-  - { id: plan, resource: /PLAN.md, title: PLAN.md §7 }
+  - { id: plan, resource: /PLAN.md, title: PLAN.md }
+  - { id: review, resource: /PLAN_REVIEW.md, title: PLAN_REVIEW.md }
 ---
 
 # Cat Herder — agent memory (seed)
@@ -14,6 +15,13 @@ sources:
 This is the seed `AGENTS.md` for tenant defaults. The canonical copy lives in the
 central, versioned knowledge repository (OKF) — see `PLAN.md` §7. Do not edit
 pod-local copies.
+
+## Read the plan first
+
+The authoritative architecture, decisions, and dependency boundaries for Cat Herder live
+in `PLAN.md` at the repository root, with the adversarial review in `PLAN_REVIEW.md`.
+§1 "Dependency boundaries" is a hard line, not a suggestion — consult it before changing
+anything that touches the control-plane / harness split.
 
 ## Related
 
