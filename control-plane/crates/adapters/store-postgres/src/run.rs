@@ -35,8 +35,9 @@ impl RunRepository for PostgresRunRepository {
         let id: i64 = if run.id == RunId(0) {
             sqlx::query_scalar(
                 "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id",
+                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
+                 input_tokens, output_tokens) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id",
             )
             .bind(&kind)
             .bind(&state)
@@ -53,13 +54,16 @@ impl RunRepository for PostgresRunRepository {
             .bind(finished_ms)
             .bind(run.pr_url.as_deref())
             .bind(run.report.as_deref())
+            .bind(run.input_tokens as i64)
+            .bind(run.output_tokens as i64)
             .fetch_one(&self.pool)
             .await?
         } else {
             sqlx::query_scalar(
                 "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
+                 input_tokens, output_tokens) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
                  ON CONFLICT (id) DO UPDATE SET \
                    kind = EXCLUDED.kind, state = EXCLUDED.state, \
                    task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
@@ -67,7 +71,8 @@ impl RunRepository for PostgresRunRepository {
                    trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
                    repo = EXCLUDED.repo, language = EXCLUDED.language, \
                    started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
-                   pr_url = EXCLUDED.pr_url, report = EXCLUDED.report \
+                   pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
+                   input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
                  RETURNING id",
             )
             .bind(run.id.0 as i64)
@@ -86,6 +91,8 @@ impl RunRepository for PostgresRunRepository {
             .bind(finished_ms)
             .bind(run.pr_url.as_deref())
             .bind(run.report.as_deref())
+            .bind(run.input_tokens as i64)
+            .bind(run.output_tokens as i64)
             .fetch_one(&self.pool)
             .await?
         };
@@ -130,6 +137,8 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         finished_at: row.try_get::<Option<i64>, _>("finished_at")?.map(from_millis),
         pr_url: row.try_get("pr_url")?,
         report: row.try_get("report")?,
+        input_tokens: row.try_get::<i64, _>("input_tokens")? as u64,
+        output_tokens: row.try_get::<i64, _>("output_tokens")? as u64,
     })
 }
 
@@ -194,6 +203,8 @@ mod tests {
             finished_at: None,
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         let saved = repo.save(&run).await.expect("save assigns id");
         assert_ne!(saved.id, RunId(0));

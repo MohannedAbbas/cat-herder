@@ -43,7 +43,8 @@ export interface Run {
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
-  costUsd: number | null
+  inputTokens: number
+  outputTokens: number
 }
 
 /** Summary row for a session (list view). */
@@ -83,6 +84,9 @@ export interface RunRecord {
   prUrl: string | null
   /** The agent's final markdown report (from the harness `finished` event). */
   report: string | null
+  /** LLM token usage (from the harness `finished` event). */
+  inputTokens: number
+  outputTokens: number
 }
 
 /** An LLM provider. The API key is referenced by Secret name, never returned. */

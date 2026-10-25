@@ -5,7 +5,7 @@
 use std::time::SystemTime;
 
 use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
-use cat_herder_domain::entities::{Run, RunId, RunState};
+use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
 use cat_herder_domain::ports::{
     AgentRuntime, DomainResult, RunRepository, RunRequest, SessionRepository,
 };
@@ -46,6 +46,8 @@ where
         finished_at: None,
         pr_url: None,
         report: None,
+        input_tokens: 0,
+        output_tokens: 0,
     };
 
     let mut run = repo.save(&run).await?; // Queued (id assigned)
@@ -138,13 +140,13 @@ pub enum Outcome {
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
 ///
-/// `report` is the agent's final markdown summary (from the harness `finished`
-/// event); when present it is persisted onto the run (even for an already-final
-/// run, so a late report is not lost).
+/// `report` is the agent's final markdown summary and `usage` its token counts (both
+/// from the harness `finished` event); each is persisted onto the run.
 pub async fn complete_run<P, S>(
     run_id: RunId,
     outcome: Outcome,
     report: Option<String>,
+    usage: Option<Usage>,
     repo: &P,
     sessions: &S,
 ) -> DomainResult<Run>
@@ -166,15 +168,26 @@ where
     };
 
     // Idempotent: don't overwrite a run that already reached a final state. Still
-    // persist a report that arrives now (e.g. a re-delivered `finished` event).
+    // persist a late report/usage (e.g. a re-delivered `finished` event).
     if run.state == RunState::Succeeded || is_terminal(run.state) {
-        let Some(report) = report else { return Ok(run) };
-        if run.report.as_deref() == Some(report.as_str()) {
+        let mut run = run;
+        let mut changed = false;
+        if let Some(report) = report {
+            if run.report.as_deref() != Some(report.as_str()) {
+                run.report = Some(report);
+                changed = true;
+            }
+        }
+        if let Some(u) = usage {
+            run.input_tokens = u.input_tokens;
+            run.output_tokens = u.output_tokens;
+            changed = true;
+        }
+        if changed {
+            let run = repo.save(&run).await?;
+            sessions.sync_run(&run).await?;
             return Ok(run);
         }
-        let mut run = run;
-        run.report = Some(report);
-        let run = repo.save(&run).await?;
         return Ok(run);
     }
 
@@ -191,8 +204,12 @@ where
         _ => return Ok(run),
     }
 
-    if report.is_some() {
-        run.report = report;
+    if let Some(report) = report {
+        run.report = Some(report);
+    }
+    if let Some(u) = usage {
+        run.input_tokens = u.input_tokens;
+        run.output_tokens = u.output_tokens;
     }
 
     let run = repo.save(&run).await?;
@@ -328,6 +345,7 @@ mod tests {
             run.id,
             Outcome::Succeeded,
             Some("# Done\n\nAll good.".into()),
+            None,
             &repo,
             &sessions,
         )
@@ -356,7 +374,7 @@ mod tests {
             .await
             .unwrap();
 
-        let done = complete_run(run.id, Outcome::Failed, None, &repo, &sessions).await.unwrap();
+        let done = complete_run(run.id, Outcome::Failed, None, None, &repo, &sessions).await.unwrap();
         assert_eq!(done.state, RunState::Failed);
     }
 
@@ -370,11 +388,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, None, &repo, &sessions).await.unwrap().state,
+            complete_run(run.id, Outcome::Succeeded, None, None, &repo, &sessions).await.unwrap().state,
             RunState::Succeeded
         );
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, None, &repo, &sessions).await.unwrap().state,
+            complete_run(run.id, Outcome::Succeeded, None, None, &repo, &sessions).await.unwrap().state,
             RunState::Succeeded
         );
     }
@@ -383,6 +401,6 @@ mod tests {
     async fn complete_run_unknown_run_errors() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        assert!(complete_run(RunId(999), Outcome::Succeeded, None, &repo, &sessions).await.is_err());
+        assert!(complete_run(RunId(999), Outcome::Succeeded, None, None, &repo, &sessions).await.is_err());
     }
 }

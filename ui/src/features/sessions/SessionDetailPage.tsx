@@ -5,7 +5,7 @@ import PageHeader from '@/components/PageHeader'
 import Loading from '@/components/Loading'
 import ErrorState from '@/components/ErrorState'
 import Card from '@/components/Card'
-import { formatCost, formatDate } from '@/lib/format'
+import { formatDate, formatTokens } from '@/lib/format'
 import type { Run } from '@/types/domain'
 
 export default function SessionDetailPage() {
@@ -47,7 +47,7 @@ function RunRow({ run }: { run: Run }) {
         </Link>
         <span>Started {formatDate(run.startedAt)}</span>
         <span>Finished {formatDate(run.finishedAt)}</span>
-        <span>Cost {formatCost(run.costUsd)}</span>
+        <span>Tokens {formatTokens(run.inputTokens + run.outputTokens)}</span>
       </div>
     </Card>
   )

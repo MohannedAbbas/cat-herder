@@ -8,6 +8,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RunId(pub u64);
 
+/// LLM usage reported by the harness when a run finishes (token counts).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunKind {
@@ -68,6 +75,9 @@ pub struct Run {
     pub pr_url: Option<String>,
     /// The agent's final markdown report, set from the harness `finished` event.
     pub report: Option<String>,
+    /// LLM token usage reported by the harness (0 until the `finished` event).
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// Result-review decision (see `PLAN.md` §10).

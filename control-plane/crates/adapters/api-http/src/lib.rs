@@ -15,7 +15,7 @@ use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
     repo_identity_from_url,
 };
-use cat_herder_domain::entities::{Run, RunId, RunState};
+use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, GitRepoRepository, RunRepository, RunRequest,
     SessionRepository, SettingRepository,
@@ -242,6 +242,9 @@ pub struct RunEvent {
     /// Changed files reported by the harness (used to open a PR).
     #[serde(default)]
     pub changes: Option<Vec<FileChange>>,
+    /// LLM token usage reported by the harness on completion.
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 /// Ingest a harness-reported event for a run.
@@ -265,12 +268,13 @@ async fn post_run_event(
                 status,
                 report,
                 changes,
+                usage,
             } = event;
             let outcome = match status.as_deref() {
                 Some("failed") => Outcome::Failed,
                 _ => Outcome::Succeeded,
             };
-            let run = complete_run(run_id, outcome, report.clone(), &state.repo, &state.sessions)
+            let run = complete_run(run_id, outcome, report.clone(), usage, &state.repo, &state.sessions)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -296,7 +300,7 @@ async fn post_run_event(
         // progress: mark the run terminal and reclaim the sandbox (the liveness probe is
         // the kubelet-side backstop if the harness itself is too wedged to report).
         "stuck" => {
-            let run = complete_run(run_id, Outcome::Stuck, None, &state.repo, &state.sessions)
+            let run = complete_run(run_id, Outcome::Stuck, None, None, &state.repo, &state.sessions)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

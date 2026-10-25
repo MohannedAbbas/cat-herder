@@ -6,7 +6,7 @@ import PageHeader from '@/components/PageHeader'
 import Loading from '@/components/Loading'
 import ErrorState from '@/components/ErrorState'
 import Card from '@/components/Card'
-import { formatDate, formatDuration } from '@/lib/format'
+import { formatDate, formatDuration, formatTokens } from '@/lib/format'
 
 function orDash(value: string | null | undefined): string {
   return value && value.length > 0 ? value : '—'
@@ -123,6 +123,14 @@ export default function RunDetailPage() {
                 <Row label="Triggered" value={formatDate(run.createdAt)} />
                 <Row label="Started" value={formatDate(run.startedAt)} />
                 <Row label="Finished" value={formatDate(run.finishedAt)} />
+              </div>
+            </Card>
+
+            <Card>
+              <h2 className="text-sm font-semibold text-slate-900">Usage</h2>
+              <div className="mt-3 space-y-2 text-sm">
+                <Row label="Input tokens" value={formatTokens(run.inputTokens)} />
+                <Row label="Output tokens" value={formatTokens(run.outputTokens)} />
               </div>
             </Card>
           </div>

@@ -8,13 +8,12 @@ export function formatDate(iso: string | null | undefined): string {
   return dateFormatter.format(new Date(iso))
 }
 
-export function formatCost(usd: number | null | undefined): string {
-  if (usd == null) return '—'
-  return usd.toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 4,
-  })
+/** Compact token count (e.g. 1.2k, 3.4M). */
+export function formatTokens(tokens: number | null | undefined): string {
+  if (tokens == null) return '—'
+  if (tokens < 1000) return String(tokens)
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`
+  return `${(tokens / 1_000_000).toFixed(2)}M`
 }
 
 /**

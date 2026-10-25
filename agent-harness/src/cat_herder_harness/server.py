@@ -57,6 +57,28 @@ _agent_running = False
 _agent_finished = False
 _stuck_reported = False
 
+# --- token usage metering ---------------------------------------------------
+# Accumulated (input, output) token counts from the agent's LLM calls, summed from
+# each streamed state snapshot's messages. Reported with the `finished` event.
+_usage_input = 0
+_usage_output = 0
+
+
+def record_usage(state: dict) -> None:
+    """Sum token usage across a state snapshot's messages (the snapshot is the full
+    message history up to that point, so this is a running total, not a delta)."""
+    global _usage_input, _usage_output
+    in_tok = out_tok = 0
+    for msg in state.get("messages", []):
+        usage = getattr(msg, "usage_metadata", None)
+        if not usage:
+            meta = getattr(msg, "response_metadata", {}) or {}
+            usage = meta.get("token_usage") or meta.get("usage")
+        if usage:
+            in_tok += int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            out_tok += int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    _usage_input, _usage_output = in_tok, out_tok
+
 
 def mark_activity() -> None:
     """Record agent progress (called from the agent's stream as it advances)."""
@@ -100,6 +122,7 @@ def report_event(
     status: str | None = None,
     report: str | None = None,
     changes: list | None = None,
+    usage: dict | None = None,
 ) -> None:
     """Report a run event back to the control plane (best-effort, non-fatal)."""
     if not CONTROL_URL:
@@ -111,6 +134,8 @@ def report_event(
         payload["report"] = report
     if changes is not None:
         payload["changes"] = changes
+    if usage is not None:
+        payload["usage"] = usage
     req = urllib.request.Request(
         f"{CONTROL_URL}/v1/runs/{RUN_ID}/events",
         data=json.dumps(payload).encode("utf-8"),
@@ -268,6 +293,7 @@ def run_agent(task_spec: str, model: str) -> str:
         stream_mode="values",
     ):
         mark_activity()
+        record_usage(chunk)
         result = chunk
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if messages:
@@ -362,10 +388,12 @@ def main() -> None:
         result = run_agent(task_spec, model)
         print(f"agent completed: {result}", flush=True)
         changes = collect_changes()
-        report_event("finished", status="succeeded", report=result, changes=changes)
+        usage = {"input_tokens": _usage_input, "output_tokens": _usage_output}
+        report_event("finished", status="succeeded", report=result, changes=changes, usage=usage)
     except Exception as exc:  # noqa: BLE001 — keep the pod alive and log
         print(f"agent failed: {exc}", flush=True)
-        report_event("finished", status="failed")
+        usage = {"input_tokens": _usage_input, "output_tokens": _usage_output}
+        report_event("finished", status="failed", usage=usage)
     finally:
         set_agent_running(False)
         set_agent_finished(True)

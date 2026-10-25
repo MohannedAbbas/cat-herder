@@ -208,6 +208,8 @@ async fn post_finished_event_marks_run_succeeded() {
             finished_at: None,
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         })
         .await
         .unwrap();
@@ -252,6 +254,8 @@ async fn post_finished_event_failed_marks_run_failed() {
             finished_at: None,
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         })
         .await
         .unwrap();
@@ -294,6 +298,8 @@ async fn post_stuck_event_marks_run_stuck() {
             finished_at: None,
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         })
         .await
         .unwrap();
@@ -348,6 +354,8 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             finished_at: None,
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         })
         .await
         .unwrap();

@@ -88,7 +88,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-23T09:15:00Z',
         startedAt: '2026-10-23T09:16:00Z',
         finishedAt: null,
-        costUsd: 1.23,
+        inputTokens: 0,
+        outputTokens: 0,
       },
       {
         id: 'run-102',
@@ -100,7 +101,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-23T09:58:00Z',
         startedAt: '2026-10-23T09:59:00Z',
         finishedAt: null,
-        costUsd: 0.41,
+        inputTokens: 0,
+        outputTokens: 0,
       },
       {
         id: 'run-103',
@@ -112,7 +114,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-23T09:40:00Z',
         startedAt: '2026-10-23T09:41:00Z',
         finishedAt: '2026-10-23T09:52:00Z',
-        costUsd: 0.67,
+        inputTokens: 0,
+        outputTokens: 0,
       },
     ],
   },
@@ -134,7 +137,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-22T15:31:00Z',
         startedAt: '2026-10-22T15:32:00Z',
         finishedAt: '2026-10-22T16:12:00Z',
-        costUsd: 3.88,
+        inputTokens: 0,
+        outputTokens: 0,
       },
       {
         id: 'run-202',
@@ -146,7 +150,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-22T16:20:00Z',
         startedAt: null,
         finishedAt: '2026-10-22T16:45:00Z',
-        costUsd: null,
+        inputTokens: 0,
+        outputTokens: 0,
       },
     ],
   },
@@ -168,7 +173,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-21T11:01:00Z',
         startedAt: '2026-10-21T11:02:00Z',
         finishedAt: '2026-10-21T11:35:00Z',
-        costUsd: 0.92,
+        inputTokens: 0,
+        outputTokens: 0,
       },
       {
         id: 'run-302',
@@ -180,7 +186,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-21T11:20:00Z',
         startedAt: '2026-10-21T11:21:00Z',
         finishedAt: '2026-10-21T11:38:00Z',
-        costUsd: 0.35,
+        inputTokens: 0,
+        outputTokens: 0,
       },
     ],
   },
@@ -202,7 +209,8 @@ const sessions: Session[] = [
         createdAt: '2026-10-20T08:05:00Z',
         startedAt: '2026-10-20T08:06:00Z',
         finishedAt: null,
-        costUsd: 2.11,
+        inputTokens: 0,
+        outputTokens: 0,
       },
     ],
   },
@@ -225,6 +233,8 @@ const runs: RunRecord[] = [
     finishedAt: null,
     prUrl: null,
     report: null,
+    inputTokens: 0,
+    outputTokens: 0,
   },
   {
     id: 2,
@@ -248,6 +258,8 @@ const runs: RunRecord[] = [
       '### Verification\n\n' +
       '```\ncargo build && cargo test\n```\n\n' +
       'All tests pass. See the [migration guide](https://github.com/tokio-rs/axum).\n',
+    inputTokens: 0,
+    outputTokens: 0,
   },
   {
     id: 3,
@@ -265,6 +277,8 @@ const runs: RunRecord[] = [
     finishedAt: '2026-10-21T11:35:00Z',
     prUrl: null,
     report: null,
+    inputTokens: 0,
+    outputTokens: 0,
   },
   {
     id: 4,
@@ -282,6 +296,8 @@ const runs: RunRecord[] = [
     finishedAt: null,
     prUrl: null,
     report: null,
+    inputTokens: 0,
+    outputTokens: 0,
   },
 ]
 

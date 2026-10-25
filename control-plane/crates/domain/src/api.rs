@@ -42,7 +42,8 @@ pub struct SessionRun {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
-    pub cost_usd: Option<f64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// Summary row for a session (list view).
@@ -188,6 +189,9 @@ pub struct RunResponse {
     pub pr_url: Option<String>,
     /// The agent's final markdown report (from the harness `finished` event).
     pub report: Option<String>,
+    /// LLM token usage reported by the harness.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -208,6 +212,8 @@ impl From<&crate::entities::Run> for RunResponse {
             finished_at: run.finished_at.map(to_iso),
             pr_url: run.pr_url.clone(),
             report: run.report.clone(),
+            input_tokens: run.input_tokens,
+            output_tokens: run.output_tokens,
         }
     }
 }
@@ -228,7 +234,8 @@ impl From<&crate::entities::Run> for SessionRun {
             created_at: to_iso(run.created_at),
             started_at: run.started_at.map(to_iso),
             finished_at: run.finished_at.map(to_iso),
-            cost_usd: None,
+            input_tokens: run.input_tokens,
+            output_tokens: run.output_tokens,
         }
     }
 }

@@ -4,7 +4,7 @@ import StatusBadge from '@/components/StatusBadge'
 import PageHeader from '@/components/PageHeader'
 import Loading from '@/components/Loading'
 import ErrorState from '@/components/ErrorState'
-import { formatDate, formatDuration } from '@/lib/format'
+import { formatDate, formatDuration, formatTokens } from '@/lib/format'
 import type { RunRecord } from '@/types/domain'
 
 function triggeredBy(run: RunRecord): string {
@@ -43,6 +43,7 @@ export default function RunListPage() {
                 <th className="px-4 py-3">Started</th>
                 <th className="px-4 py-3">Finished</th>
                 <th className="px-4 py-3">Runtime</th>
+                <th className="px-4 py-3">Tokens</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -72,6 +73,9 @@ export default function RunListPage() {
                   <td className="px-4 py-3 text-slate-500">{formatDate(run.finishedAt)}</td>
                   <td className="px-4 py-3 text-slate-500">
                     {formatDuration(run.startedAt, run.finishedAt)}
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {formatTokens(run.inputTokens + run.outputTokens)}
                   </td>
                 </tr>
               ))}

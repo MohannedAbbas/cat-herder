@@ -78,8 +78,8 @@ impl SessionRepository for PostgresSessionRepository {
     async fn add_run(&self, session_id: &str, run: &SessionRun) -> DomainResult<()> {
         sqlx::query(
             "INSERT INTO session_runs \
-             (id, session_id, kind, state, agent_id, agent_name, task_spec, created_at, started_at, finished_at, cost_usd) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             (id, session_id, kind, state, agent_id, agent_name, task_spec, created_at, started_at, finished_at, input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(run.id.as_str())
@@ -92,7 +92,8 @@ impl SessionRepository for PostgresSessionRepository {
         .bind(run.created_at.as_str())
         .bind(run.started_at.as_deref())
         .bind(run.finished_at.as_deref())
-        .bind(run.cost_usd)
+        .bind(run.input_tokens as i64)
+        .bind(run.output_tokens as i64)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -100,13 +101,18 @@ impl SessionRepository for PostgresSessionRepository {
 
     async fn sync_run(&self, run: &Run) -> DomainResult<()> {
         let projected = SessionRun::from(run);
-        sqlx::query("UPDATE session_runs SET state = $1, started_at = $2, finished_at = $3 WHERE id = $4")
-            .bind(encode_state(projected.state))
-            .bind(projected.started_at.as_deref())
-            .bind(projected.finished_at.as_deref())
-            .bind(projected.id.as_str())
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE session_runs SET state = $1, started_at = $2, finished_at = $3, \
+             input_tokens = $4, output_tokens = $5 WHERE id = $6",
+        )
+        .bind(encode_state(projected.state))
+        .bind(projected.started_at.as_deref())
+        .bind(projected.finished_at.as_deref())
+        .bind(projected.input_tokens as i64)
+        .bind(projected.output_tokens as i64)
+        .bind(projected.id.as_str())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
@@ -130,7 +136,8 @@ fn run_from_row(row: &PgRow) -> Result<SessionRun, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         started_at: row.try_get("started_at")?,
         finished_at: row.try_get("finished_at")?,
-        cost_usd: row.try_get("cost_usd")?,
+        input_tokens: row.try_get::<i64, _>("input_tokens")? as u64,
+        output_tokens: row.try_get::<i64, _>("output_tokens")? as u64,
     })
 }
 
@@ -182,7 +189,8 @@ mod tests {
             created_at: cat_herder_domain::api::now_iso(),
             started_at: None,
             finished_at: None,
-            cost_usd: Some(1.5),
+            input_tokens: 0,
+            output_tokens: 0,
         };
         repo.add_run(&id, &run).await.expect("add_run");
 
@@ -190,7 +198,6 @@ mod tests {
         assert_eq!(s.title, "my new session");
         assert_eq!(s.runs.len(), 1);
         assert_eq!(s.runs[0].id, run_id);
-        assert_eq!(s.runs[0].cost_usd, Some(1.5));
     }
 
     // Live test for sync_run: the display row follows the lifecycle run's state/timing.
@@ -216,7 +223,8 @@ mod tests {
             created_at: cat_herder_domain::api::now_iso(),
             started_at: None,
             finished_at: None,
-            cost_usd: None,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         repo.add_run(&id, &projected).await.expect("add_run");
 
@@ -237,6 +245,8 @@ mod tests {
             finished_at: Some(SystemTime::now()),
             pr_url: None,
             report: None,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         repo.sync_run(&lifecycle).await.expect("sync_run");
 

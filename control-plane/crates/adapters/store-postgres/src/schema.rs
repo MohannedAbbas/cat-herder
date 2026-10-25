@@ -112,8 +112,8 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
         for run in &session.runs {
             sqlx::query(
                 "INSERT INTO session_runs \
-                 (id, session_id, kind, state, agent_id, agent_name, task_spec, created_at, started_at, finished_at, cost_usd) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 (id, session_id, kind, state, agent_id, agent_name, task_spec, created_at, started_at, finished_at, input_tokens, output_tokens) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind(run.id.as_str())
@@ -126,7 +126,8 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
             .bind(run.created_at.as_str())
             .bind(run.started_at.as_deref())
             .bind(run.finished_at.as_deref())
-            .bind(run.cost_usd)
+            .bind(run.input_tokens as i64)
+            .bind(run.output_tokens as i64)
             .execute(pool)
             .await?;
         }
