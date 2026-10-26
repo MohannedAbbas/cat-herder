@@ -10,6 +10,7 @@ cat-herder-application = { path = "../../application" }
 cat-herder-domain = { path = "../../domain" }
 cat-herder-runtime-agent-sandbox = { path = "../../adapters/runtime-agent-sandbox" }
 cat-herder-store-inmemory = { path = "../../adapters/store-inmemory" }
+cat-herder-store-nats = { path = "../../adapters/store-nats" }
 cat-herder-store-postgres = { path = "../../adapters/store-postgres" }
 axum.workspace = true
 serde_json.workspace = true

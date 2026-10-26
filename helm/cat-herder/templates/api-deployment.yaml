@@ -61,6 +61,10 @@ spec:
                   key: database-url
                   optional: true
             {{- end }}
+            {{- if .Values.dependencies.nats.enabled }}
+            - name: CAT_HERDER_NATS_URL
+              value: "nats://{{ .Values.dependencies.nats.serviceName }}:4222"
+            {{- end }}
             {{- if .Values.oauth.github.enabled }}
             - name: GITHUB_OAUTH_CLIENT_ID
               valueFrom:

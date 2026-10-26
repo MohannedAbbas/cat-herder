@@ -7,6 +7,7 @@
 mod agent;
 mod audit;
 mod codec;
+mod event;
 mod git_repo;
 mod model;
 mod provider;
@@ -18,6 +19,7 @@ mod tool;
 
 pub use agent::PostgresAgentRepository;
 pub use audit::PostgresAuditRepository;
+pub use event::PostgresEventRepository;
 pub use git_repo::PostgresGitRepoRepository;
 pub use model::PostgresModelRepository;
 pub use provider::PostgresProviderRepository;

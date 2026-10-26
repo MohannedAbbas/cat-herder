@@ -1,0 +1,21 @@
+{{- if .Values.dependencies.nats.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.dependencies.nats.serviceName }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-nats
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  # Normal ClusterIP: the API connects to nats://cat-herder-nats:4222.
+  selector:
+    app.kubernetes.io/name: cat-herder-nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+{{- end }}

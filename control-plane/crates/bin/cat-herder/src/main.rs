@@ -8,24 +8,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    router, AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, GIT_HOSTS_SETTING, GitHubOAuth,
-    GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo,
-    RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, EventBusImpl, EventRepo, GIT_HOSTS_SETTING,
+    GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient,
+    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, router,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
-use tokio::sync::RwLock;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
     InMemoryProviderRepository, InMemorySettingRepository, InMemoryToolRepository,
 };
+use cat_herder_store_nats::NatsEventBus;
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresGitRepoRepository,
-    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
-    PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresEventRepository,
+    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository, PostgresStore,
+    PostgresToolRepository,
 };
+use tokio::sync::RwLock;
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
 /// map injected by the chart from `agents.models`).
@@ -73,10 +75,14 @@ async fn refresh_git_tokens(
 }
 
 /// Seed the supported git hosts into settings if not already present.
-async fn ensure_git_hosts(settings: &SettingRepo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn ensure_git_hosts(
+    settings: &SettingRepo,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if settings.get(GIT_HOSTS_SETTING).await?.is_none() {
         let hosts = default_git_hosts();
-        settings.set(GIT_HOSTS_SETTING, &serde_json::to_string(&hosts)?).await?;
+        settings
+            .set(GIT_HOSTS_SETTING, &serde_json::to_string(&hosts)?)
+            .await?;
     }
     Ok(())
 }
@@ -84,6 +90,7 @@ async fn ensure_git_hosts(settings: &SettingRepo) -> Result<(), Box<dyn std::err
 /// The repositories (run/agent/session/provider/model), all in-memory or all Postgres.
 struct Repos {
     run: RunRepo,
+    events: EventRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -98,6 +105,7 @@ impl Repos {
     fn in_memory(models: &HashMap<String, String>) -> Self {
         Self {
             run: RunRepo::InMemory(Default::default()),
+            events: EventRepo::InMemory(Default::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -128,6 +136,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                 eprintln!("using Postgres repositories");
                 return Repos {
                     run: RunRepo::Postgres(PostgresRunRepository::new(&store)),
+                    events: EventRepo::Postgres(PostgresEventRepository::new(&store)),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
@@ -182,11 +191,30 @@ async fn main() {
         eprintln!("warning: failed to seed git hosts: {e}");
     }
 
+    // Fan-out event bus (NATS JetStream). Optional: when CAT_HERDER_NATS_URL is unset
+    // the bus is a no-op and the event log still works (Postgres is the authority).
+    let bus = match std::env::var("CAT_HERDER_NATS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(url) => match NatsEventBus::connect(&url).await {
+            Ok(b) => {
+                eprintln!("NATS event bus connected");
+                EventBusImpl::Nats(Arc::new(b))
+            }
+            Err(e) => {
+                eprintln!("warning: NATS event bus unavailable ({e}); fan-out disabled");
+                EventBusImpl::Noop
+            }
+        },
+        None => EventBusImpl::Noop,
+    };
+
     // Encryption key for git tokens — read from (or generated into) a Kubernetes
     // Secret, so it's separated from the ciphertext and managed under k8s RBAC.
     // Required: fail loudly if the key store is unavailable.
-    let secret_name =
-        std::env::var("CAT_HERDER_ENCRYPTION_SECRET").unwrap_or_else(|_| "cat-herder-encryption".into());
+    let secret_name = std::env::var("CAT_HERDER_ENCRYPTION_SECRET")
+        .unwrap_or_else(|_| "cat-herder-encryption".into());
     let secret_key =
         std::env::var("CAT_HERDER_ENCRYPTION_SECRET_KEY").unwrap_or_else(|_| "key".into());
     let key_store = Arc::new(
@@ -245,10 +273,12 @@ async fn main() {
     if let Some(rt) = runtime.clone() {
         let repo = repos.run.clone();
         let sessions = repos.sessions.clone();
+        let events = repos.events.clone();
+        let bus = bus.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                if let Err(e) = reconcile_once(&rt, &repo, &sessions).await {
+                if let Err(e) = reconcile_once(&rt, &repo, &sessions, &events, &bus).await {
                     eprintln!("reconcile error: {e}");
                 }
             }
@@ -265,7 +295,9 @@ async fn main() {
     let admin_password = std::env::var("CAT_HERDER_ADMIN_PASSWORD")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .expect("CAT_HERDER_ADMIN_PASSWORD must be set (injected from the cat-herder-admin Secret)");
+        .expect(
+            "CAT_HERDER_ADMIN_PASSWORD must be set (injected from the cat-herder-admin Secret)",
+        );
     if admin_user == "admin" && admin_password == "admin" {
         eprintln!(
             "warning: CAT_HERDER_ADMIN_USER/PASSWORD are the weak defaults admin/admin — \
@@ -321,6 +353,8 @@ async fn main() {
 
     let state = AppState {
         repo: repos.run,
+        events: repos.events,
+        bus,
         agents: repos.agents,
         providers: repos.providers,
         models: repos.models,

@@ -6,6 +6,7 @@
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use crate::entities::{GitRepo, Run, RunId, RunState};
+use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
 
 pub type DomainResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -124,8 +125,20 @@ pub trait SessionRepository {
     async fn sync_run(&self, run: &Run) -> DomainResult<()>;
 }
 
+/// Durable, append-only event log (`PLAN.md` §9). The control plane is the sole
+/// writer; `append` assigns the per-run monotonic `seq`.
+pub trait EventRepository {
+    /// Persist `event` for `run_id`, assigning `seq`. Returns the stored event.
+    async fn append(&self, run_id: RunId, event: &Event) -> DomainResult<Event>;
+    /// Replay events for a run strictly after `after_seq`, ascending, capped at `limit`.
+    async fn list(&self, run_id: RunId, after_seq: i64, limit: i64) -> DomainResult<Vec<Event>>;
+}
+
+/// Fan-out transport for events (`PLAN.md` §9) — e.g. NATS JetStream. Best-effort:
+/// the durable authority is [`EventRepository`]; a failed publish must not fail the
+/// append.
 pub trait EventBus {
-    async fn publish(&self, run: RunId, event_type: &str, payload: &[u8]) -> DomainResult<()>;
+    async fn publish(&self, event: &Event) -> DomainResult<()>;
 }
 
 pub trait ModelProvider {

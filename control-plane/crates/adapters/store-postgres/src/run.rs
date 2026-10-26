@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cat_herder_domain::entities::{Run, RunId};
 use cat_herder_domain::ports::{DomainResult, RunRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::codec::{decode_kind, decode_state, encode_kind, encode_state};
 use crate::schema::PostgresStore;
@@ -108,14 +108,20 @@ impl RunRepository for PostgresRunRepository {
             .bind(id.0 as i64)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(run_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(run_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn list_all(&self) -> DomainResult<Vec<Run>> {
         let rows = sqlx::query("SELECT * FROM runs ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter().map(run_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(run_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 }
 
@@ -133,8 +139,12 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         model: row.try_get("model")?,
         repo: row.try_get("repo")?,
         language: row.try_get("language")?,
-        started_at: row.try_get::<Option<i64>, _>("started_at")?.map(from_millis),
-        finished_at: row.try_get::<Option<i64>, _>("finished_at")?.map(from_millis),
+        started_at: row
+            .try_get::<Option<i64>, _>("started_at")?
+            .map(from_millis),
+        finished_at: row
+            .try_get::<Option<i64>, _>("finished_at")?
+            .map(from_millis),
         pr_url: row.try_get("pr_url")?,
         report: row.try_get("report")?,
         input_tokens: row.try_get::<i64, _>("input_tokens")? as u64,
@@ -142,13 +152,13 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
     })
 }
 
-fn millis(t: SystemTime) -> i64 {
+pub(crate) fn millis(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
-fn from_millis(ms: i64) -> SystemTime {
+pub(crate) fn from_millis(ms: i64) -> SystemTime {
     if ms <= 0 {
         UNIX_EPOCH
     } else {
@@ -166,7 +176,10 @@ mod tests {
     fn time_roundtrips() {
         let t = SystemTime::now();
         assert_eq!(
-            from_millis(millis(t)).duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            from_millis(millis(t))
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             t.duration_since(UNIX_EPOCH).unwrap().as_secs()
         );
     }
@@ -178,13 +191,18 @@ mod tests {
             eprintln!("skipping postgres_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new())
+            .await
+            .expect("connect");
         let repo = PostgresRunRepository::new(&store);
 
         // A session_id must reference a real session (FK); create one first.
         let sessions = crate::PostgresSessionRepository::new(&store);
         let session_id = cat_herder_domain::api::new_session_id();
-        sessions.create(&session_id, "run test session").await.expect("create session");
+        sessions
+            .create(&session_id, "run test session")
+            .await
+            .expect("create session");
 
         let run = Run {
             id: RunId(0),
@@ -228,6 +246,12 @@ mod tests {
         assert_eq!(after.state, RunState::Succeeded);
         assert_eq!(after.report.as_deref(), Some("# Report\n\nAll done."));
 
-        assert!(repo.list_all().await.unwrap().iter().any(|r| r.id == saved.id));
+        assert!(
+            repo.list_all()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.id == saved.id)
+        );
     }
 }

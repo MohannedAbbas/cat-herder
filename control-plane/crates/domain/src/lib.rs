@@ -13,6 +13,7 @@
 pub mod api;
 pub mod catalog;
 pub mod entities;
+pub mod events;
 pub mod ports;
 pub mod reconcile;
 pub mod state;

@@ -42,6 +42,9 @@ pod death and pause/resume at an interrupt.
   streams it back (replayable); **NATS JetStream is the fan-out transport** (publish on
   append to `run.<id>.events`, SSE live tail), Postgres stays the authority. Harness
   keeps the local spool + async flush (§9). See `docs/design/event-log.md`.
+  *Status:* ✅ log + seq + replay + NATS publish landed. ⬜ Remaining: SSE live tail
+  (`…/events/stream`) and the harness local-spool/async-flush (rides in with the gRPC
+  control channel, step 2).
 
 - [ ] **2. Harness↔control-plane control channel over gRPC (§6, §9, §14).**
   `proto/control.proto` is stubbed but unused; the harness speaks HTTP POST today.

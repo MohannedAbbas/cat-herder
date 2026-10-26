@@ -2,21 +2,27 @@
 //! aggregate: in-memory for tests/single-replica dev fallback, Postgres for
 //! production persistence (wired in `crates/bin/cat-herder`).
 
-use cat_herder_domain::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
+use cat_herder_domain::api::{
+    AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool,
+};
 use cat_herder_domain::entities::{GitRepo, Run, RunId};
+use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
-    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    AgentRepository, AuditRepository, DomainResult, EventRepository, GitRepoRepository,
+    ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
+    ToolRepository,
 };
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryGitRepoRepository,
-    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
-    InMemorySessionRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryEventRepository,
+    InMemoryGitRepoRepository, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySessionRepository, InMemorySettingRepository,
+    InMemoryToolRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresGitRepoRepository,
-    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
-    PostgresSessionRepository, PostgresSettingRepository, PostgresToolRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresEventRepository,
+    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository,
+    PostgresToolRepository,
 };
 
 #[derive(Clone)]
@@ -44,6 +50,28 @@ impl RunRepository for RunRepo {
         match self {
             RunRepo::InMemory(r) => r.list_all().await,
             RunRepo::Postgres(p) => p.list_all().await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum EventRepo {
+    InMemory(InMemoryEventRepository),
+    Postgres(PostgresEventRepository),
+}
+
+impl EventRepository for EventRepo {
+    async fn append(&self, run_id: RunId, event: &Event) -> DomainResult<Event> {
+        match self {
+            EventRepo::InMemory(r) => r.append(run_id, event).await,
+            EventRepo::Postgres(p) => p.append(run_id, event).await,
+        }
+    }
+
+    async fn list(&self, run_id: RunId, after_seq: i64, limit: i64) -> DomainResult<Vec<Event>> {
+        match self {
+            EventRepo::InMemory(r) => r.list(run_id, after_seq, limit).await,
+            EventRepo::Postgres(p) => p.list(run_id, after_seq, limit).await,
         }
     }
 }

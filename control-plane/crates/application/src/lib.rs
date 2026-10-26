@@ -6,11 +6,31 @@ use std::time::SystemTime;
 
 use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
 use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
+use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRuntime, DomainResult, RunRepository, RunRequest, SessionRepository,
+    AgentRuntime, DomainResult, EventBus, EventRepository, RunRepository, RunRequest,
+    SessionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::state::is_terminal;
+
+/// Persist an event (assigning `seq`) and publish it to the fan-out bus.
+///
+/// Best-effort on both legs: the durable authority is the run's Postgres state, and
+/// the event log is a projection of it. A failed append/publish is logged, not
+/// fatal — full state+event transactionality is a follow-on (`docs/design/event-log.md`
+/// §3.2).
+async fn emit_event<E: EventRepository, B: EventBus>(events: &E, bus: &B, event: Event) {
+    let run_id = event.run_id;
+    match events.append(run_id, &event).await {
+        Ok(stored) => {
+            if let Err(e) = bus.publish(&stored).await {
+                eprintln!("event publish failed for run {}: {e}", run_id.0);
+            }
+        }
+        Err(e) => eprintln!("event append failed for run {}: {e}", run_id.0),
+    }
+}
 
 /// Use case: accept a trigger's request, persist it, spawn the agent, and advance the
 /// lifecycle state machine through to `PodPending`. The reconciler (`reconcile_once`)
@@ -18,16 +38,20 @@ use cat_herder_domain::state::is_terminal;
 ///
 /// Each run is auto-linked to a freshly created session (title derived from the
 /// task spec).
-pub async fn start_run<R, P, S>(
+pub async fn start_run<R, P, S, E, B>(
     req: RunRequest,
     runtime: &R,
     repo: &P,
     sessions: &S,
+    events: &E,
+    bus: &B,
 ) -> DomainResult<Run>
 where
     R: AgentRuntime,
     P: RunRepository,
     S: SessionRepository,
+    E: EventRepository,
+    B: EventBus,
 {
     let run = Run {
         id: RunId(0), // assigned by the repository
@@ -51,21 +75,28 @@ where
     };
 
     let mut run = repo.save(&run).await?; // Queued (id assigned)
+    emit_event(events, bus, Event::lifecycle_for(&run)).await;
 
     // Auto-create a session and link the run to it.
     let session_id = new_session_id();
-    sessions.create(&session_id, &session_title(&run.task_spec)).await?;
+    sessions
+        .create(&session_id, &session_title(&run.task_spec))
+        .await?;
     run.session_id = Some(session_id.clone());
     run = repo.save(&run).await?;
 
     run.transition(RunState::Scheduled)?;
     run = repo.save(&run).await?;
+    emit_event(events, bus, Event::lifecycle_for(&run)).await;
 
     run.transition(RunState::PodPending)?;
     run = repo.save(&run).await?;
+    emit_event(events, bus, Event::lifecycle_for(&run)).await;
 
     // Project the run into the session's display rows (now `PodPending`).
-    sessions.add_run(&session_id, &SessionRun::from(&run)).await?;
+    sessions
+        .add_run(&session_id, &SessionRun::from(&run))
+        .await?;
 
     runtime.spawn(&run).await?;
 
@@ -88,11 +119,19 @@ fn session_title(task_spec: &str) -> String {
 /// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
 /// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
 /// execution — mirroring the `finished` event path — so a dead sandbox doesn't linger.
-pub async fn reconcile_once<R, P, S>(runtime: &R, repo: &P, sessions: &S) -> DomainResult<usize>
+pub async fn reconcile_once<R, P, S, E, B>(
+    runtime: &R,
+    repo: &P,
+    sessions: &S,
+    events: &E,
+    bus: &B,
+) -> DomainResult<usize>
 where
     R: AgentRuntime,
     P: RunRepository,
     S: SessionRepository,
+    E: EventRepository,
+    B: EventBus,
 {
     let mut advanced = 0;
 
@@ -111,16 +150,18 @@ where
         let mut updated = run.clone();
         for next in transitions {
             updated.transition(next)?;
+            // One lifecycle event per state change, so the log records the full walk
+            // (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
+            emit_event(events, bus, Event::lifecycle_for(&updated)).await;
         }
         repo.save(&updated).await?;
         sessions.sync_run(&updated).await?;
         advanced += 1;
 
         // Reclaim the execution once the run is done (details are already persisted).
-        if updated.state == RunState::Succeeded || is_terminal(updated.state) {
-            if let Err(e) = runtime.terminate(updated.id).await {
-                eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
-            }
+        let done = updated.state == RunState::Succeeded || is_terminal(updated.state);
+        if done && let Err(e) = runtime.terminate(updated.id).await {
+            eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
         }
     }
 
@@ -136,24 +177,35 @@ pub enum Outcome {
     Stuck,
 }
 
+/// The harness's final output, persisted onto a run when it completes.
+#[derive(Debug, Clone, Default)]
+pub struct Completion {
+    /// The agent's final markdown summary.
+    pub report: Option<String>,
+    /// LLM token counts reported by the harness.
+    pub usage: Option<Usage>,
+}
+
 /// Use case: record the harness's completion of a run, advancing it to `Succeeded`
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
-///
-/// `report` is the agent's final markdown summary and `usage` its token counts (both
-/// from the harness `finished` event); each is persisted onto the run.
-pub async fn complete_run<P, S>(
+pub async fn complete_run<P, S, E, B>(
     run_id: RunId,
     outcome: Outcome,
-    report: Option<String>,
-    usage: Option<Usage>,
+    completion: Completion,
     repo: &P,
     sessions: &S,
+    events: &E,
+    bus: &B,
 ) -> DomainResult<Run>
 where
     P: RunRepository,
     S: SessionRepository,
+    E: EventRepository,
+    B: EventBus,
 {
+    let Completion { report, usage } = completion;
+
     let run = repo.get(run_id).await?.ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -172,11 +224,11 @@ where
     if run.state == RunState::Succeeded || is_terminal(run.state) {
         let mut run = run;
         let mut changed = false;
-        if let Some(report) = report {
-            if run.report.as_deref() != Some(report.as_str()) {
-                run.report = Some(report);
-                changed = true;
-            }
+        if let Some(report) = report
+            && run.report.as_deref() != Some(report.as_str())
+        {
+            run.report = Some(report);
+            changed = true;
         }
         if let Some(u) = usage {
             run.input_tokens = u.input_tokens;
@@ -214,6 +266,7 @@ where
 
     let run = repo.save(&run).await?;
     sessions.sync_run(&run).await?;
+    emit_event(events, bus, Event::lifecycle_for(&run)).await;
     Ok(run)
 }
 
@@ -222,7 +275,9 @@ mod tests {
     use super::*;
     use cat_herder_domain::entities::RunKind;
     use cat_herder_domain::reconcile::RuntimeStatus;
-    use cat_herder_store_inmemory::{InMemoryRunRepository, InMemorySessionRepository};
+    use cat_herder_store_inmemory::{
+        InMemoryEventRepository, InMemoryRunRepository, InMemorySessionRepository,
+    };
 
     struct StubRuntime {
         status: Option<RuntimeStatus>,
@@ -249,6 +304,15 @@ mod tests {
         }
     }
 
+    /// No-op fan-out bus for tests.
+    struct StubBus;
+
+    impl EventBus for StubBus {
+        async fn publish(&self, _event: &Event) -> DomainResult<()> {
+            Ok(())
+        }
+    }
+
     fn req() -> RunRequest {
         RunRequest {
             kind: RunKind::Agent,
@@ -267,7 +331,17 @@ mod tests {
     async fn start_run_advances_to_pod_pending_and_persists() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(run.state, RunState::PodPending);
         assert_ne!(run.id, RunId(0));
@@ -277,15 +351,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_run_emits_ordered_lifecycle_events() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        let evs = events.list(run.id, 0, 100).await.unwrap();
+        let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+        assert_eq!(types, ["run.queued", "run.scheduled", "run.pod_pending"]);
+        // seq is assigned monotonic from 1.
+        assert_eq!(evs.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    }
+
+    #[tokio::test]
     async fn start_run_creates_and_links_session() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
 
         // The run is linked to a session, and that session has the run's display row
         // (projected at the final pre-reconcile state, PodPending).
         let session_id = run.session_id.as_deref().expect("run linked to a session");
-        let session = sessions.get(session_id).await.unwrap().expect("session exists");
+        let session = sessions
+            .get(session_id)
+            .await
+            .unwrap()
+            .expect("session exists");
         assert_eq!(session.runs.len(), 1);
         assert_eq!(session.runs[0].id, format!("run-{}", run.id.0));
         assert_eq!(session.runs[0].task_spec, "test");
@@ -296,58 +407,144 @@ mod tests {
     async fn reconcile_walks_pod_pending_to_succeeded() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
         assert_eq!(run.state, RunState::PodPending);
         let session_id = run.session_id.clone().unwrap();
 
         // ready -> running (display row synced)
-        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
+        let n = reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Running
+        );
+        assert_eq!(
+            sessions.get(&session_id).await.unwrap().unwrap().runs[0].state,
+            RunState::Running
+        );
+
+        // gone -> succeeded (display row synced)
+        let n = reconcile_once(&StubRuntime::new(None), &repo, &sessions, &events, &StubBus)
             .await
             .unwrap();
         assert_eq!(n, 1);
-        assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Running);
-        assert_eq!(sessions.get(&session_id).await.unwrap().unwrap().runs[0].state, RunState::Running);
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Succeeded
+        );
+        assert_eq!(
+            sessions.get(&session_id).await.unwrap().unwrap().runs[0].state,
+            RunState::Succeeded
+        );
 
-        // gone -> succeeded (display row synced)
-        let n = reconcile_once(&StubRuntime::new(None), &repo, &sessions).await.unwrap();
-        assert_eq!(n, 1);
-        assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Succeeded);
-        assert_eq!(sessions.get(&session_id).await.unwrap().unwrap().runs[0].state, RunState::Succeeded);
+        // The full lifecycle walk is in the log, in order.
+        let evs = events.list(run.id, 0, 100).await.unwrap();
+        let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+        assert_eq!(
+            types,
+            [
+                "run.queued",
+                "run.scheduled",
+                "run.pod_pending",
+                "run.running",
+                "run.succeeded"
+            ]
+        );
     }
 
     #[tokio::test]
     async fn reconcile_leaves_stable_runs_alone() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
 
         // still pending (not ready yet) -> no change
-        let n = reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Pending)), &repo, &sessions)
-            .await
-            .unwrap();
+        let n = reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Pending)),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 0);
-        assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::PodPending);
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::PodPending
+        );
     }
 
     #[tokio::test]
     async fn complete_run_marks_succeeded_and_syncs_display() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
         let session_id = run.session_id.clone().unwrap();
 
-        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
-            .await
-            .unwrap();
-        assert_eq!(repo.get(run.id).await.unwrap().unwrap().state, RunState::Running);
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Running
+        );
 
         let done = complete_run(
             run.id,
             Outcome::Succeeded,
-            Some("# Done\n\nAll good.".into()),
-            None,
+            Completion {
+                report: Some("# Done\n\nAll good.".into()),
+                usage: None,
+            },
             &repo,
             &sessions,
+            &events,
+            &StubBus,
         )
         .await
         .unwrap();
@@ -369,12 +566,38 @@ mod tests {
     async fn complete_run_marks_failed() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
-        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
-            .await
-            .unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
 
-        let done = complete_run(run.id, Outcome::Failed, None, None, &repo, &sessions).await.unwrap();
+        let done = complete_run(
+            run.id,
+            Outcome::Failed,
+            Completion::default(),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
         assert_eq!(done.state, RunState::Failed);
     }
 
@@ -382,17 +605,55 @@ mod tests {
     async fn complete_run_is_idempotent() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        let run = start_run(req(), &StubRuntime::new(None), &repo, &sessions).await.unwrap();
-        reconcile_once(&StubRuntime::new(Some(RuntimeStatus::Ready)), &repo, &sessions)
-            .await
-            .unwrap();
+        let events = InMemoryEventRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &events,
+            &StubBus,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, None, None, &repo, &sessions).await.unwrap().state,
+            complete_run(
+                run.id,
+                Outcome::Succeeded,
+                Completion::default(),
+                &repo,
+                &sessions,
+                &events,
+                &StubBus
+            )
+            .await
+            .unwrap()
+            .state,
             RunState::Succeeded
         );
         assert_eq!(
-            complete_run(run.id, Outcome::Succeeded, None, None, &repo, &sessions).await.unwrap().state,
+            complete_run(
+                run.id,
+                Outcome::Succeeded,
+                Completion::default(),
+                &repo,
+                &sessions,
+                &events,
+                &StubBus
+            )
+            .await
+            .unwrap()
+            .state,
             RunState::Succeeded
         );
     }
@@ -401,6 +662,19 @@ mod tests {
     async fn complete_run_unknown_run_errors() {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
-        assert!(complete_run(RunId(999), Outcome::Succeeded, None, None, &repo, &sessions).await.is_err());
+        let events = InMemoryEventRepository::default();
+        assert!(
+            complete_run(
+                RunId(999),
+                Outcome::Succeeded,
+                Completion::default(),
+                &repo,
+                &sessions,
+                &events,
+                &StubBus
+            )
+            .await
+            .is_err()
+        );
     }
 }

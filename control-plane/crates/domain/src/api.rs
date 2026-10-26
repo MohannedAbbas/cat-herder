@@ -240,10 +240,47 @@ impl From<&crate::entities::Run> for SessionRun {
     }
 }
 
+/// A persisted event as exposed by `GET /v1/runs/{id}/events` (the JSON wire form
+/// of the canonical envelope, `PLAN.md` §9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventResponse {
+    pub run_id: u64,
+    pub seq: i64,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub schema_version: u32,
+    pub occurred_at: String,
+    pub actor: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+impl From<&crate::events::Event> for EventResponse {
+    fn from(event: &crate::events::Event) -> Self {
+        EventResponse {
+            run_id: event.run_id.0,
+            seq: event.seq,
+            event_type: event.event_type.clone(),
+            schema_version: event.schema_version,
+            occurred_at: to_iso(event.occurred_at),
+            actor: event.actor.clone(),
+            payload: event.payload.clone(),
+        }
+    }
+}
+
+/// Paginated event-replay body for `GET /v1/runs/{id}/events`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventListResponse {
+    pub events: Vec<EventResponse>,
+    /// The `seq` to pass as `after_seq` for the next page.
+    pub next_after: i64,
+}
+
 /// Format a [`std::time::SystemTime`] as an RFC-3339 UTC timestamp (seconds).
 fn to_iso(t: std::time::SystemTime) -> String {
-    chrono::DateTime::<chrono::Utc>::from(t)
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Current time as an RFC-3339 UTC timestamp (seconds) — used for new session rows.
@@ -287,9 +324,18 @@ pub struct GitHost {
 /// Default supported git hosts (seeded into settings on first boot).
 pub fn default_git_hosts() -> Vec<GitHost> {
     vec![
-        GitHost { host: "github.com".into(), label: "GitHub".into() },
-        GitHost { host: "gitlab.com".into(), label: "GitLab".into() },
-        GitHost { host: "codeberg.org".into(), label: "Codeberg".into() },
+        GitHost {
+            host: "github.com".into(),
+            label: "GitHub".into(),
+        },
+        GitHost {
+            host: "gitlab.com".into(),
+            label: "GitLab".into(),
+        },
+        GitHost {
+            host: "codeberg.org".into(),
+            label: "Codeberg".into(),
+        },
     ]
 }
 
@@ -316,7 +362,9 @@ impl RepoIdentity {
 /// ignored — callers lowercase it for canonicalization.
 pub fn is_valid_host(host: &str) -> bool {
     !host.is_empty()
-        && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
         && !host.starts_with('.')
         && !host.ends_with('.')
 }
@@ -346,7 +394,8 @@ fn clean_path(input: &str) -> Option<String> {
         return None;
     }
     let valid = segments.iter().all(|seg| {
-        seg.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        seg.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     });
     if !valid {
         return None;
@@ -368,7 +417,10 @@ pub fn repo_identity(host: &str, path: &str) -> Option<RepoIdentity> {
 /// Extract `(host, path)` from a URL (HTTPS or SSH), before validation.
 fn parse_url_host_path(url: &str) -> Option<(String, String)> {
     let s = url.trim();
-    if let Some(rest) = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")) {
+    if let Some(rest) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
         let (host, path) = rest.split_once('/')?;
         return Some((host.to_ascii_lowercase(), path.to_string()));
     }
@@ -378,7 +430,10 @@ fn parse_url_host_path(url: &str) -> Option<(String, String)> {
         return Some((host.to_ascii_lowercase(), path.to_string()));
     }
     // SSH URL: ssh://git@host/path
-    if let Some(rest) = s.strip_prefix("ssh://").and_then(|r| r.strip_prefix("git@")) {
+    if let Some(rest) = s
+        .strip_prefix("ssh://")
+        .and_then(|r| r.strip_prefix("git@"))
+    {
         let (host, path) = rest.split_once('/')?;
         return Some((host.to_ascii_lowercase(), path.to_string()));
     }
@@ -444,7 +499,10 @@ mod tests {
         assert!(repo_identity("github.com", "single-segment").is_none());
         assert!(repo_identity("github.com", "a//b").is_none());
         assert!(repo_identity("github.com", "a/b c").is_none());
-        assert!(repo_identity("https://github.com", "a/b").is_none(), "host must not carry a scheme");
+        assert!(
+            repo_identity("https://github.com", "a/b").is_none(),
+            "host must not carry a scheme"
+        );
     }
 
     #[test]
@@ -458,7 +516,10 @@ mod tests {
         let ssh_url = repo_identity_from_url("ssh://git@gitlab.com/Group/Sub/Repo.git").unwrap();
         assert_eq!(ssh_url.id(), "gitlab.com/Group/Sub/Repo");
 
-        assert_eq!(https, ssh_scp, "HTTPS and SSH must collapse to one identity");
+        assert_eq!(
+            https, ssh_scp,
+            "HTTPS and SSH must collapse to one identity"
+        );
     }
 
     #[test]

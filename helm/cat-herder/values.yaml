@@ -74,6 +74,11 @@ dependencies:
     serviceName: cat-herder-postgres
   nats:
     enabled: false
+    # NATS JetStream is the event fan-out *transport* (PLAN.md §9). Postgres remains
+    # the durable event authority; JetStream storage here is a short-lived buffer.
+    image: nats:2.10-alpine
+    storage: 1Gi
+    serviceName: cat-herder-nats
   redis:
     enabled: false
   minio:

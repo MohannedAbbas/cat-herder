@@ -1,0 +1,54 @@
+{{- if .Values.dependencies.nats.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cat-herder-nats
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-nats
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  serviceName: {{ .Values.dependencies.nats.serviceName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cat-herder-nats
+    spec:
+      containers:
+        - name: nats
+          image: "{{ .Values.dependencies.nats.image }}"
+          args:
+            - "-js"            # enable JetStream (durable streams)
+            - "-sd"            # JetStream store dir (file storage, on the PVC)
+            - "/data"
+            - "-m"             # HTTP monitoring endpoint (healthz)
+            - "8222"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.dependencies.nats.storage }}
+{{- end }}

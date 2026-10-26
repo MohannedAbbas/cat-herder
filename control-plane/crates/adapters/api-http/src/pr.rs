@@ -6,10 +6,10 @@
 //! "commit with actions" flow and a merge request.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A changed file reported by the harness.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: String,
     /// `added` | `modified` | `deleted`.

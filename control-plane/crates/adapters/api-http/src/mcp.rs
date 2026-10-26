@@ -146,7 +146,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 language: opt("language"),
             };
 
-            match start_run(req, runtime, &state.repo, &state.sessions).await {
+            match start_run(req, runtime, &state.repo, &state.sessions, &state.events, &state.bus).await {
                 Ok(run) => (
                     serde_json::to_string(&RunResponse::from(&run)).unwrap_or_default(),
                     false,

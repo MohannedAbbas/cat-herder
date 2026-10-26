@@ -4,36 +4,39 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post, put},
 };
 use tokio::sync::RwLock;
 
-use cat_herder_application::{Outcome, complete_run, start_run};
+use cat_herder_application::{Completion, Outcome, complete_run, start_run};
 use cat_herder_domain::api::{
-    AgentTemplate, CreateRunRequest, RunResponse, Session, SessionRun, SessionSummary,
-    repo_identity_from_url,
+    AgentTemplate, CreateRunRequest, EventListResponse, EventResponse, RunResponse, Session,
+    SessionRun, SessionSummary, repo_identity_from_url,
 };
 use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
+use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRepository, AgentRuntime, GitRepoRepository, RunRepository, RunRequest,
-    SessionRepository, SettingRepository,
+    AgentRepository, AgentRuntime, EventBus, EventRepository, GitRepoRepository, RunRepository,
+    RunRequest, SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
+pub use bus::EventBusImpl;
 pub use crypto::AesGcmCipher;
 pub use key_store::KeySecretStore;
-pub use oauth::{GitHubOAuth, GitLabOAuth, OAuthConfig, GITLAB, GITHUB};
-pub use pr::{default_host_api_bases, FileChange, PrClient, PrSpec};
+pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
+pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
-    AgentRepo, AuditRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
-    ToolRepo,
+    AgentRepo, AuditRepo, EventRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
+    SettingRepo, ToolRepo,
 };
 
 mod admin;
 mod auth;
+mod bus;
 mod crypto;
 mod key_store;
 mod mcp;
@@ -60,6 +63,8 @@ pub struct AppState {
     pub git_repos: GitRepoRepo,
     pub sessions: SessionRepo,
     pub repo: RunRepo,
+    pub events: EventRepo,
+    pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
     pub auth: Auth,
@@ -94,6 +99,8 @@ impl Default for AppState {
             git_repos: GitRepoRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
+            events: EventRepo::InMemory(Default::default()),
+            bus: EventBusImpl::Noop,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
@@ -101,7 +108,9 @@ impl Default for AppState {
             gitlab_oauth: None,
             mock_oauth: None,
             runtime: None,
-            cipher: Arc::new(RwLock::new(AesGcmCipher::generate().expect("rng available"))),
+            cipher: Arc::new(RwLock::new(
+                AesGcmCipher::generate().expect("rng available"),
+            )),
             key_store: None,
             pr_client: Arc::new(PrClient::from_env()),
         }
@@ -114,7 +123,10 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run))
-        .route("/v1/runs/{id}/events", post(post_run_event))
+        .route(
+            "/v1/runs/{id}/events",
+            get(get_run_events).post(post_run_event),
+        )
         .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
@@ -131,20 +143,40 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/gitlab/login", get(admin::gitlab_login))
         .route("/v1/auth/gitlab/callback", get(admin::gitlab_callback))
         // admin
-        .route("/v1/admin/agents/{id}", put(admin::upsert_agent).delete(admin::delete_agent))
+        .route(
+            "/v1/admin/agents/{id}",
+            put(admin::upsert_agent).delete(admin::delete_agent),
+        )
         .route("/v1/admin/providers", get(admin::list_providers))
         .route(
             "/v1/admin/providers/{id}",
             put(admin::upsert_provider).delete(admin::delete_provider),
         )
         .route("/v1/admin/models", get(admin::list_models))
-        .route("/v1/admin/models/{id}", put(admin::upsert_model).delete(admin::delete_model))
+        .route(
+            "/v1/admin/models/{id}",
+            put(admin::upsert_model).delete(admin::delete_model),
+        )
         .route("/v1/admin/tools", get(admin::list_tools))
-        .route("/v1/admin/tools/{id}", put(admin::upsert_tool).delete(admin::delete_tool))
-        .route("/v1/admin/repos", get(admin::list_repos).put(admin::upsert_repo).delete(admin::delete_repo))
+        .route(
+            "/v1/admin/tools/{id}",
+            put(admin::upsert_tool).delete(admin::delete_tool),
+        )
+        .route(
+            "/v1/admin/repos",
+            get(admin::list_repos)
+                .put(admin::upsert_repo)
+                .delete(admin::delete_repo),
+        )
         .route("/v1/admin/git-hosts", get(admin::list_git_hosts))
-        .route("/v1/admin/settings/webhook-secret", get(admin::get_webhook_secret).post(admin::regenerate_webhook_secret))
-        .route("/v1/admin/settings/encryption-key/rotate", post(admin::rotate_encryption_key))
+        .route(
+            "/v1/admin/settings/webhook-secret",
+            get(admin::get_webhook_secret).post(admin::regenerate_webhook_secret),
+        )
+        .route(
+            "/v1/admin/settings/encryption-key/rotate",
+            post(admin::rotate_encryption_key),
+        )
         .route("/v1/admin/audit", get(admin::list_audit))
         .with_state(state)
 }
@@ -188,7 +220,10 @@ async fn create_run(
     // Models are agent-specific; a run needs a resolvable model.
     let model = resolve_model(&state, req.model, req.agent_id)
         .await?
-        .ok_or((StatusCode::BAD_REQUEST, "agent_id or model is required".to_string()))?;
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "agent_id or model is required".to_string(),
+        ))?;
 
     let run_req = RunRequest {
         kind: req.kind,
@@ -202,9 +237,16 @@ async fn create_run(
         language: req.language,
     };
 
-    let run = start_run(run_req, runtime, &state.repo, &state.sessions)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let run = start_run(
+        run_req,
+        runtime,
+        &state.repo,
+        &state.sessions,
+        &state.events,
+        &state.bus,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }
@@ -247,6 +289,60 @@ pub struct RunEvent {
     pub usage: Option<Usage>,
 }
 
+/// Append a harness-sourced (agent projection) event to the log and fan it out.
+/// Best-effort, mirroring the application's `emit_event`.
+async fn append_agent_event(state: &AppState, run_id: RunId, event: Event) {
+    match state.events.append(run_id, &event).await {
+        Ok(stored) => {
+            if let Err(e) = state.bus.publish(&stored).await {
+                eprintln!("event publish failed for run {}: {e}", run_id.0);
+            }
+        }
+        Err(e) => eprintln!("agent event append failed for run {}: {e}", run_id.0),
+    }
+}
+
+/// Query params for replaying a run's event log.
+#[derive(Debug, serde::Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    after_seq: i64,
+    #[serde(default = "default_events_limit")]
+    limit: i64,
+}
+
+fn default_events_limit() -> i64 {
+    100
+}
+
+/// Replay a run's canonical event log, paginated by `after_seq` (`PLAN.md` §9).
+async fn get_run_events(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(q): Query<EventsQuery>,
+) -> Result<Json<EventListResponse>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    let limit = q.limit.clamp(1, 1000);
+    let events = state
+        .events
+        .list(run_id, q.after_seq, limit)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let next_after = events.last().map(|e| e.seq).unwrap_or(q.after_seq);
+    Ok(Json(EventListResponse {
+        events: events.iter().map(EventResponse::from).collect(),
+        next_after,
+    }))
+}
+
 /// Ingest a harness-reported event for a run.
 async fn post_run_event(
     State(state): State<AppState>,
@@ -274,18 +370,45 @@ async fn post_run_event(
                 Some("failed") => Outcome::Failed,
                 _ => Outcome::Succeeded,
             };
-            let run = complete_run(run_id, outcome, report.clone(), usage, &state.repo, &state.sessions)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Record the harness's own event (agent projection) before the lifecycle
+            // transition it triggers.
+            let agent_event = Event::new(
+                run_id,
+                event_type::AGENT_FINISHED,
+                None,
+                serde_json::json!({
+                    "status": status.clone(),
+                    "report": report.clone(),
+                    "changes": changes.clone(),
+                    "usage": usage,
+                }),
+            );
+            append_agent_event(&state, run_id, agent_event).await;
+
+            let run = complete_run(
+                run_id,
+                outcome,
+                Completion {
+                    report: report.clone(),
+                    usage,
+                },
+                &state.repo,
+                &state.sessions,
+                &state.events,
+                &state.bus,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
             // The run's outcome and report are already persisted, so the sandbox has
             // nothing left to do: reclaim it now rather than leave its pod running
             // indefinitely. Deleting the Sandbox cascades (owner ref) to its pod.
             // Best-effort — a failure here must not fail the already-recorded run.
-            if let Some(runtime) = &state.runtime {
-                if let Err(e) = runtime.terminate(run_id).await {
-                    eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
-                }
+            if let Some(runtime) = &state.runtime
+                && let Err(e) = runtime.terminate(run_id).await
+            {
+                eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
             }
 
             // On success with a diff, open a PR in the background (the write token
@@ -300,19 +423,54 @@ async fn post_run_event(
         // progress: mark the run terminal and reclaim the sandbox (the liveness probe is
         // the kubelet-side backstop if the harness itself is too wedged to report).
         "stuck" => {
-            let run = complete_run(run_id, Outcome::Stuck, None, None, &state.repo, &state.sessions)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            append_agent_event(
+                &state,
+                run_id,
+                Event::new(
+                    run_id,
+                    event_type::AGENT_STUCK,
+                    None,
+                    serde_json::Value::Null,
+                ),
+            )
+            .await;
 
-            if let Some(runtime) = &state.runtime {
-                if let Err(e) = runtime.terminate(run_id).await {
-                    eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
-                }
+            let run = complete_run(
+                run_id,
+                Outcome::Stuck,
+                Completion::default(),
+                &state.repo,
+                &state.sessions,
+                &state.events,
+                &state.bus,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            if let Some(runtime) = &state.runtime
+                && let Err(e) = runtime.terminate(run_id).await
+            {
+                eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
             }
 
             Ok(Json(RunResponse::from(&run)))
         }
-        // "started" and any other event type: acknowledged without a state change.
+        // "started" is acknowledged and recorded; any other event type is acknowledged
+        // without a state change.
+        "started" => {
+            append_agent_event(
+                &state,
+                run_id,
+                Event::new(
+                    run_id,
+                    event_type::AGENT_STARTED,
+                    None,
+                    serde_json::Value::Null,
+                ),
+            )
+            .await;
+            Ok(Json(RunResponse::from(&exists)))
+        }
         _ => Ok(Json(RunResponse::from(&exists))),
     }
 }
@@ -329,10 +487,14 @@ async fn maybe_open_pr(
     if changes.is_empty() {
         return;
     }
-    let Some(repo_url) = run.repo.as_deref() else { return };
+    let Some(repo_url) = run.repo.as_deref() else {
+        return;
+    };
 
     // Resolve the repo identity and its encrypted write token.
-    let Some(identity) = repo_identity_from_url(repo_url) else { return };
+    let Some(identity) = repo_identity_from_url(repo_url) else {
+        return;
+    };
     let repo_record = match state.git_repos.get(&identity.id()).await {
         Ok(Some(r)) => r,
         _ => return,
@@ -437,12 +599,22 @@ async fn webhook_generic(
     // Models are agent-specific: resolve from agent_id or the payload's explicit model.
     let model = resolve_model(&state, req.model.take(), agent_id)
         .await?
-        .ok_or((StatusCode::BAD_REQUEST, "agent_id or model is required".to_string()))?;
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "agent_id or model is required".to_string(),
+        ))?;
     req.model = Some(model);
 
-    let run = start_run(req, runtime, &state.repo, &state.sessions)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let run = start_run(
+        req,
+        runtime,
+        &state.repo,
+        &state.sessions,
+        &state.events,
+        &state.bus,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }

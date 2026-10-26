@@ -3,10 +3,12 @@
 //! The `/v1` endpoint tests encode the expected contract and are currently **RED**
 //! (stub handlers return 501); they go green once the handlers are implemented.
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::Router;
-use cat_herder_api_http::{router, AppState, GitHubOAuth, GitLabOAuth, OAuthConfig, GITLAB, GITHUB};
+use cat_herder_api_http::{
+    AppState, GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig, router,
+};
 use cat_herder_domain::api::{AgentTemplate, Session, SessionSummary};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -121,6 +123,63 @@ async fn create_run_without_runtime_returns_503() {
 async fn get_unknown_run_returns_404() {
     let (status, _) = send(app(), "/v1/runs/999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_run_events_unknown_run_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/events").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_run_events_replays_the_log() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::events::Event;
+    use cat_herder_domain::ports::{EventRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(42),
+        kind: RunKind::Agent,
+        state: RunState::Queued,
+        task_spec: "seed".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .events
+        .append(run.id, &Event::run_queued(&run))
+        .await
+        .unwrap();
+    state
+        .events
+        .append(run.id, &Event::run_scheduled(&run))
+        .await
+        .unwrap();
+
+    let (status, body) = send(router(state), "/v1/runs/42/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list["events"].as_array().unwrap().len(), 2);
+    assert_eq!(list["events"][0]["seq"], 1);
+    assert_eq!(list["events"][0]["type"], "run.queued");
+    assert_eq!(list["events"][1]["seq"], 2);
+    assert_eq!(list["events"][1]["type"], "run.scheduled");
+    assert_eq!(list["nextAfter"], 2);
 }
 
 #[tokio::test]
@@ -498,7 +557,11 @@ async fn admin_action_is_audited() {
     let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
     let entries: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert!(
-        entries.as_array().unwrap().iter().any(|e| e["action"] == "agent.upsert"),
+        entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["action"] == "agent.upsert"),
         "audit should contain the agent.upsert action"
     );
 }
@@ -510,7 +573,11 @@ async fn webhook_requires_secret_header() {
     use cat_herder_domain::ports::SettingRepository;
 
     let state = AppState::default();
-    state.settings.set("webhook_secret", "test-secret").await.unwrap();
+    state
+        .settings
+        .set("webhook_secret", "test-secret")
+        .await
+        .unwrap();
     let app = router(state);
 
     // missing header -> 401
@@ -597,7 +664,10 @@ async fn authed(
     cookie: &str,
     body: &str,
 ) -> (StatusCode, Vec<u8>) {
-    let mut builder = Request::builder().method(method).uri(uri).header("cookie", cookie);
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("cookie", cookie);
     if !body.is_empty() {
         builder = builder.header("content-type", "application/json");
     }
@@ -760,7 +830,11 @@ async fn github_login_redirects_to_github_and_sets_state_cookie() {
         )
         .await
         .unwrap();
-    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    assert!(
+        res.status().is_redirection(),
+        "expected 3xx, got {}",
+        res.status()
+    );
     let location = res
         .headers()
         .get(axum::http::header::LOCATION)
@@ -775,7 +849,10 @@ async fn github_login_redirects_to_github_and_sets_state_cookie() {
         .get(axum::http::header::SET_COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert!(set_cookie.contains("gh_oauth_state="), "missing CSRF cookie");
+    assert!(
+        set_cookie.contains("gh_oauth_state="),
+        "missing CSRF cookie"
+    );
     assert!(set_cookie.to_lowercase().contains("httponly"));
 }
 
@@ -794,7 +871,11 @@ fn oauth_cfg(provider_kind: &str) -> OAuthConfig {
         client_secret: "test-secret".into(),
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
-        provider: if provider_kind == "gitlab" { &GITLAB } else { &GITHUB },
+        provider: if provider_kind == "gitlab" {
+            &GITLAB
+        } else {
+            &GITHUB
+        },
         base_url: None,
     }
 }
@@ -856,7 +937,11 @@ async fn github_login_mock_issues_session_and_redirects_home() {
         .unwrap();
 
     // Redirects to `/` (same as a successful callback), not to the provider.
-    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    assert!(
+        res.status().is_redirection(),
+        "expected 3xx, got {}",
+        res.status()
+    );
     assert_eq!(
         res.headers()
             .get(axum::http::header::LOCATION)
@@ -899,8 +984,7 @@ async fn github_login_mock_issues_session_and_redirects_home() {
 #[tokio::test]
 async fn github_callback_rejects_missing_state_cookie() {
     // No gh_oauth_state cookie => CSRF check fails before any GitHub call.
-    let (status, _body) =
-        send(oauth_app(), "/v1/auth/github/callback?code=abc&state=xyz").await;
+    let (status, _body) = send(oauth_app(), "/v1/auth/github/callback?code=abc&state=xyz").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -937,7 +1021,11 @@ async fn gitlab_login_redirects_to_gitlab_and_sets_state_cookie() {
         )
         .await
         .unwrap();
-    assert!(res.status().is_redirection(), "expected 3xx, got {}", res.status());
+    assert!(
+        res.status().is_redirection(),
+        "expected 3xx, got {}",
+        res.status()
+    );
     let location = res
         .headers()
         .get(axum::http::header::LOCATION)
@@ -953,7 +1041,10 @@ async fn gitlab_login_redirects_to_gitlab_and_sets_state_cookie() {
         .get(axum::http::header::SET_COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert!(set_cookie.contains("gl_oauth_state="), "missing CSRF cookie");
+    assert!(
+        set_cookie.contains("gl_oauth_state="),
+        "missing CSRF cookie"
+    );
     assert!(set_cookie.to_lowercase().contains("httponly"));
 }
 
@@ -965,8 +1056,11 @@ async fn gitlab_login_unconfigured_returns_404() {
 
 #[tokio::test]
 async fn gitlab_callback_rejects_missing_state_cookie() {
-    let (status, _body) =
-        send(gitlab_oauth_app(), "/v1/auth/gitlab/callback?code=abc&state=xyz").await;
+    let (status, _body) = send(
+        gitlab_oauth_app(),
+        "/v1/auth/gitlab/callback?code=abc&state=xyz",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 

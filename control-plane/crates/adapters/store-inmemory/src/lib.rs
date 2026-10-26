@@ -10,9 +10,11 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{GitRepo, Run, RunId};
+use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, DomainResult, GitRepoRepository, ModelRepository,
-    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    AgentRepository, AuditRepository, DomainResult, EventRepository, GitRepoRepository,
+    ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
+    ToolRepository,
 };
 use tokio::sync::RwLock;
 
@@ -52,6 +54,36 @@ impl RunRepository for InMemoryRunRepository {
     }
 }
 
+/// In-memory event log (per-run `seq`-ordered, append-only). Reference adapter.
+#[derive(Clone, Default)]
+pub struct InMemoryEventRepository {
+    inner: Arc<RwLock<HashMap<RunId, Vec<Event>>>>,
+}
+
+impl EventRepository for InMemoryEventRepository {
+    async fn append(&self, run_id: RunId, event: &Event) -> DomainResult<Event> {
+        let mut map = self.inner.write().await;
+        let seq = map.get(&run_id).map(|v| v.len() as i64).unwrap_or(0) + 1;
+        let stored = Event {
+            run_id,
+            seq,
+            ..event.clone()
+        };
+        map.entry(run_id).or_default().push(stored.clone());
+        Ok(stored)
+    }
+
+    async fn list(&self, run_id: RunId, after_seq: i64, limit: i64) -> DomainResult<Vec<Event>> {
+        let map = self.inner.read().await;
+        let events = map.get(&run_id).cloned().unwrap_or_default();
+        Ok(events
+            .into_iter()
+            .filter(|e| e.seq > after_seq)
+            .take(limit as usize)
+            .collect())
+    }
+}
+
 /// In-memory agent catalog, seeded from the domain's default reference data.
 #[derive(Clone)]
 pub struct InMemoryAgentRepository {
@@ -69,7 +101,10 @@ impl InMemoryAgentRepository {
         model_overrides: &HashMap<String, String>,
     ) -> Self {
         Self {
-            agents: Arc::new(RwLock::new(catalog::default_agents_with(defaults, model_overrides))),
+            agents: Arc::new(RwLock::new(catalog::default_agents_with(
+                defaults,
+                model_overrides,
+            ))),
         }
     }
 }
@@ -86,7 +121,13 @@ impl AgentRepository for InMemoryAgentRepository {
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>> {
-        Ok(self.agents.read().await.iter().find(|a| a.id == id).cloned())
+        Ok(self
+            .agents
+            .read()
+            .await
+            .iter()
+            .find(|a| a.id == id)
+            .cloned())
     }
 
     async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate> {
@@ -125,7 +166,13 @@ impl ProviderRepository for InMemoryProviderRepository {
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Provider>> {
-        Ok(self.providers.read().await.iter().find(|p| p.id == id).cloned())
+        Ok(self
+            .providers
+            .read()
+            .await
+            .iter()
+            .find(|p| p.id == id)
+            .cloned())
     }
 
     async fn save(&self, provider: &Provider) -> DomainResult<Provider> {
@@ -164,7 +211,13 @@ impl ModelRepository for InMemoryModelRepository {
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Model>> {
-        Ok(self.models.read().await.iter().find(|m| m.id == id).cloned())
+        Ok(self
+            .models
+            .read()
+            .await
+            .iter()
+            .find(|m| m.id == id)
+            .cloned())
     }
 
     async fn save(&self, model: &Model) -> DomainResult<Model> {
@@ -281,7 +334,10 @@ impl GitRepoRepository for InMemoryGitRepoRepository {
     }
 
     async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo> {
-        self.repos.write().await.insert(repo.id.clone(), repo.clone());
+        self.repos
+            .write()
+            .await
+            .insert(repo.id.clone(), repo.clone());
         Ok(repo.clone())
     }
 
@@ -311,7 +367,10 @@ impl SettingRepository for InMemorySettingRepository {
     }
 
     async fn set(&self, key: &str, value: &str) -> DomainResult<()> {
-        self.settings.write().await.insert(key.to_string(), value.to_string());
+        self.settings
+            .write()
+            .await
+            .insert(key.to_string(), value.to_string());
         Ok(())
     }
 }
@@ -336,7 +395,13 @@ impl SessionRepository for InMemorySessionRepository {
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Session>> {
-        Ok(self.sessions.read().await.iter().find(|s| s.id == id).cloned())
+        Ok(self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .find(|s| s.id == id)
+            .cloned())
     }
 
     async fn create(&self, id: &str, title: &str) -> DomainResult<()> {
@@ -452,7 +517,14 @@ mod tests {
         };
         repo.save(&r).await.unwrap();
         assert_eq!(repo.list().await.unwrap().len(), 1);
-        assert!(repo.get("cat-herder").await.unwrap().unwrap().token_ciphertext.is_some());
+        assert!(
+            repo.get("cat-herder")
+                .await
+                .unwrap()
+                .unwrap()
+                .token_ciphertext
+                .is_some()
+        );
         repo.delete("cat-herder").await.unwrap();
         assert!(repo.get("cat-herder").await.unwrap().is_none());
     }
