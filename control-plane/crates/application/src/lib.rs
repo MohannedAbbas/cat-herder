@@ -5,11 +5,11 @@
 use std::time::SystemTime;
 
 use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
-use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
-use cat_herder_domain::events::Event;
+use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, Run, RunId, RunState, Usage};
+use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRuntime, DomainResult, EventBus, RunRepository, RunRequest, SessionRepository,
-    TransitionRepository,
+    AgentRuntime, ApprovalRepository, DomainResult, EventBus, EventRepository, RunRepository,
+    RunRequest, SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::state::is_terminal;
@@ -273,6 +273,157 @@ where
     Ok(run)
 }
 
+/// Use case: record a human-in-the-loop interrupt (`PLAN.md` §10). Persists a durable
+/// `ApprovalRequest` (with the opaque `resume_token`) and advances the run to
+/// `AwaitingInput`. The run is left alone (but the approval is still recorded) if it is
+/// in a state that cannot accept an interrupt.
+// `#[allow]`: six injected dependencies (approval/event/run/session/transition/bus)
+// plus the interrupt data exceed clippy's default arity threshold.
+#[allow(clippy::too_many_arguments)]
+pub async fn interrupt_run<A, E, P, S, T, B>(
+    run_id: RunId,
+    resume_token: String,
+    payload: serde_json::Value,
+    approvals: &A,
+    events: &E,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<ApprovalRequest>
+where
+    A: ApprovalRepository,
+    E: EventRepository,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let approval = ApprovalRequest {
+        id: uuid::Uuid::new_v4().to_string(),
+        run_id,
+        resume_token: resume_token.clone(),
+        payload: payload.clone(),
+        status: ApprovalStatus::Pending,
+        response: None,
+        created_at: SystemTime::now(),
+        responded_at: None,
+    };
+    let approval = approvals.create(&approval).await?;
+
+    // Record the request in the event log (carries the approval id for the deep link).
+    let event = Event::new(
+        run_id,
+        event_type::APPROVAL_REQUESTED,
+        None,
+        serde_json::json!({
+            "approval_id": approval.id,
+            "resume_token": resume_token,
+            "payload": payload,
+        }),
+    );
+    let stored = events.append(run_id, &event).await?;
+    publish_event(bus, &stored).await;
+
+    // Advance the lifecycle to AwaitingInput (from Running, or PodPending -> Running).
+    let Some(run) = repo.get(run_id).await? else {
+        return Ok(approval);
+    };
+    let mut run = run;
+    match run.state {
+        RunState::Running => {
+            persist_transition(&mut run, RunState::AwaitingInput, transitions, bus).await?;
+        }
+        RunState::PodPending => {
+            persist_transition(&mut run, RunState::Running, transitions, bus).await?;
+            persist_transition(&mut run, RunState::AwaitingInput, transitions, bus).await?;
+        }
+        _ => return Ok(approval),
+    }
+    sessions.sync_run(&run).await?;
+    Ok(approval)
+}
+
+/// Use case: record a human's decision on an approval (`PLAN.md` §10). Approving resumes
+/// the run (`AwaitingInput -> Running`); rejecting cancels it. The decision and response
+/// are persisted on the `ApprovalRequest`; an `approval.responded` event is appended.
+#[allow(clippy::too_many_arguments)]
+pub async fn respond_approval<A, E, P, S, T, B>(
+    approval_id: &str,
+    approved: bool,
+    response: Option<String>,
+    approvals: &A,
+    events: &E,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<ApprovalRequest>
+where
+    A: ApprovalRepository,
+    E: EventRepository,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let approval = approvals.get(approval_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("approval {approval_id} not found"),
+        )
+    })?;
+    if approval.status != ApprovalStatus::Pending {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("approval {approval_id} already decided"),
+        )
+        .into());
+    }
+
+    let status = if approved {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::Rejected
+    };
+    let decided = approvals
+        .decide(approval_id, status, response.clone())
+        .await?;
+
+    let event = Event::new(
+        approval.run_id,
+        event_type::APPROVAL_RESPONDED,
+        None,
+        serde_json::json!({
+            "approval_id": approval.id,
+            "status": status,
+            "response": response,
+        }),
+    );
+    let stored = events.append(approval.run_id, &event).await?;
+    publish_event(bus, &stored).await;
+
+    // Advance the lifecycle: approve -> Running (resume), reject -> Cancelled.
+    let run = repo.get(approval.run_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run {} not found", approval.run_id.0),
+        )
+    })?;
+    let mut run = run;
+    let target = if approved {
+        RunState::Running
+    } else {
+        RunState::Cancelled
+    };
+    if run.state == RunState::AwaitingInput {
+        persist_transition(&mut run, target, transitions, bus).await?;
+        sessions.sync_run(&run).await?;
+    }
+
+    Ok(decided)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,8 +431,8 @@ mod tests {
     use cat_herder_domain::ports::EventRepository;
     use cat_herder_domain::reconcile::RuntimeStatus;
     use cat_herder_store_inmemory::{
-        InMemoryEventRepository, InMemoryRunRepository, InMemorySessionRepository,
-        InMemoryTransitionRepository,
+        InMemoryApprovalRepository, InMemoryEventRepository, InMemoryRunRepository,
+        InMemorySessionRepository, InMemoryTransitionRepository,
     };
 
     struct StubRuntime {
@@ -688,6 +839,213 @@ mod tests {
                 RunId(999),
                 Outcome::Succeeded,
                 Completion::default(),
+                &repo,
+                &sessions,
+                &transitions,
+                &StubBus
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupt_run_persists_approval_and_awaits_input() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let approvals = InMemoryApprovalRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        // Move PodPending -> Running so the interrupt can land.
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        let approval = interrupt_run(
+            run.id,
+            "ckpt-123".into(),
+            serde_json::json!({ "tool": "push", "args": { "branch": "main" } }),
+            &approvals,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(approval.status, ApprovalStatus::Pending);
+        assert_eq!(approval.resume_token, "ckpt-123");
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::AwaitingInput
+        );
+        // The log records approval.requested before run.awaiting_input.
+        let types: Vec<String> = events
+            .list(run.id, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"approval.requested".to_string()));
+        assert!(types.contains(&"run.awaiting_input".to_string()));
+    }
+
+    #[tokio::test]
+    async fn respond_approval_approves_and_resumes() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let approvals = InMemoryApprovalRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        let approval = interrupt_run(
+            run.id,
+            "ckpt-123".into(),
+            serde_json::json!({ "tool": "push" }),
+            &approvals,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        let decided = respond_approval(
+            &approval.id,
+            true,
+            Some("ok, go ahead".into()),
+            &approvals,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        assert_eq!(decided.response.as_deref(), Some("ok, go ahead"));
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn respond_approval_rejects_and_cancels() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let approvals = InMemoryApprovalRepository::default();
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        let approval = interrupt_run(
+            run.id,
+            "ckpt-123".into(),
+            serde_json::json!({ "tool": "push" }),
+            &approvals,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        let decided = respond_approval(
+            &approval.id,
+            false,
+            None,
+            &approvals,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decided.status, ApprovalStatus::Rejected);
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn respond_approval_unknown_id_errors() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let approvals = InMemoryApprovalRepository::default();
+        assert!(
+            respond_approval(
+                "nope",
+                true,
+                None,
+                &approvals,
+                &events,
                 &repo,
                 &sessions,
                 &transitions,

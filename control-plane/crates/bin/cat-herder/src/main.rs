@@ -8,27 +8,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, CheckpointRepo, EventBusImpl, EventRepo,
-    GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo,
-    OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
-    TransitionRepo, grpc_serve, router,
+    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, CheckpointRepo, ControlLinks,
+    EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
+    KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo,
+    SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryCheckpointRepository,
-    InMemoryEventRepository, InMemoryModelRepository, InMemoryProviderRepository,
-    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
-    InMemoryTransitionRepository,
+    InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
+    InMemoryCheckpointRepository, InMemoryEventRepository, InMemoryModelRepository,
+    InMemoryProviderRepository, InMemoryRunRepository, InMemorySettingRepository,
+    InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::NatsEventBus;
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresCheckpointRepository,
-    PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresSettingRepository, PostgresStore, PostgresToolRepository, PostgresTransitionRepository,
+    PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
+    PostgresCheckpointRepository, PostgresEventRepository, PostgresGitRepoRepository,
+    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
+    PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
+    PostgresTransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -96,6 +97,7 @@ struct Repos {
     events: EventRepo,
     transitions: TransitionRepo,
     checkpoints: CheckpointRepo,
+    approvals: ApprovalRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -118,6 +120,7 @@ impl Repos {
             events: EventRepo::InMemory(events),
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
+            approvals: ApprovalRepo::InMemory(InMemoryApprovalRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -155,6 +158,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     checkpoints: CheckpointRepo::Postgres(PostgresCheckpointRepository::new(
                         &store,
                     )),
+                    approvals: ApprovalRepo::Postgres(PostgresApprovalRepository::new(&store)),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
@@ -374,6 +378,7 @@ async fn main() {
         events: repos.events,
         transitions: repos.transitions,
         checkpoints: repos.checkpoints,
+        approvals: repos.approvals,
         bus,
         agents: repos.agents,
         providers: repos.providers,
@@ -388,6 +393,7 @@ async fn main() {
         gitlab_oauth,
         mock_oauth,
         runtime,
+        control_links: Arc::new(ControlLinks::default()),
         cipher,
         key_store: Some(key_store),
         pr_client: Arc::new(PrClient::from_env()),

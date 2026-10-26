@@ -21,6 +21,7 @@ message HarnessMessage {
     Event event = 2;
     Heartbeat heartbeat = 3;
     Checkpoint checkpoint = 4;
+    Interrupt interrupt = 5;
   }
 }
 
@@ -73,6 +74,15 @@ message Checkpoint {
   bytes payload = 5;
 }
 
+// A human-in-the-loop interrupt (PLAN.md §10): a tool call hit `interrupt_on` and the
+// agent paused for approval.
+message Interrupt {
+  // Opaque resume token (the LangGraph checkpoint id of the paused state).
+  string resume_token = 1;
+  // JSON of the pending tool call / question to present to the human.
+  string payload = 2;
+}
+
 // Control plane -> harness.
 message ControlMessage {
   oneof msg {
@@ -86,4 +96,6 @@ message ControlMessage {
 // "pause" | "resume" | "cancel" (human-in-the-loop, PLAN.md §10).
 message Signal {
   string signal = 1;
+  // The human's response, carried on "resume" (passed to Command(resume=...)).
+  string response = 2;
 }

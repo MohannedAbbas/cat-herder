@@ -9,12 +9,14 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool, now_iso,
 };
 use cat_herder_domain::catalog;
-use cat_herder_domain::entities::{Checkpoint, GitRepo, Run, RunId};
+use cat_herder_domain::entities::{
+    ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId,
+};
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, CheckpointRepository, DomainResult, EventRepository,
-    GitRepoRepository, ModelRepository, ProviderRepository, RunRepository, SessionRepository,
-    SettingRepository, ToolRepository, TransitionRepository,
+    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository, DomainResult,
+    EventRepository, GitRepoRepository, ModelRepository, ProviderRepository, RunRepository,
+    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -145,6 +147,44 @@ impl CheckpointRepository for InMemoryCheckpointRepository {
             .get(&run_id)
             .and_then(|v| v.iter().max_by_key(|c| c.seq))
             .cloned())
+    }
+}
+
+/// In-memory human-in-the-loop approval store.
+#[derive(Clone, Default)]
+pub struct InMemoryApprovalRepository {
+    inner: Arc<RwLock<HashMap<String, ApprovalRequest>>>,
+}
+
+impl ApprovalRepository for InMemoryApprovalRepository {
+    async fn create(&self, approval: &ApprovalRequest) -> DomainResult<ApprovalRequest> {
+        self.inner
+            .write()
+            .await
+            .insert(approval.id.clone(), approval.clone());
+        Ok(approval.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<ApprovalRequest>> {
+        Ok(self.inner.read().await.get(id).cloned())
+    }
+
+    async fn decide(
+        &self,
+        id: &str,
+        status: ApprovalStatus,
+        response: Option<String>,
+    ) -> DomainResult<ApprovalRequest> {
+        let mut map = self.inner.write().await;
+        let approval =
+            map.get_mut(id)
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "approval not found").into()
+                })?;
+        approval.status = status;
+        approval.response = response;
+        approval.responded_at = Some(std::time::SystemTime::now());
+        Ok(approval.clone())
     }
 }
 

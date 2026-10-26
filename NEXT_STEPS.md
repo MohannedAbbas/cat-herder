@@ -73,13 +73,22 @@ pod death and pause/resume at an interrupt.
   still pod-local `/repo` — that is the durable-workspace slice, item #5 (not this item).
   Not yet exercised end-to-end against a live cluster/LLM.
 
-- [ ] **4. HITL: interrupts → durable `ApprovalRequest` → resume (§10).**
+- [x] **4. HITL: interrupts → durable `ApprovalRequest` → resume (§10).**
   `AwaitingInput` exists in the state machine but nothing produces it. No approval
   entity, no `interrupt_on` wiring, no resume token.
   *Done when:* a tool call hitting `interrupt_on` emits an interrupt event, persists a
   durable `ApprovalRequest` (opaque `resume_token`), marks the run `AwaitingInput`,
   notifies (Slack/email/event), and `POST /v1/approvals/{id}/respond` resumes at the
   checkpoint. Approval timeout + escalation (§10).
+  *Status:* ✅ harness wires `interrupt_on` (from `CAT_HERDER_INTERRUPT_ON`) and loops
+  on `__interrupt__`, emitting `Interrupt { resume_token, payload }` and resuming on the
+  control plane's `Signal(resume)`; ✅ `ApprovalRequest` entity + `approvals` table
+  (migration `0024`) + `ApprovalRepository`; ✅ interrupt → durable approval +
+  `Running -> AwaitingInput` (+ `approval.requested`/`run.awaiting_input` events);
+  ✅ `POST /v1/approvals/{id}/respond` → decision + `AwaitingInput -> Running` (approve)
+  / `-> Cancelled` (reject) + `Signal` back to the live harness. See
+  `docs/design/hitl.md`. ⬜ Deferred: approval timeout + escalation (§10), Slack/email
+  delivery (the notification is an event + deep link for now).
 
 - [ ] **5. Durable workspace: RWX PVC + MinIO snapshots (§6, §13).**
   Today the working tree is `/repo` inside the ephemeral pod; the toolchain image

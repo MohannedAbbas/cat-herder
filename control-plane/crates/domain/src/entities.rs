@@ -105,6 +105,31 @@ pub struct ReviewDecision {
     pub reviewed_at: SystemTime,
 }
 
+/// Whether a human-in-the-loop approval has been decided, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+/// A durable human-in-the-loop approval request (see `PLAN.md` §10). `resume_token` is
+/// the opaque LangGraph checkpoint id of the paused state — the control plane stores it
+/// but never interprets it; `payload` is the pending tool call/question shown to the
+/// human.
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub id: String,
+    pub run_id: RunId,
+    pub resume_token: String,
+    pub payload: serde_json::Value,
+    pub status: ApprovalStatus,
+    pub response: Option<String>,
+    pub created_at: SystemTime,
+    pub responded_at: Option<SystemTime>,
+}
+
 /// A git repository an agent can clone and work on, with optional access tokens.
 ///
 /// Both the read token (`token_ciphertext`) and the write token

@@ -5,12 +5,14 @@
 //! The harness is the gRPC *client* — the untrusted pod reaches out to the trusted
 //! control plane, matching the egress default-deny policy.
 
+use std::collections::HashMap;
 use std::time::SystemTime;
 
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use cat_herder_application::interrupt_run;
 use cat_herder_domain::entities::{Checkpoint, RunId, Usage};
 use cat_herder_domain::ports::CheckpointRepository;
 
@@ -32,6 +34,42 @@ use control::v1::{
 /// Build the tonic service for the harness control channel.
 pub fn grpc_server(state: AppState) -> HarnessControlServer<HarnessControlService> {
     HarnessControlServer::new(HarnessControlService { state })
+}
+
+/// Registry of live harness control links: `run_id -> outbound message sender`. The
+/// `connect` handler registers a run's sender after `Register`; the approval response
+/// path sends `Signal` messages over it (`PLAN.md` §10). When a harness disconnects its
+/// link is dropped.
+#[derive(Default)]
+pub struct ControlLinks {
+    links: Mutex<HashMap<RunId, mpsc::Sender<Result<ControlMessage, Status>>>>,
+}
+
+impl ControlLinks {
+    async fn register(&self, run_id: RunId, tx: mpsc::Sender<Result<ControlMessage, Status>>) {
+        self.links.lock().await.insert(run_id, tx);
+    }
+
+    async fn unregister(&self, run_id: RunId) {
+        self.links.lock().await.remove(&run_id);
+    }
+
+    /// Send a `Signal` (resume/cancel) to a run's harness, if its link is still open.
+    /// Returns `false` when the run has no live link (e.g. the pod is gone).
+    pub async fn send_signal(&self, run_id: RunId, signal: &str, response: Option<String>) -> bool {
+        let msg = ControlMessage {
+            msg: Some(control::v1::control_message::Msg::Signal(
+                control::v1::Signal {
+                    signal: signal.to_string(),
+                    response: response.unwrap_or_default(),
+                },
+            )),
+        };
+        match self.links.lock().await.get(&run_id) {
+            Some(tx) => tx.send(Ok(msg)).await.is_ok(),
+            None => false,
+        }
+    }
 }
 
 /// Serve the harness control channel on `addr` (blocks until the server stops).
@@ -86,8 +124,11 @@ impl HarnessControl for HarnessControlService {
             );
         }
 
-        // Drain the harness's events/checkpoints/heartbeats off the request thread so
-        // the stream stays responsive.
+        // Register this run's outbound link so the approval path (§10) can signal it.
+        state.control_links.register(run_id, tx.clone()).await;
+
+        // Drain the harness's events/checkpoints/interrupts/heartbeats off the request
+        // thread so the stream stays responsive.
         let ingest_state = state.clone();
         tokio::spawn(async move {
             loop {
@@ -137,12 +178,34 @@ impl HarnessControl for HarnessControlService {
                             eprintln!("checkpoint persist failed for run {}: {e}", run_id.0);
                         }
                     }
+                    Some(Msg::Interrupt(interrupt)) => {
+                        let payload: serde_json::Value = serde_json::from_str(&interrupt.payload)
+                            .unwrap_or(serde_json::Value::Null);
+                        let result = interrupt_run(
+                            run_id,
+                            interrupt.resume_token,
+                            payload,
+                            &ingest_state.approvals,
+                            &ingest_state.events,
+                            &ingest_state.repo,
+                            &ingest_state.sessions,
+                            &ingest_state.transitions,
+                            &ingest_state.bus,
+                        )
+                        .await;
+                        if let Err(e) = result {
+                            eprintln!("interrupt persist failed for run {}: {e}", run_id.0);
+                        }
+                    }
                     // The stuck-run watchdog (a later step) consumes heartbeats; here we
                     // just keep the channel alive and acknowledge implicitly.
                     Some(Msg::Heartbeat(_)) => {}
                     _ => {}
                 }
             }
+            // The harness disconnected: drop the outbound link so late signals don't
+            // block on a dead channel.
+            ingest_state.control_links.unregister(run_id).await;
         });
 
         // Server -> harness direction: the resume seed now; signals (pause/resume/

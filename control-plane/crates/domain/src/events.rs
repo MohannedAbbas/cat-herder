@@ -38,6 +38,10 @@ pub mod event_type {
     pub const AGENT_STARTED: &str = "agent.started";
     pub const AGENT_FINISHED: &str = "agent.finished";
     pub const AGENT_STUCK: &str = "agent.stuck";
+
+    // Human-in-the-loop (PLAN.md §10).
+    pub const APPROVAL_REQUESTED: &str = "approval.requested";
+    pub const APPROVAL_RESPONDED: &str = "approval.responded";
 }
 
 /// Canonical event envelope. `seq` is assigned by the control plane (sole writer);
@@ -114,6 +118,14 @@ impl Event {
         Self::lifecycle(run, event_type::RUN_TIMED_OUT)
     }
 
+    pub fn run_cancelled(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_CANCELLED)
+    }
+
+    pub fn run_awaiting_input(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_AWAITING_INPUT)
+    }
+
     /// The lifecycle event for a run's *current* state. Used by the reconciler and
     /// the terminal-transition paths so every state change lands in the log exactly
     /// once, with the state it represents.
@@ -128,6 +140,8 @@ impl Event {
             Failed => Self::run_failed(run),
             Stuck => Self::run_stuck(run),
             TimedOut => Self::run_timed_out(run),
+            Cancelled => Self::run_cancelled(run),
+            AwaitingInput => Self::run_awaiting_input(run),
             // States without a wired event type yet fall back to a generic lifecycle
             // event carrying the state, so nothing is silently dropped from the log.
             _ => Self::lifecycle(run, "run.state"),

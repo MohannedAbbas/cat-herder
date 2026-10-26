@@ -5,7 +5,7 @@
 //! per `PLAN.md` §5.
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use crate::entities::{Checkpoint, GitRepo, Run, RunId, RunState};
+use crate::entities::{ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId, RunState};
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
 
@@ -142,6 +142,21 @@ pub trait CheckpointRepository {
     async fn append(&self, run_id: RunId, checkpoint: &Checkpoint) -> DomainResult<Checkpoint>;
     /// The latest checkpoint for a run (highest `seq`), or `None`.
     async fn latest(&self, run_id: RunId) -> DomainResult<Option<Checkpoint>>;
+}
+
+/// Durable human-in-the-loop approvals (`PLAN.md` §10). A request is created when the
+/// harness reports an interrupt; `decide` records the human's verdict and response.
+pub trait ApprovalRepository {
+    /// Persist a new (pending) approval request, assigning an id if empty.
+    async fn create(&self, approval: &ApprovalRequest) -> DomainResult<ApprovalRequest>;
+    async fn get(&self, id: &str) -> DomainResult<Option<ApprovalRequest>>;
+    /// Record the human's decision on an approval request.
+    async fn decide(
+        &self,
+        id: &str,
+        status: ApprovalStatus,
+        response: Option<String>,
+    ) -> DomainResult<ApprovalRequest>;
 }
 
 /// Fan-out transport for events (`PLAN.md` §9) — e.g. NATS JetStream. Best-effort:

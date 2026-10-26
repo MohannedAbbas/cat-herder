@@ -5,24 +5,28 @@
 use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool,
 };
-use cat_herder_domain::entities::{Checkpoint, GitRepo, Run, RunId};
+use cat_herder_domain::entities::{
+    ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId,
+};
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, CheckpointRepository, DomainResult, EventRepository,
-    GitRepoRepository, ModelRepository, ProviderRepository, RunRepository, SessionRepository,
-    SettingRepository, ToolRepository, TransitionRepository,
+    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository, DomainResult,
+    EventRepository, GitRepoRepository, ModelRepository, ProviderRepository, RunRepository,
+    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
 };
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryCheckpointRepository,
-    InMemoryEventRepository, InMemoryGitRepoRepository, InMemoryModelRepository,
-    InMemoryProviderRepository, InMemoryRunRepository, InMemorySessionRepository,
-    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
+    InMemoryCheckpointRepository, InMemoryEventRepository, InMemoryGitRepoRepository,
+    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
+    InMemorySessionRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryTransitionRepository,
 };
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresCheckpointRepository,
-    PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresSettingRepository, PostgresToolRepository, PostgresTransitionRepository,
+    PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
+    PostgresCheckpointRepository, PostgresEventRepository, PostgresGitRepoRepository,
+    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
+    PostgresSessionRepository, PostgresSettingRepository, PostgresToolRepository,
+    PostgresTransitionRepository,
 };
 
 #[derive(Clone)]
@@ -109,6 +113,40 @@ impl CheckpointRepository for CheckpointRepo {
         match self {
             CheckpointRepo::InMemory(r) => r.latest(run_id).await,
             CheckpointRepo::Postgres(p) => p.latest(run_id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ApprovalRepo {
+    InMemory(InMemoryApprovalRepository),
+    Postgres(PostgresApprovalRepository),
+}
+
+impl ApprovalRepository for ApprovalRepo {
+    async fn create(&self, approval: &ApprovalRequest) -> DomainResult<ApprovalRequest> {
+        match self {
+            ApprovalRepo::InMemory(r) => r.create(approval).await,
+            ApprovalRepo::Postgres(p) => p.create(approval).await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<ApprovalRequest>> {
+        match self {
+            ApprovalRepo::InMemory(r) => r.get(id).await,
+            ApprovalRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn decide(
+        &self,
+        id: &str,
+        status: ApprovalStatus,
+        response: Option<String>,
+    ) -> DomainResult<ApprovalRequest> {
+        match self {
+            ApprovalRepo::InMemory(r) => r.decide(id, status, response).await,
+            ApprovalRepo::Postgres(p) => p.decide(id, status, response).await,
         }
     }
 }

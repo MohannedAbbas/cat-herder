@@ -419,7 +419,9 @@ version = "0.1.0"
 dependencies = [
  "cat-herder-domain",
  "cat-herder-store-inmemory",
+ "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -223,6 +223,40 @@ async fn stream_run_events_without_nats_returns_501() {
 }
 
 #[tokio::test]
+async fn respond_approval_unknown_id_returns_404() {
+    let (status, _) = post_json(app(), "/v1/approvals/nope/respond", r#"{"approve":true}"#).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn respond_approval_already_decided_returns_409() {
+    use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, RunId};
+    use cat_herder_domain::ports::ApprovalRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let approval = ApprovalRequest {
+        id: "decided-1".into(),
+        run_id: RunId(1),
+        resume_token: "ckpt-1".into(),
+        payload: serde_json::json!({ "tool": "push" }),
+        status: ApprovalStatus::Approved,
+        response: Some("ok".into()),
+        created_at: SystemTime::now(),
+        responded_at: Some(SystemTime::now()),
+    };
+    state.approvals.create(&approval).await.unwrap();
+
+    let (status, _) = post_json(
+        router(state),
+        "/v1/approvals/decided-1/respond",
+        r#"{"approve":false}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn webhook_without_runtime_returns_503() {
     let (status, _) = post_json(
         app(),

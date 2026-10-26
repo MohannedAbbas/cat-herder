@@ -146,6 +146,8 @@ class ControlChannel:
         # The resume seed (latest checkpoint) the control plane sends after Register.
         self._seed_event = threading.Event()
         self._seed: "tuple[str, str, str, str, bytes] | None" = None
+        # HITL signals (resume/cancel) from the control plane, consumed by the agent loop.
+        self._signals: "queue.Queue[tuple[str, str] | None]" = queue.Queue()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="control-channel"
         )
@@ -191,6 +193,12 @@ class ControlChannel:
         cp.payload = payload
         self._queue.put(msg)
 
+    def send_interrupt(self, resume_token: str, payload: str) -> None:
+        msg = control_pb2.HarnessMessage()
+        msg.interrupt.resume_token = resume_token
+        msg.interrupt.payload = payload
+        self._queue.put(msg)
+
     def wait_for_seed(self, timeout: float = 30.0) -> "tuple[str, str, str, str, bytes] | None":
         """Block until the control plane's resume seed arrives (or timeout).
 
@@ -199,6 +207,13 @@ class ControlChannel:
         """
         self._seed_event.wait(timeout)
         return self._seed
+
+    def wait_for_signal(self) -> "tuple[str, str] | None":
+        """Block until the control plane signals resume/cancel (PLAN.md §10).
+
+        Returns `(signal, response)`, or `None` if the channel closed first.
+        """
+        return self._signals.get()
 
     def _generator(self):
         # The first message identifies the run.
@@ -233,13 +248,16 @@ class ControlChannel:
                             cp.payload,
                         )
                     self._seed_event.set()
-                # The Signal direction (pause/resume/cancel) is unused until HITL (§10).
+                elif resp.WhichOneof("msg") == "signal":
+                    # HITL: hand the resume/cancel signal to the waiting agent loop (§10).
+                    self._signals.put((resp.signal.signal, resp.signal.response))
         except grpc.RpcError as exc:  # noqa: BLE001 — the run still completes
             print(f"gRPC control channel error: {exc}", flush=True)
         finally:
-            # Ensure callers waiting on the seed don't block forever if the channel
-            # errors before the seed arrives.
+            # Ensure callers waiting on the seed (or a signal) don't block forever if
+            # the channel errors before they arrive.
             self._seed_event.set()
+            self._signals.put(None)
 
 
 def report_event(
@@ -325,6 +343,22 @@ def set_provider_key(model: str) -> None:
     # add more providers as needed
 
 
+def parse_interrupt_on() -> dict:
+    """Tools that pause for human approval (PLAN.md §10). Read from
+    `CAT_HERDER_INTERRUPT_ON` (a JSON object mapping tool name -> true). Empty (off)
+    by default; the actual tool selection is a policy concern (§11.8).
+    """
+    raw = os.environ.get("CAT_HERDER_INTERRUPT_ON", "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        print(f"invalid CAT_HERDER_INTERRUPT_ON: {raw}", flush=True)
+        return {}
+
+
 # Only allow explicit, safe git URL schemes. This blocks git's `ext::` transport
 # (arbitrary command execution), `file://`, `git://`, and any leading-`-` option
 # injection.
@@ -398,15 +432,22 @@ def run_agent(
     model: str,
     checkpointer=None,
     resume: bool = False,
+    interrupt_on: dict | None = None,
+    on_interrupt=None,
 ) -> str:
     """Run a Deep Agents agent on the task and return its final message.
 
     When `checkpointer` is set, the agent's LangGraph state is checkpointed on
     `thread_id = RUN_ID` (flushed to the control plane). `resume=True` continues from
     the last checkpoint (no new input) instead of starting a fresh run.
+
+    `interrupt_on` (and `on_interrupt`) wire human-in-the-loop (§10): when the agent
+    pauses on an interrupt, `on_interrupt(interrupt, config)` is called; it returns the
+    LangGraph resume decision dict (or `None` to cancel).
     """
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
+    from langgraph.types import Command
 
     # A single LocalShellBackend gives the agent a real filesystem rooted at REPO_DIR
     # PLUS a shell (`execute`) that runs in REPO_DIR, so it can build/test. The shell
@@ -427,6 +468,7 @@ def run_agent(
         system_prompt="You are a coding agent.",
         backend=backend,
         checkpointer=checkpointer,
+        interrupt_on=interrupt_on,
     )
     config = {"configurable": {"thread_id": RUN_ID}}
     # Stream so we can heartbeat progress; the stuck watchdog's `/livez` reads the
@@ -436,10 +478,22 @@ def run_agent(
     # Resume from the last checkpoint (no new input) when a seed was restored;
     # otherwise start a fresh run with the task spec.
     initial = None if resume else {"messages": [{"role": "user", "content": task_spec}]}
-    for chunk in agent.stream(initial, config=config, stream_mode="values"):
-        mark_activity()
-        record_usage(chunk)
-        result = chunk
+    while True:
+        for chunk in agent.stream(initial, config=config, stream_mode="values"):
+            mark_activity()
+            record_usage(chunk)
+            result = chunk
+        # A stream that paused on an interrupt ends with `__interrupt__` in the state.
+        interrupts = result.get("__interrupt__", ()) if isinstance(result, dict) else ()
+        if not interrupts:
+            break
+        decision = on_interrupt(interrupts[0], config) if on_interrupt is not None else None
+        if decision is None:
+            # Cancelled by the human — stop without a final report (the run is already
+            # terminal in the control plane).
+            return ""
+        initial = Command(resume=decision)
+
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if messages:
         last = messages[-1]
@@ -562,10 +616,35 @@ def main() -> None:
         # No control channel (local dev / HTTP fallback): checkpoint locally only.
         saver = RemoteCheckpointSaver(lambda *_: None)
 
+    # Human-in-the-loop (§10): tools listed in CAT_HERDER_INTERRUPT_ON pause for
+    # approval. `on_interrupt` reports the interrupt and blocks for the control plane's
+    # resume/cancel signal, then returns the LangGraph resume decision.
+    interrupt_on = parse_interrupt_on()
+
+    def on_interrupt(interrupt, config):
+        tup = saver.get_tuple(config)
+        resume_token = tup.config["configurable"]["checkpoint_id"] if tup else ""
+        payload = json.dumps(interrupt.value, default=str)
+        print(f"interrupt: {payload} (resume_token={resume_token})", flush=True)
+        if _control_channel is None:
+            return None  # no control channel -> nothing to approve against
+        _control_channel.send_interrupt(resume_token, payload)
+        signal = _control_channel.wait_for_signal()
+        if signal is None or signal[0] != "resume":
+            return None  # cancelled
+        return {interrupt.id: {"type": "approve"}}
+
     report_event("started")
     set_agent_running(True)
     try:
-        result = run_agent(task_spec, model, checkpointer=saver, resume=resume)
+        result = run_agent(
+            task_spec,
+            model,
+            checkpointer=saver,
+            resume=resume,
+            interrupt_on=interrupt_on,
+            on_interrupt=on_interrupt,
+        )
         print(f"agent completed: {result}", flush=True)
         changes = collect_changes()
         usage = {"input_tokens": _usage_input, "output_tokens": _usage_output}

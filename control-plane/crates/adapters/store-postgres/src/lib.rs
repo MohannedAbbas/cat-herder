@@ -5,6 +5,7 @@
 //! in-cluster PostgreSQL StatefulSet from the Helm chart (`dependencies.postgres`).
 
 mod agent;
+mod approval;
 mod audit;
 mod checkpoint;
 mod codec;
@@ -20,6 +21,7 @@ mod tool;
 mod transition;
 
 pub use agent::PostgresAgentRepository;
+pub use approval::PostgresApprovalRepository;
 pub use audit::PostgresAuditRepository;
 pub use checkpoint::PostgresCheckpointRepository;
 pub use event::PostgresEventRepository;

@@ -12,29 +12,29 @@ use axum::{
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
-use cat_herder_application::{Completion, Outcome, complete_run, start_run};
+use cat_herder_application::{Completion, Outcome, complete_run, respond_approval, start_run};
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, EventListResponse, EventResponse, RunResponse, Session,
     SessionRun, SessionSummary, repo_identity_from_url,
 };
-use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
+use cat_herder_domain::entities::{ApprovalStatus, Run, RunId, RunState, Usage};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRepository, AgentRuntime, EventBus, EventRepository, GitRepoRepository, RunRepository,
-    RunRequest, SessionRepository, SettingRepository,
+    AgentRepository, AgentRuntime, ApprovalRepository, EventBus, EventRepository,
+    GitRepoRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 
 pub use auth::Auth;
 pub use bus::EventBusImpl;
 pub use crypto::AesGcmCipher;
-pub use grpc::{grpc_serve, grpc_server};
+pub use grpc::{ControlLinks, grpc_serve, grpc_server};
 pub use key_store::KeySecretStore;
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
-    AgentRepo, AuditRepo, CheckpointRepo, EventRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo,
-    SessionRepo, SettingRepo, ToolRepo, TransitionRepo,
+    AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, EventRepo, GitRepoRepo, ModelRepo,
+    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo,
 };
 
 mod admin;
@@ -70,6 +70,7 @@ pub struct AppState {
     pub events: EventRepo,
     pub transitions: TransitionRepo,
     pub checkpoints: CheckpointRepo,
+    pub approvals: ApprovalRepo,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -85,6 +86,8 @@ pub struct AppState {
     pub mock_oauth: Option<String>,
     /// Optional execution runtime (present in the real binary, absent in tests/mock).
     pub runtime: Option<SandboxRuntime>,
+    /// Live harness control links (`run_id -> outbound sender`) for HITL signals (§10).
+    pub control_links: Arc<ControlLinks>,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
     /// rotated via the admin API).
     pub cipher: Arc<RwLock<AesGcmCipher>>,
@@ -108,6 +111,7 @@ impl Default for AppState {
             events: EventRepo::InMemory(Default::default()),
             transitions: TransitionRepo::InMemory(Default::default()),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
+            approvals: ApprovalRepo::InMemory(Default::default()),
             bus: EventBusImpl::Noop,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
@@ -116,6 +120,7 @@ impl Default for AppState {
             gitlab_oauth: None,
             mock_oauth: None,
             runtime: None,
+            control_links: Arc::new(ControlLinks::default()),
             cipher: Arc::new(RwLock::new(
                 AesGcmCipher::generate().expect("rng available"),
             )),
@@ -136,6 +141,7 @@ pub fn router(state: AppState) -> Router {
             get(get_run_events).post(post_run_event),
         )
         .route("/v1/runs/{id}/events/stream", get(stream_run_events))
+        .route("/v1/approvals/{id}/respond", post(respond_approval_handler))
         .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
@@ -390,6 +396,68 @@ async fn stream_run_events(
     });
 
     Ok(Sse::new(sse).keep_alive(KeepAlive::default()))
+}
+
+/// Request body for `POST /v1/approvals/{id}/respond` (`PLAN.md` §10).
+#[derive(Debug, serde::Deserialize)]
+pub struct RespondApprovalRequest {
+    #[serde(default)]
+    pub approve: bool,
+    #[serde(default)]
+    pub response: Option<String>,
+}
+
+/// Record a human's decision on an approval and signal the harness to resume (approve)
+/// or cancel (reject).
+async fn respond_approval_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<RespondApprovalRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // 404 for unknown, 409 for an already-decided approval.
+    let existing = state
+        .approvals
+        .get(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "approval not found".to_string()))?;
+    if existing.status != ApprovalStatus::Pending {
+        return Err((StatusCode::CONFLICT, "approval already decided".to_string()));
+    }
+
+    let approval = respond_approval(
+        &id,
+        req.approve,
+        req.response.clone(),
+        &state.approvals,
+        &state.events,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Signal the live harness to resume (or cancel). If the link is gone (the pod died),
+    // this is a no-op — the run is already persisted and #6's reconcile will re-create
+    // the pod to resume from the checkpoint.
+    let (signal, response) = if approval.status == ApprovalStatus::Approved {
+        ("resume", approval.response.clone())
+    } else {
+        ("cancel", None)
+    };
+    state
+        .control_links
+        .send_signal(approval.run_id, signal, response)
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "id": approval.id,
+        "run_id": approval.run_id.0,
+        "status": approval.status,
+        "response": approval.response,
+    })))
 }
 
 /// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the

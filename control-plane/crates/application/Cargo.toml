@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 cat-herder-domain = { path = "../domain" }
+serde_json.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 cat-herder-store-inmemory = { path = "../adapters/store-inmemory" }

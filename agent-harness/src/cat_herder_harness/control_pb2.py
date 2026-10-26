@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rcontrol.proto\x12\rcat_herder.v1\"\xcb\x01\n\x0eHarnessMessage\x12+\n\x08register\x18\x01 \x01(\x0b\x32\x17.cat_herder.v1.RegisterH\x00\x12%\n\x05\x65vent\x18\x02 \x01(\x0b\x32\x14.cat_herder.v1.EventH\x00\x12-\n\theartbeat\x18\x03 \x01(\x0b\x32\x18.cat_herder.v1.HeartbeatH\x00\x12/\n\ncheckpoint\x18\x04 \x01(\x0b\x32\x19.cat_herder.v1.CheckpointH\x00\x42\x05\n\x03msg\"\x1a\n\x08Register\x12\x0e\n\x06run_id\x18\x01 \x01(\x04\"\x8c\x01\n\x05\x45vent\x12\x12\n\nevent_type\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06report\x18\x03 \x01(\t\x12*\n\x07\x63hanges\x18\x04 \x03(\x0b\x32\x19.cat_herder.v1.FileChange\x12#\n\x05usage\x18\x05 \x01(\x0b\x32\x14.cat_herder.v1.Usage\"B\n\nFileChange\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x16\n\x0e\x63ontent_base64\x18\x03 \x01(\t\"4\n\x05Usage\x12\x14\n\x0cinput_tokens\x18\x01 \x01(\x04\x12\x15\n\routput_tokens\x18\x02 \x01(\x04\"\x0b\n\tHeartbeat\"r\n\nCheckpoint\x12\x11\n\tthread_id\x18\x01 \x01(\t\x12\x15\n\rcheckpoint_ns\x18\x02 \x01(\t\x12\x15\n\rcheckpoint_id\x18\x03 \x01(\t\x12\x12\n\nserde_type\x18\x04 \x01(\t\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\"q\n\x0e\x43ontrolMessage\x12\'\n\x06signal\x18\x01 \x01(\x0b\x32\x15.cat_herder.v1.SignalH\x00\x12/\n\ncheckpoint\x18\x02 \x01(\x0b\x32\x19.cat_herder.v1.CheckpointH\x00\x42\x05\n\x03msg\"\x18\n\x06Signal\x12\x0e\n\x06signal\x18\x01 \x01(\t2]\n\x0eHarnessControl\x12K\n\x07\x43onnect\x12\x1d.cat_herder.v1.HarnessMessage\x1a\x1d.cat_herder.v1.ControlMessage(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rcontrol.proto\x12\rcat_herder.v1\"\xfa\x01\n\x0eHarnessMessage\x12+\n\x08register\x18\x01 \x01(\x0b\x32\x17.cat_herder.v1.RegisterH\x00\x12%\n\x05\x65vent\x18\x02 \x01(\x0b\x32\x14.cat_herder.v1.EventH\x00\x12-\n\theartbeat\x18\x03 \x01(\x0b\x32\x18.cat_herder.v1.HeartbeatH\x00\x12/\n\ncheckpoint\x18\x04 \x01(\x0b\x32\x19.cat_herder.v1.CheckpointH\x00\x12-\n\tinterrupt\x18\x05 \x01(\x0b\x32\x18.cat_herder.v1.InterruptH\x00\x42\x05\n\x03msg\"\x1a\n\x08Register\x12\x0e\n\x06run_id\x18\x01 \x01(\x04\"\x8c\x01\n\x05\x45vent\x12\x12\n\nevent_type\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06report\x18\x03 \x01(\t\x12*\n\x07\x63hanges\x18\x04 \x03(\x0b\x32\x19.cat_herder.v1.FileChange\x12#\n\x05usage\x18\x05 \x01(\x0b\x32\x14.cat_herder.v1.Usage\"B\n\nFileChange\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x16\n\x0e\x63ontent_base64\x18\x03 \x01(\t\"4\n\x05Usage\x12\x14\n\x0cinput_tokens\x18\x01 \x01(\x04\x12\x15\n\routput_tokens\x18\x02 \x01(\x04\"\x0b\n\tHeartbeat\"r\n\nCheckpoint\x12\x11\n\tthread_id\x18\x01 \x01(\t\x12\x15\n\rcheckpoint_ns\x18\x02 \x01(\t\x12\x15\n\rcheckpoint_id\x18\x03 \x01(\t\x12\x12\n\nserde_type\x18\x04 \x01(\t\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\"2\n\tInterrupt\x12\x14\n\x0cresume_token\x18\x01 \x01(\t\x12\x0f\n\x07payload\x18\x02 \x01(\t\"q\n\x0e\x43ontrolMessage\x12\'\n\x06signal\x18\x01 \x01(\x0b\x32\x15.cat_herder.v1.SignalH\x00\x12/\n\ncheckpoint\x18\x02 \x01(\x0b\x32\x19.cat_herder.v1.CheckpointH\x00\x42\x05\n\x03msg\"*\n\x06Signal\x12\x0e\n\x06signal\x18\x01 \x01(\t\x12\x10\n\x08response\x18\x02 \x01(\t2]\n\x0eHarnessControl\x12K\n\x07\x43onnect\x12\x1d.cat_herder.v1.HarnessMessage\x1a\x1d.cat_herder.v1.ControlMessage(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,23 +32,25 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'control_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_HARNESSMESSAGE']._serialized_start=33
-  _globals['_HARNESSMESSAGE']._serialized_end=236
-  _globals['_REGISTER']._serialized_start=238
-  _globals['_REGISTER']._serialized_end=264
-  _globals['_EVENT']._serialized_start=267
-  _globals['_EVENT']._serialized_end=407
-  _globals['_FILECHANGE']._serialized_start=409
-  _globals['_FILECHANGE']._serialized_end=475
-  _globals['_USAGE']._serialized_start=477
-  _globals['_USAGE']._serialized_end=529
-  _globals['_HEARTBEAT']._serialized_start=531
-  _globals['_HEARTBEAT']._serialized_end=542
-  _globals['_CHECKPOINT']._serialized_start=544
-  _globals['_CHECKPOINT']._serialized_end=658
-  _globals['_CONTROLMESSAGE']._serialized_start=660
-  _globals['_CONTROLMESSAGE']._serialized_end=773
-  _globals['_SIGNAL']._serialized_start=775
-  _globals['_SIGNAL']._serialized_end=799
-  _globals['_HARNESSCONTROL']._serialized_start=801
-  _globals['_HARNESSCONTROL']._serialized_end=894
+  _globals['_HARNESSMESSAGE']._serialized_end=283
+  _globals['_REGISTER']._serialized_start=285
+  _globals['_REGISTER']._serialized_end=311
+  _globals['_EVENT']._serialized_start=314
+  _globals['_EVENT']._serialized_end=454
+  _globals['_FILECHANGE']._serialized_start=456
+  _globals['_FILECHANGE']._serialized_end=522
+  _globals['_USAGE']._serialized_start=524
+  _globals['_USAGE']._serialized_end=576
+  _globals['_HEARTBEAT']._serialized_start=578
+  _globals['_HEARTBEAT']._serialized_end=589
+  _globals['_CHECKPOINT']._serialized_start=591
+  _globals['_CHECKPOINT']._serialized_end=705
+  _globals['_INTERRUPT']._serialized_start=707
+  _globals['_INTERRUPT']._serialized_end=757
+  _globals['_CONTROLMESSAGE']._serialized_start=759
+  _globals['_CONTROLMESSAGE']._serialized_end=872
+  _globals['_SIGNAL']._serialized_start=874
+  _globals['_SIGNAL']._serialized_end=916
+  _globals['_HARNESSCONTROL']._serialized_start=918
+  _globals['_HARNESSCONTROL']._serialized_end=1011
 # @@protoc_insertion_point(module_scope)
