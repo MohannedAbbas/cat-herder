@@ -33,7 +33,7 @@ Agents harness → collect diff → open PR), plus:
 Do this first. Nothing else in the plan works reliably until a run can survive a
 pod death and pause/resume at an interrupt.
 
-- [ ] **1. Canonical event log + versioned envelope (§9).**
+- [x] **1. Canonical event log + versioned envelope (§9).**
   Today events are fire-and-forget POSTs (`api-http/src/lib.rs::post_run_event`);
   only `finished`/`stuck` mutate state. No `{run_id, seq, type, schema_version, …}`
   envelope, no append-only store, no replay.
@@ -42,9 +42,10 @@ pod death and pause/resume at an interrupt.
   streams it back (replayable); **NATS JetStream is the fan-out transport** (publish on
   append to `run.<id>.events`, SSE live tail), Postgres stays the authority. Harness
   keeps the local spool + async flush (§9). See `docs/design/event-log.md`.
-  *Status:* ✅ log + seq + replay + NATS publish landed. ⬜ Remaining: SSE live tail
-  (`…/events/stream`) and the harness local-spool/async-flush (rides in with the gRPC
-  control channel, step 2).
+  *Status:* ✅ log + seq + replay + NATS publish landed; ✅ SSE live tail
+  (`GET /v1/runs/{id}/events/stream`, subscribes to `run.<id>.events` via an ephemeral
+  JetStream push consumer, `501` when NATS is off); ✅ harness local-spool/async-flush
+  rides on the gRPC control channel (FIFO queue + background drain, step 2).
 
 - [x] **2. Harness↔control-plane control channel over gRPC (§6, §9, §14).**
   `proto/control.proto` is stubbed but unused; the harness speaks HTTP POST today.

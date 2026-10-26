@@ -9,6 +9,8 @@ use async_nats::jetstream;
 use cat_herder_domain::api::EventResponse;
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{DomainResult, EventBus};
+use futures::StreamExt;
+use futures::stream::BoxStream;
 
 /// JetStream stream name and subject pattern (per-run subjects `run.<id>.events`).
 pub const STREAM_NAME: &str = "EVENTS";
@@ -42,6 +44,36 @@ impl NatsEventBus {
             .await?;
 
         Ok(Self { context })
+    }
+
+    /// Subscribe to a run's live event tail (SSE, `PLAN.md` §9): an ephemeral push
+    /// consumer on `run.<id>.events` delivering only new events. The returned stream
+    /// yields each event as it is appended (the same `EventResponse` wire shape the
+    /// paginated endpoint returns).
+    pub async fn subscribe(
+        &self,
+        run_id: u64,
+    ) -> DomainResult<BoxStream<'static, DomainResult<EventResponse>>> {
+        let stream = self.context.get_stream(STREAM_NAME).await?;
+        let id = uuid::Uuid::new_v4();
+        let consumer = stream
+            .get_or_create_consumer(
+                format!("tail-{run_id}-{id}").as_str(),
+                jetstream::consumer::push::Config {
+                    deliver_subject: format!("_INBOX.{id}"),
+                    filter_subject: subject_for(run_id),
+                    deliver_policy: jetstream::consumer::DeliverPolicy::New,
+                    ack_policy: jetstream::consumer::AckPolicy::None,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let messages = consumer.messages().await?;
+        let mapped = messages.map(|msg| -> DomainResult<EventResponse> {
+            let msg = msg?;
+            Ok(serde_json::from_slice(&msg.payload)?)
+        });
+        Ok(Box::pin(mapped))
     }
 }
 

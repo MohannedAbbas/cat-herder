@@ -183,6 +183,46 @@ async fn get_run_events_replays_the_log() {
 }
 
 #[tokio::test]
+async fn stream_run_events_unknown_run_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/events/stream").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stream_run_events_without_nats_returns_501() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(42),
+        kind: RunKind::Agent,
+        state: RunState::Queued,
+        task_spec: "seed".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+
+    // No NATS configured (Noop bus) -> the live tail is unavailable.
+    let (status, _) = send(router(state), "/v1/runs/42/events/stream").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
 async fn webhook_without_runtime_returns_503() {
     let (status, _) = post_json(
         app(),

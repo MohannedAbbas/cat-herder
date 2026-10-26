@@ -5,9 +5,12 @@
 
 use std::sync::Arc;
 
+use cat_herder_domain::api::EventResponse;
+use cat_herder_domain::entities::RunId;
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{DomainResult, EventBus};
 use cat_herder_store_nats::NatsEventBus;
+use futures::stream::BoxStream;
 
 /// The fan-out bus the application publishes appended events to.
 #[derive(Clone)]
@@ -22,6 +25,26 @@ impl EventBus for EventBusImpl {
         match self {
             EventBusImpl::Noop => Ok(()),
             EventBusImpl::Nats(n) => n.publish(event).await,
+        }
+    }
+}
+
+impl EventBusImpl {
+    /// Subscribe to a run's live event tail (SSE). Returns `None` when NATS is not
+    /// configured (clients fall back to polling the paginated endpoint, `PLAN.md` §9).
+    pub async fn subscribe(
+        &self,
+        run_id: RunId,
+    ) -> Option<BoxStream<'static, DomainResult<EventResponse>>> {
+        match self {
+            EventBusImpl::Noop => None,
+            EventBusImpl::Nats(n) => match n.subscribe(run_id.0).await {
+                Ok(stream) => Some(stream),
+                Err(e) => {
+                    eprintln!("event subscription failed for run {}: {e}", run_id.0);
+                    None
+                }
+            },
         }
     }
 }

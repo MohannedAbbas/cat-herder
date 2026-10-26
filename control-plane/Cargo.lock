@@ -458,8 +458,10 @@ version = "0.1.0"
 dependencies = [
  "async-nats",
  "cat-herder-domain",
+ "futures",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

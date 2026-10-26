@@ -6,8 +6,10 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
+    response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::{get, post, put},
 };
+use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use cat_herder_application::{Completion, Outcome, complete_run, start_run};
@@ -133,6 +135,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/runs/{id}/events",
             get(get_run_events).post(post_run_event),
         )
+        .route("/v1/runs/{id}/events/stream", get(stream_run_events))
         .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
@@ -347,6 +350,46 @@ async fn get_run_events(
         events: events.iter().map(EventResponse::from).collect(),
         next_after,
     }))
+}
+
+/// Live-tail a run's event log as an SSE stream (`PLAN.md` §9). Subscribes to the
+/// NATS `run.<id>.events` subject and forwards each appended event as it lands. Returns
+/// `501` when NATS is not configured — clients fall back to polling `get_run_events`.
+async fn stream_run_events(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<
+    Sse<impl futures::Stream<Item = Result<SseEvent, std::convert::Infallible>>>,
+    (StatusCode, String),
+> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    let stream = state.bus.subscribe(run_id).await.ok_or((
+        StatusCode::NOT_IMPLEMENTED,
+        "event stream requires NATS".to_string(),
+    ))?;
+
+    let sse = stream.filter_map(move |item| async move {
+        match item {
+            Ok(ev) => {
+                let id = ev.seq.to_string();
+                let json = serde_json::to_string(&ev).unwrap_or_default();
+                Some(Ok(SseEvent::default().id(id).data(json)))
+            }
+            Err(e) => {
+                eprintln!("SSE stream error for run {}: {e}", run_id.0);
+                None
+            }
+        }
+    });
+
+    Ok(Sse::new(sse).keep_alive(KeepAlive::default()))
 }
 
 /// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the
