@@ -141,6 +141,14 @@ pub trait EventBus {
     async fn publish(&self, event: &Event) -> DomainResult<()>;
 }
 
+/// Persists a lifecycle transition atomically (`PLAN.md` §6/§9): the run's new state
+/// and its lifecycle event land together in one transaction, so the event log never
+/// diverges from the run's lifecycle. `save_transition` upserts the run (assigning its
+/// id if new) and appends the event with that id and a fresh per-run `seq`.
+pub trait TransitionRepository {
+    async fn save_transition(&self, run: &Run, event: &Event) -> DomainResult<(Run, Event)>;
+}
+
 pub trait ModelProvider {
     async fn complete(&self, run: RunId, prompt: &str) -> DomainResult<String>;
 }

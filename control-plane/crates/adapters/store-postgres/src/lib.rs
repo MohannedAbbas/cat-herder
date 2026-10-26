@@ -16,6 +16,7 @@ mod schema;
 mod session;
 mod setting;
 mod tool;
+mod transition;
 
 pub use agent::PostgresAgentRepository;
 pub use audit::PostgresAuditRepository;
@@ -28,3 +29,4 @@ pub use schema::PostgresStore;
 pub use session::PostgresSessionRepository;
 pub use setting::PostgresSettingRepository;
 pub use tool::PostgresToolRepository;
+pub use transition::PostgresTransitionRepository;

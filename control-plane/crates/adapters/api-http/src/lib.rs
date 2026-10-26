@@ -31,7 +31,7 @@ pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
     AgentRepo, AuditRepo, EventRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
-    SettingRepo, ToolRepo,
+    SettingRepo, ToolRepo, TransitionRepo,
 };
 
 mod admin;
@@ -64,6 +64,7 @@ pub struct AppState {
     pub sessions: SessionRepo,
     pub repo: RunRepo,
     pub events: EventRepo,
+    pub transitions: TransitionRepo,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -100,6 +101,7 @@ impl Default for AppState {
             sessions: SessionRepo::InMemory(Default::default()),
             repo: RunRepo::InMemory(Default::default()),
             events: EventRepo::InMemory(Default::default()),
+            transitions: TransitionRepo::InMemory(Default::default()),
             bus: EventBusImpl::Noop,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
@@ -242,7 +244,7 @@ async fn create_run(
         runtime,
         &state.repo,
         &state.sessions,
-        &state.events,
+        &state.transitions,
         &state.bus,
     )
     .await
@@ -395,7 +397,7 @@ async fn post_run_event(
                 },
                 &state.repo,
                 &state.sessions,
-                &state.events,
+                &state.transitions,
                 &state.bus,
             )
             .await
@@ -441,7 +443,7 @@ async fn post_run_event(
                 Completion::default(),
                 &state.repo,
                 &state.sessions,
-                &state.events,
+                &state.transitions,
                 &state.bus,
             )
             .await
@@ -610,7 +612,7 @@ async fn webhook_generic(
         runtime,
         &state.repo,
         &state.sessions,
-        &state.events,
+        &state.transitions,
         &state.bus,
     )
     .await

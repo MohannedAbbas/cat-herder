@@ -24,79 +24,88 @@ impl PostgresRunRepository {
     }
 }
 
+/// Upsert a run (INSERT if id is 0, else INSERT … ON CONFLICT UPDATE) and return its
+/// id. Shared by the run repository and the transition repository so a lifecycle
+/// transition can save the run *and* its event in one transaction.
+pub(crate) async fn upsert_run<'e, E>(executor: E, run: &Run) -> Result<i64, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let kind = encode_kind(run.kind);
+    let state = encode_state(run.state);
+    let created_ms = millis(run.created_at);
+    let started_ms = run.started_at.map(millis);
+    let finished_ms = run.finished_at.map(millis);
+
+    if run.id == RunId(0) {
+        sqlx::query_scalar(
+            "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
+             trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
+             input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id",
+        )
+        .bind(&kind)
+        .bind(&state)
+        .bind(&run.task_spec)
+        .bind(run.session_id.as_deref())
+        .bind(run.max_concurrency as i32)
+        .bind(created_ms)
+        .bind(&run.trigger)
+        .bind(run.actor.as_deref())
+        .bind(run.model.as_deref())
+        .bind(run.repo.as_deref())
+        .bind(run.language.as_deref())
+        .bind(started_ms)
+        .bind(finished_ms)
+        .bind(run.pr_url.as_deref())
+        .bind(run.report.as_deref())
+        .bind(run.input_tokens as i64)
+        .bind(run.output_tokens as i64)
+        .fetch_one(executor)
+        .await
+    } else {
+        sqlx::query_scalar(
+            "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
+             trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
+             input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+             ON CONFLICT (id) DO UPDATE SET \
+               kind = EXCLUDED.kind, state = EXCLUDED.state, \
+               task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
+               max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
+               trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
+               repo = EXCLUDED.repo, language = EXCLUDED.language, \
+               started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
+               pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
+               input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
+             RETURNING id",
+        )
+        .bind(run.id.0 as i64)
+        .bind(&kind)
+        .bind(&state)
+        .bind(&run.task_spec)
+        .bind(run.session_id.as_deref())
+        .bind(run.max_concurrency as i32)
+        .bind(created_ms)
+        .bind(&run.trigger)
+        .bind(run.actor.as_deref())
+        .bind(run.model.as_deref())
+        .bind(run.repo.as_deref())
+        .bind(run.language.as_deref())
+        .bind(started_ms)
+        .bind(finished_ms)
+        .bind(run.pr_url.as_deref())
+        .bind(run.report.as_deref())
+        .bind(run.input_tokens as i64)
+        .bind(run.output_tokens as i64)
+        .fetch_one(executor)
+        .await
+    }
+}
+
 impl RunRepository for PostgresRunRepository {
     async fn save(&self, run: &Run) -> DomainResult<Run> {
-        let kind = encode_kind(run.kind);
-        let state = encode_state(run.state);
-        let created_ms = millis(run.created_at);
-        let started_ms = run.started_at.map(millis);
-        let finished_ms = run.finished_at.map(millis);
-
-        let id: i64 = if run.id == RunId(0) {
-            sqlx::query_scalar(
-                "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
-                 input_tokens, output_tokens) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id",
-            )
-            .bind(&kind)
-            .bind(&state)
-            .bind(&run.task_spec)
-            .bind(run.session_id.as_deref())
-            .bind(run.max_concurrency as i32)
-            .bind(created_ms)
-            .bind(&run.trigger)
-            .bind(run.actor.as_deref())
-            .bind(run.model.as_deref())
-            .bind(run.repo.as_deref())
-            .bind(run.language.as_deref())
-            .bind(started_ms)
-            .bind(finished_ms)
-            .bind(run.pr_url.as_deref())
-            .bind(run.report.as_deref())
-            .bind(run.input_tokens as i64)
-            .bind(run.output_tokens as i64)
-            .fetch_one(&self.pool)
-            .await?
-        } else {
-            sqlx::query_scalar(
-                "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-                 trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
-                 input_tokens, output_tokens) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
-                 ON CONFLICT (id) DO UPDATE SET \
-                   kind = EXCLUDED.kind, state = EXCLUDED.state, \
-                   task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
-                   max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
-                   trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
-                   repo = EXCLUDED.repo, language = EXCLUDED.language, \
-                   started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
-                   pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
-                   input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
-                 RETURNING id",
-            )
-            .bind(run.id.0 as i64)
-            .bind(&kind)
-            .bind(&state)
-            .bind(&run.task_spec)
-            .bind(run.session_id.as_deref())
-            .bind(run.max_concurrency as i32)
-            .bind(created_ms)
-            .bind(&run.trigger)
-            .bind(run.actor.as_deref())
-            .bind(run.model.as_deref())
-            .bind(run.repo.as_deref())
-            .bind(run.language.as_deref())
-            .bind(started_ms)
-            .bind(finished_ms)
-            .bind(run.pr_url.as_deref())
-            .bind(run.report.as_deref())
-            .bind(run.input_tokens as i64)
-            .bind(run.output_tokens as i64)
-            .fetch_one(&self.pool)
-            .await?
-        };
-
+        let id = upsert_run(&self.pool, run).await?;
         Ok(Run {
             id: RunId(id as u64),
             ..run.clone()

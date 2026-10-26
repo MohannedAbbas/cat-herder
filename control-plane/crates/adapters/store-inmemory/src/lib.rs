@@ -14,7 +14,7 @@ use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, EventRepository, GitRepoRepository,
     ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
-    ToolRepository,
+    ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -81,6 +81,42 @@ impl EventRepository for InMemoryEventRepository {
             .filter(|e| e.seq > after_seq)
             .take(limit as usize)
             .collect())
+    }
+}
+
+/// In-memory [`TransitionRepository`] — constructed over (clones of) the run and event
+/// stores so a transition updates both. In-memory has no crash recovery, so the
+/// save-then-append is "atomic enough"; the transaction matters for Postgres.
+#[derive(Clone)]
+pub struct InMemoryTransitionRepository {
+    run: InMemoryRunRepository,
+    events: InMemoryEventRepository,
+}
+
+impl InMemoryTransitionRepository {
+    /// Build over shared run + event stores (pass clones of the repositories the rest
+    /// of the app reads from, so transitions are visible there).
+    pub fn new(run: InMemoryRunRepository, events: InMemoryEventRepository) -> Self {
+        Self { run, events }
+    }
+}
+
+impl Default for InMemoryTransitionRepository {
+    fn default() -> Self {
+        Self::new(
+            InMemoryRunRepository::new(),
+            InMemoryEventRepository::default(),
+        )
+    }
+}
+
+impl TransitionRepository for InMemoryTransitionRepository {
+    async fn save_transition(&self, run: &Run, event: &Event) -> DomainResult<(Run, Event)> {
+        let stored_run = self.run.save(run).await?;
+        let mut stored_event = event.clone();
+        stored_event.run_id = stored_run.id;
+        let stored_event = self.events.append(stored_run.id, &stored_event).await?;
+        Ok((stored_run, stored_event))
     }
 }
 

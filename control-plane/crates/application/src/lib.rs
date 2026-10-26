@@ -8,28 +8,34 @@ use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
 use cat_herder_domain::entities::{Run, RunId, RunState, Usage};
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRuntime, DomainResult, EventBus, EventRepository, RunRepository, RunRequest,
-    SessionRepository,
+    AgentRuntime, DomainResult, EventBus, RunRepository, RunRequest, SessionRepository,
+    TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::state::is_terminal;
 
-/// Persist an event (assigning `seq`) and publish it to the fan-out bus.
-///
-/// Best-effort on both legs: the durable authority is the run's Postgres state, and
-/// the event log is a projection of it. A failed append/publish is logged, not
-/// fatal — full state+event transactionality is a follow-on (`docs/design/event-log.md`
-/// §3.2).
-async fn emit_event<E: EventRepository, B: EventBus>(events: &E, bus: &B, event: Event) {
-    let run_id = event.run_id;
-    match events.append(run_id, &event).await {
-        Ok(stored) => {
-            if let Err(e) = bus.publish(&stored).await {
-                eprintln!("event publish failed for run {}: {e}", run_id.0);
-            }
-        }
-        Err(e) => eprintln!("event append failed for run {}: {e}", run_id.0),
+/// Publish an event to the fan-out bus (best-effort — the durable authority is the
+/// transition repository / event log, not the transport).
+async fn publish_event<B: EventBus>(bus: &B, event: &Event) {
+    if let Err(e) = bus.publish(event).await {
+        eprintln!("event publish failed for run {}: {e}", event.run_id.0);
     }
+}
+
+/// Persist a single lifecycle transition atomically — the state change and its event
+/// land in one transaction (`PLAN.md` §6/§9) — then fan the event out to the transport.
+async fn persist_transition<T: TransitionRepository, B: EventBus>(
+    run: &mut Run,
+    target: RunState,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<()> {
+    run.transition(target)?;
+    let event = Event::lifecycle_for(run);
+    let (stored_run, stored_event) = transitions.save_transition(run, &event).await?;
+    *run = stored_run;
+    publish_event(bus, &stored_event).await;
+    Ok(())
 }
 
 /// Use case: accept a trigger's request, persist it, spawn the agent, and advance the
@@ -38,19 +44,19 @@ async fn emit_event<E: EventRepository, B: EventBus>(events: &E, bus: &B, event:
 ///
 /// Each run is auto-linked to a freshly created session (title derived from the
 /// task spec).
-pub async fn start_run<R, P, S, E, B>(
+pub async fn start_run<R, P, S, T, B>(
     req: RunRequest,
     runtime: &R,
     repo: &P,
     sessions: &S,
-    events: &E,
+    transitions: &T,
     bus: &B,
 ) -> DomainResult<Run>
 where
     R: AgentRuntime,
     P: RunRepository,
     S: SessionRepository,
-    E: EventRepository,
+    T: TransitionRepository,
     B: EventBus,
 {
     let run = Run {
@@ -74,8 +80,11 @@ where
         output_tokens: 0,
     };
 
-    let mut run = repo.save(&run).await?; // Queued (id assigned)
-    emit_event(events, bus, Event::lifecycle_for(&run)).await;
+    // Create the run and its `run.queued` event atomically (the transition repository
+    // assigns the id and writes both).
+    let event = Event::lifecycle_for(&run);
+    let (mut run, stored_event) = transitions.save_transition(&run, &event).await?;
+    publish_event(bus, &stored_event).await;
 
     // Auto-create a session and link the run to it.
     let session_id = new_session_id();
@@ -85,13 +94,8 @@ where
     run.session_id = Some(session_id.clone());
     run = repo.save(&run).await?;
 
-    run.transition(RunState::Scheduled)?;
-    run = repo.save(&run).await?;
-    emit_event(events, bus, Event::lifecycle_for(&run)).await;
-
-    run.transition(RunState::PodPending)?;
-    run = repo.save(&run).await?;
-    emit_event(events, bus, Event::lifecycle_for(&run)).await;
+    persist_transition(&mut run, RunState::Scheduled, transitions, bus).await?;
+    persist_transition(&mut run, RunState::PodPending, transitions, bus).await?;
 
     // Project the run into the session's display rows (now `PodPending`).
     sessions
@@ -119,18 +123,18 @@ fn session_title(task_spec: &str) -> String {
 /// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
 /// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
 /// execution — mirroring the `finished` event path — so a dead sandbox doesn't linger.
-pub async fn reconcile_once<R, P, S, E, B>(
+pub async fn reconcile_once<R, P, S, T, B>(
     runtime: &R,
     repo: &P,
     sessions: &S,
-    events: &E,
+    transitions: &T,
     bus: &B,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
     P: RunRepository,
     S: SessionRepository,
-    E: EventRepository,
+    T: TransitionRepository,
     B: EventBus,
 {
     let mut advanced = 0;
@@ -142,19 +146,17 @@ where
         }
 
         let status = runtime.status(run.id).await?;
-        let transitions = reconcile_run(run.state, status);
-        if transitions.is_empty() {
+        let to_apply = reconcile_run(run.state, status);
+        if to_apply.is_empty() {
             continue;
         }
 
         let mut updated = run.clone();
-        for next in transitions {
-            updated.transition(next)?;
-            // One lifecycle event per state change, so the log records the full walk
+        for next in to_apply {
+            // One atomic transition per state change, so the log records the full walk
             // (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
-            emit_event(events, bus, Event::lifecycle_for(&updated)).await;
+            persist_transition(&mut updated, next, transitions, bus).await?;
         }
-        repo.save(&updated).await?;
         sessions.sync_run(&updated).await?;
         advanced += 1;
 
@@ -189,19 +191,19 @@ pub struct Completion {
 /// Use case: record the harness's completion of a run, advancing it to `Succeeded`
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
-pub async fn complete_run<P, S, E, B>(
+pub async fn complete_run<P, S, T, B>(
     run_id: RunId,
     outcome: Outcome,
     completion: Completion,
     repo: &P,
     sessions: &S,
-    events: &E,
+    transitions: &T,
     bus: &B,
 ) -> DomainResult<Run>
 where
     P: RunRepository,
     S: SessionRepository,
-    E: EventRepository,
+    T: TransitionRepository,
     B: EventBus,
 {
     let Completion { report, usage } = completion;
@@ -244,18 +246,9 @@ where
     }
 
     let mut run = run;
-    match run.state {
-        RunState::Running => {
-            run.transition(target)?;
-        }
-        RunState::PodPending => {
-            run.transition(RunState::Running)?;
-            run.transition(target)?;
-        }
-        // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
-        _ => return Ok(run),
-    }
 
+    // Apply the harness's final report + usage first, so they land in the same atomic
+    // write as the terminal state transition.
     if let Some(report) = report {
         run.report = Some(report);
     }
@@ -264,9 +257,19 @@ where
         run.output_tokens = u.output_tokens;
     }
 
-    let run = repo.save(&run).await?;
+    match run.state {
+        RunState::Running => {
+            persist_transition(&mut run, target, transitions, bus).await?;
+        }
+        RunState::PodPending => {
+            persist_transition(&mut run, RunState::Running, transitions, bus).await?;
+            persist_transition(&mut run, target, transitions, bus).await?;
+        }
+        // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
+        _ => return Ok(run),
+    }
+
     sessions.sync_run(&run).await?;
-    emit_event(events, bus, Event::lifecycle_for(&run)).await;
     Ok(run)
 }
 
@@ -274,9 +277,11 @@ where
 mod tests {
     use super::*;
     use cat_herder_domain::entities::RunKind;
+    use cat_herder_domain::ports::EventRepository;
     use cat_herder_domain::reconcile::RuntimeStatus;
     use cat_herder_store_inmemory::{
         InMemoryEventRepository, InMemoryRunRepository, InMemorySessionRepository,
+        InMemoryTransitionRepository,
     };
 
     struct StubRuntime {
@@ -332,12 +337,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -355,12 +361,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -378,12 +385,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -408,12 +416,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -426,7 +435,7 @@ mod tests {
             &StubRuntime::new(Some(RuntimeStatus::Ready)),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -442,9 +451,15 @@ mod tests {
         );
 
         // gone -> succeeded (display row synced)
-        let n = reconcile_once(&StubRuntime::new(None), &repo, &sessions, &events, &StubBus)
-            .await
-            .unwrap();
+        let n = reconcile_once(
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 1);
         assert_eq!(
             repo.get(run.id).await.unwrap().unwrap().state,
@@ -475,12 +490,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -491,7 +507,7 @@ mod tests {
             &StubRuntime::new(Some(RuntimeStatus::Pending)),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -508,12 +524,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -524,7 +541,7 @@ mod tests {
             &StubRuntime::new(Some(RuntimeStatus::Ready)),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -543,7 +560,7 @@ mod tests {
             },
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -567,12 +584,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -581,7 +599,7 @@ mod tests {
             &StubRuntime::new(Some(RuntimeStatus::Ready)),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -593,7 +611,7 @@ mod tests {
             Completion::default(),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -606,12 +624,13 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         let run = start_run(
             req(),
             &StubRuntime::new(None),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -620,7 +639,7 @@ mod tests {
             &StubRuntime::new(Some(RuntimeStatus::Ready)),
             &repo,
             &sessions,
-            &events,
+            &transitions,
             &StubBus,
         )
         .await
@@ -633,7 +652,7 @@ mod tests {
                 Completion::default(),
                 &repo,
                 &sessions,
-                &events,
+                &transitions,
                 &StubBus
             )
             .await
@@ -648,7 +667,7 @@ mod tests {
                 Completion::default(),
                 &repo,
                 &sessions,
-                &events,
+                &transitions,
                 &StubBus
             )
             .await
@@ -663,6 +682,7 @@ mod tests {
         let repo = InMemoryRunRepository::new();
         let sessions = InMemorySessionRepository::default();
         let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
         assert!(
             complete_run(
                 RunId(999),
@@ -670,7 +690,7 @@ mod tests {
                 Completion::default(),
                 &repo,
                 &sessions,
-                &events,
+                &transitions,
                 &StubBus
             )
             .await

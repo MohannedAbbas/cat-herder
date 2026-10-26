@@ -10,22 +10,23 @@ use std::time::Duration;
 use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, EventBusImpl, EventRepo, GIT_HOSTS_SETTING,
     GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient,
-    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, router,
+    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, router,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryModelRepository,
-    InMemoryProviderRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryEventRepository,
+    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
+    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::NatsEventBus;
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresEventRepository,
     PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
     PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository, PostgresStore,
-    PostgresToolRepository,
+    PostgresToolRepository, PostgresTransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -91,6 +92,7 @@ async fn ensure_git_hosts(
 struct Repos {
     run: RunRepo,
     events: EventRepo,
+    transitions: TransitionRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -103,9 +105,15 @@ struct Repos {
 
 impl Repos {
     fn in_memory(models: &HashMap<String, String>) -> Self {
+        // The transition repository shares the run + event stores so a lifecycle
+        // transition updates both (in-memory has no cross-store transaction).
+        let run = InMemoryRunRepository::new();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(run.clone(), events.clone());
         Self {
-            run: RunRepo::InMemory(Default::default()),
-            events: EventRepo::InMemory(Default::default()),
+            run: RunRepo::InMemory(run),
+            events: EventRepo::InMemory(events),
+            transitions: TransitionRepo::InMemory(transitions),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -137,6 +145,9 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                 return Repos {
                     run: RunRepo::Postgres(PostgresRunRepository::new(&store)),
                     events: EventRepo::Postgres(PostgresEventRepository::new(&store)),
+                    transitions: TransitionRepo::Postgres(PostgresTransitionRepository::new(
+                        &store,
+                    )),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
@@ -273,12 +284,12 @@ async fn main() {
     if let Some(rt) = runtime.clone() {
         let repo = repos.run.clone();
         let sessions = repos.sessions.clone();
-        let events = repos.events.clone();
+        let transitions = repos.transitions.clone();
         let bus = bus.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                if let Err(e) = reconcile_once(&rt, &repo, &sessions, &events, &bus).await {
+                if let Err(e) = reconcile_once(&rt, &repo, &sessions, &transitions, &bus).await {
                     eprintln!("reconcile error: {e}");
                 }
             }
@@ -354,6 +365,7 @@ async fn main() {
     let state = AppState {
         repo: repos.run,
         events: repos.events,
+        transitions: repos.transitions,
         bus,
         agents: repos.agents,
         providers: repos.providers,

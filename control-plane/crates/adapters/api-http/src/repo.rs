@@ -10,19 +10,19 @@ use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, DomainResult, EventRepository, GitRepoRepository,
     ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
-    ToolRepository,
+    ToolRepository, TransitionRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryAuditRepository, InMemoryEventRepository,
     InMemoryGitRepoRepository, InMemoryModelRepository, InMemoryProviderRepository,
     InMemoryRunRepository, InMemorySessionRepository, InMemorySettingRepository,
-    InMemoryToolRepository,
+    InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresAuditRepository, PostgresEventRepository,
     PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
     PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository,
-    PostgresToolRepository,
+    PostgresToolRepository, PostgresTransitionRepository,
 };
 
 #[derive(Clone)]
@@ -72,6 +72,21 @@ impl EventRepository for EventRepo {
         match self {
             EventRepo::InMemory(r) => r.list(run_id, after_seq, limit).await,
             EventRepo::Postgres(p) => p.list(run_id, after_seq, limit).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum TransitionRepo {
+    InMemory(InMemoryTransitionRepository),
+    Postgres(PostgresTransitionRepository),
+}
+
+impl TransitionRepository for TransitionRepo {
+    async fn save_transition(&self, run: &Run, event: &Event) -> DomainResult<(Run, Event)> {
+        match self {
+            TransitionRepo::InMemory(r) => r.save_transition(run, event).await,
+            TransitionRepo::Postgres(p) => p.save_transition(run, event).await,
         }
     }
 }
