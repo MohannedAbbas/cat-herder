@@ -31,6 +31,17 @@ spec:
               value: {{ .Values.controlPlane.stuckTimeoutSecs | default 900 | quote }}
             - name: CAT_HERDER_RUN_TIMEOUT_SECS
               value: {{ .Values.controlPlane.runTimeoutSecs | default 3600 | quote }}
+            - name: CAT_HERDER_SHARD_COUNT
+              value: {{ .Values.controlPlane.shardCount | default 16 | quote }}
+            - name: CAT_HERDER_LEASE_TTL_SECS
+              value: {{ .Values.controlPlane.leaseTtlSecs | default 30 | quote }}
+            - name: CAT_HERDER_RECONCILE_INTERVAL_SECS
+              value: {{ .Values.controlPlane.reconcileIntervalSecs | default 10 | quote }}
+            # Stable per-replica owner id for the shard-lease reconciler (PLAN.md §6).
+            - name: CAT_HERDER_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: CAT_HERDER_AGENT_MODELS
               value: {{ .Values.agents.models | toJson | quote }}
             - name: CAT_HERDER_ENCRYPTION_SECRET

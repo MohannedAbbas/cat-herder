@@ -9,27 +9,30 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, CheckpointRepo, ControlLinks,
-    EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
-    KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo,
-    SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    CredentialGrantRepo, EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth,
+    GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo,
+    SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
-use cat_herder_application::reconcile_once;
+use cat_herder_application::reconcile_shards;
 use cat_herder_domain::api::default_git_hosts;
-use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
+use cat_herder_domain::ports::{
+    DomainResult, GitRepoRepository, LeaseManager, ProviderRepository, SettingRepository,
+};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
-    InMemoryCheckpointRepository, InMemoryEventRepository, InMemoryModelRepository,
-    InMemoryProviderRepository, InMemoryRunRepository, InMemorySettingRepository,
-    InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryCheckpointRepository, InMemoryCredentialGrantRepository, InMemoryEventRepository,
+    InMemoryLeaseManager, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryTransitionRepository,
 };
-use cat_herder_store_nats::NatsEventBus;
+use cat_herder_store_nats::{NatsEventBus, NatsLeaseManager};
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
-    PostgresCheckpointRepository, PostgresEventRepository, PostgresGitRepoRepository,
-    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
-    PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
-    PostgresTransitionRepository,
+    PostgresCheckpointRepository, PostgresCredentialGrantRepository, PostgresEventRepository,
+    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository, PostgresStore,
+    PostgresToolRepository, PostgresTransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -52,6 +55,49 @@ fn parse_bool_env(name: &str) -> bool {
             .as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
+}
+
+/// Parse a `u32` env var, falling back to `default` when unset/blank/invalid.
+fn parse_env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+/// Parse a whole-second duration env var, falling back to `default`.
+fn parse_env_secs(name: &str, default: u64) -> Duration {
+    Duration::from_secs(parse_env_u32(name, default as u32) as u64)
+}
+
+/// Lease backend selector for the sharded reconciler (`PLAN.md` §6): NATS JetStream
+/// KV when configured, otherwise the in-memory fallback (single-replica dev).
+enum LeaseManagerImpl {
+    Nats(Box<NatsLeaseManager>),
+    InMemory(InMemoryLeaseManager),
+}
+
+impl LeaseManager for LeaseManagerImpl {
+    async fn acquire(&self, shard: u32, owner: &str) -> DomainResult<bool> {
+        match self {
+            LeaseManagerImpl::Nats(m) => m.acquire(shard, owner).await,
+            LeaseManagerImpl::InMemory(m) => m.acquire(shard, owner).await,
+        }
+    }
+
+    async fn renew(&self, shard: u32, owner: &str) -> DomainResult<bool> {
+        match self {
+            LeaseManagerImpl::Nats(m) => m.renew(shard, owner).await,
+            LeaseManagerImpl::InMemory(m) => m.renew(shard, owner).await,
+        }
+    }
+
+    async fn release(&self, shard: u32, owner: &str) -> DomainResult<()> {
+        match self {
+            LeaseManagerImpl::Nats(m) => m.release(shard, owner).await,
+            LeaseManagerImpl::InMemory(m) => m.release(shard, owner).await,
+        }
+    }
 }
 
 /// Decrypt each enabled repo's token and push a `repo id → token` map into the
@@ -98,6 +144,7 @@ struct Repos {
     transitions: TransitionRepo,
     checkpoints: CheckpointRepo,
     approvals: ApprovalRepo,
+    grants: CredentialGrantRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -121,6 +168,7 @@ impl Repos {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
             approvals: ApprovalRepo::InMemory(InMemoryApprovalRepository::default()),
+            grants: CredentialGrantRepo::InMemory(InMemoryCredentialGrantRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -159,6 +207,9 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                         &store,
                     )),
                     approvals: ApprovalRepo::Postgres(PostgresApprovalRepository::new(&store)),
+                    grants: CredentialGrantRepo::Postgres(PostgresCredentialGrantRepository::new(
+                        &store,
+                    )),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
@@ -207,7 +258,7 @@ async fn main() {
 
     let repos = build_repos(&agent_models()).await;
 
-    // Seed the git-host list (github/gitlab/codeberg) into settings so the repo form
+    // Seed the git-host list (GitHub only for now) into settings so the repo form
     // dropdown is driven by the settings store, not hardcoded.
     if let Err(e) = ensure_git_hosts(&repos.settings).await {
         eprintln!("warning: failed to seed git hosts: {e}");
@@ -230,6 +281,30 @@ async fn main() {
             }
         },
         None => EventBusImpl::Noop,
+    };
+
+    // Shard leases for the sharded reconciler (PLAN.md §6). NATS JetStream KV when
+    // NATS is configured; otherwise the in-memory fallback (single-replica dev, where
+    // the one process leases every shard). The TTL is the crash-recovery bound: a
+    // leader that stops renewing has its shards taken over within this window.
+    let lease_ttl = parse_env_secs("CAT_HERDER_LEASE_TTL_SECS", 30);
+    let nats_url = std::env::var("CAT_HERDER_NATS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let leases: LeaseManagerImpl = match nats_url {
+        Some(url) => match NatsLeaseManager::connect(&url, lease_ttl).await {
+            Ok(m) => {
+                eprintln!("NATS shard-lease manager connected");
+                LeaseManagerImpl::Nats(Box::new(m))
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: NATS shard-lease manager unavailable ({e}); using in-memory leases"
+                );
+                LeaseManagerImpl::InMemory(InMemoryLeaseManager::new(lease_ttl))
+            }
+        },
+        None => LeaseManagerImpl::InMemory(InMemoryLeaseManager::new(lease_ttl)),
     };
 
     // Encryption key for git tokens — read from (or generated into) a Kubernetes
@@ -289,20 +364,77 @@ async fn main() {
         });
     }
 
-    // Background reconciler: advance active runs (PodPending -> Running, Running ->
-    // Succeeded) based on sandbox status (PLAN.md §6), and keep the session display
-    // rows in sync.
+    // Background reconciler: a sharded, lease-based leader loop (PLAN.md §6). The
+    // process leases shards (each a bucket of run_id hashes) and reconciles only the
+    // runs those shards own. A shard whose lease lapses is re-acquired by a survivor
+    // (here, or in a sibling replica), which re-spawns the dead leader's missing
+    // sandboxes on the next tick — crash recovery. With the in-memory lease backend
+    // (single replica) this process leases every shard and reconciles everything.
     if let Some(rt) = runtime.clone() {
         let repo = repos.run.clone();
         let sessions = repos.sessions.clone();
         let transitions = repos.transitions.clone();
         let bus = bus.clone();
+        let shard_count = parse_env_u32("CAT_HERDER_SHARD_COUNT", 16).max(1);
+        let interval = parse_env_secs("CAT_HERDER_RECONCILE_INTERVAL_SECS", 10);
+        // Stable per-process owner id: the pod name in-cluster, else a fresh UUID.
+        let owner_id = std::env::var("CAT_HERDER_INSTANCE_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         tokio::spawn(async move {
+            let mut owned: std::collections::HashSet<u32> = std::collections::HashSet::new();
             loop {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                if let Err(e) = reconcile_once(&rt, &repo, &sessions, &transitions, &bus).await {
+                // Acquire any shards we don't hold yet (covers startup and re-taking a
+                // shard we lost). Crash recovery of a newly-owned shard happens on the
+                // next reconcile tick, which re-spawns missing sandboxes.
+                for shard in 0..shard_count {
+                    if owned.contains(&shard) {
+                        continue;
+                    }
+                    match leases.acquire(shard, &owner_id).await {
+                        Ok(true) => {
+                            owned.insert(shard);
+                        }
+                        Ok(false) => {}
+                        Err(e) => eprintln!("lease acquire for shard {shard} failed: {e}"),
+                    }
+                }
+
+                // Reconcile all owned shards in a single pass — one run read covers
+                // every shard this leader holds, instead of a full scan per shard.
+                if !owned.is_empty()
+                    && let Err(e) = reconcile_shards(
+                        &owned,
+                        shard_count,
+                        &rt,
+                        &repo,
+                        &sessions,
+                        &transitions,
+                        &bus,
+                    )
+                    .await
+                {
                     eprintln!("reconcile error: {e}");
                 }
+
+                // Renew owned leases; drop any that were lost so we re-acquire them.
+                let mut lost = Vec::new();
+                for shard in owned.iter().copied().collect::<Vec<_>>() {
+                    match leases.renew(shard, &owner_id).await {
+                        Ok(true) => {}
+                        Ok(false) => lost.push(shard),
+                        Err(e) => {
+                            eprintln!("lease renew for shard {shard} failed: {e}");
+                            lost.push(shard);
+                        }
+                    }
+                }
+                for shard in lost {
+                    owned.remove(&shard);
+                }
+
+                tokio::time::sleep(interval).await;
             }
         });
     }
@@ -379,6 +511,7 @@ async fn main() {
         transitions: repos.transitions,
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
+        grants: repos.grants,
         bus,
         agents: repos.agents,
         providers: repos.providers,

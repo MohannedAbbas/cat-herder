@@ -36,9 +36,12 @@ pub fn reconcile_run(state: RunState, status: Option<RuntimeStatus>) -> Vec<RunS
         (Running, Some(RS::Succeeded)) => vec![Succeeded],
         (Running, Some(RS::Failed)) => vec![Stuck],
         (Running, Some(RS::Expired)) => vec![TimedOut],
-        // A missing sandbox means the execution is gone. The `finished` event is the
-        // normal terminal signal, so this is only a fallback (treat as clean).
-        (Running, None) => vec![Succeeded],
+        // A missing sandbox on a non-terminal run is a crash, not a clean finish:
+        // the `finished` event is the *only* terminal signal, so a gone sandbox
+        // maps to no state change here. Crash recovery (re-spawn to resume from the
+        // last checkpoint, `PLAN.md` §6) is the reconciler's job, not the state
+        // machine's.
+        (Running, None) => vec![],
         _ => vec![],
     }
 }
@@ -56,11 +59,10 @@ mod tests {
     }
 
     #[test]
-    fn running_becomes_succeeded_when_gone() {
-        assert_eq!(
-            reconcile_run(RunState::Running, None),
-            vec![RunState::Succeeded]
-        );
+    fn running_with_missing_sandbox_does_not_advance() {
+        // A missing sandbox is recovered by re-spawn (crash recovery), not by a state
+        // transition — `finished` is the only terminal signal.
+        assert!(reconcile_run(RunState::Running, None).is_empty());
     }
 
     #[test]

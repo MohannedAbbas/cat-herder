@@ -346,8 +346,6 @@ let repos: GitRepo[] = []
 
 let gitHosts: GitHost[] = [
   { host: 'github.com', label: 'GitHub' },
-  { host: 'gitlab.com', label: 'GitLab' },
-  { host: 'codeberg.org', label: 'Codeberg' },
 ]
 
 function aggregateStatus(runs: Run[]): RunState | 'idle' {

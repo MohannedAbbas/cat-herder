@@ -1,0 +1,16 @@
+[package]
+name = "cat-herder-credential-broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-herder-domain = { path = "../../domain" }
+cat-herder-credentials-github = { path = "../credentials-github" }
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+cat-herder-store-inmemory = { path = "../store-inmemory" }
+tokio.workspace = true
+wiremock = "0.6"

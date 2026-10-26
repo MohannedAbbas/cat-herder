@@ -12,6 +12,10 @@ use cat_herder_domain::ports::{DomainResult, EventBus};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
+mod lease;
+
+pub use lease::{LEASES_BUCKET, NatsLeaseManager, shard_key};
+
 /// JetStream stream name and subject pattern (per-run subjects `run.<id>.events`).
 pub const STREAM_NAME: &str = "EVENTS";
 const SUBJECT_PREFIX: &str = "run.";

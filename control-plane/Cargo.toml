@@ -8,6 +8,8 @@ members = [
     "crates/adapters/store-inmemory",
     "crates/adapters/store-postgres",
     "crates/adapters/store-nats",
+    "crates/adapters/credentials-github",
+    "crates/adapters/credential-broker",
     "crates/bin/cat-herder",
 ]
 
@@ -33,6 +35,7 @@ base64 = "0.22"
 axum-extra = { version = "0.10", features = ["cookie"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-nats = "0.38"
+jsonwebtoken = "9"
 tonic = "0.12"
 prost = "0.13"
 tonic-build = "0.12"

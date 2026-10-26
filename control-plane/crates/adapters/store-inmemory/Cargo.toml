@@ -7,3 +7,8 @@ license.workspace = true
 [dependencies]
 cat-herder-domain = { path = "../../domain" }
 tokio.workspace = true
+
+[dev-dependencies]
+# `test-util` enables tokio's paused-clock helpers (`start_paused`, `advance`) used to
+# test the in-memory lease TTL deterministically.
+tokio = { workspace = true, features = ["test-util"] }

@@ -2,6 +2,7 @@
 //!
 //! Generic over the port implementations (not `dyn`), per `PLAN.md` §5.
 
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
@@ -12,6 +13,7 @@ use cat_herder_domain::ports::{
     RunRequest, SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
+use cat_herder_domain::shard::shard_for;
 use cat_herder_domain::state::is_terminal;
 
 /// Publish an event to the fan-out bus (best-effort — the durable authority is the
@@ -118,7 +120,7 @@ fn session_title(task_spec: &str) -> String {
 }
 
 /// Reconcile all active runs against their execution status, advancing the lifecycle
-/// state machine where possible. Returns the number of runs advanced.
+/// state machine where possible. Returns the number of runs advanced or recovered.
 ///
 /// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
 /// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
@@ -137,37 +139,102 @@ where
     T: TransitionRepository,
     B: EventBus,
 {
-    let mut advanced = 0;
+    reconcile_runs(repo.list_all().await?, runtime, sessions, transitions, bus).await
+}
 
-    for run in repo.list_all().await? {
-        match run.state {
-            RunState::PodPending | RunState::Running => {}
-            _ => continue,
-        }
+/// Reconcile the runs owned by `shards` (of `shard_count`) — the sharded-reconciler
+/// entry point (`PLAN.md` §6). Runs are fetched **once** and filtered to the set of
+/// owned shards, so a leader reconciles all its shards from a single read regardless
+/// of how many it holds. Only runs whose `run_id` hashes to an owned shard are
+/// advanced/recovered.
+pub async fn reconcile_shards<R, P, S, T, B>(
+    shards: &HashSet<u32>,
+    shard_count: u32,
+    runtime: &R,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<usize>
+where
+    R: AgentRuntime,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let runs = repo
+        .list_all()
+        .await?
+        .into_iter()
+        .filter(|r| shards.contains(&shard_for(r.id, shard_count)))
+        .collect();
+    reconcile_runs(runs, runtime, sessions, transitions, bus).await
+}
 
-        let status = runtime.status(run.id).await?;
-        let to_apply = reconcile_run(run.state, status);
-        if to_apply.is_empty() {
+/// Core reconcile over an explicit set of runs (the caller already selected the runs
+/// this leader is responsible for). Returns the number of runs advanced or recovered.
+///
+/// For each active run it reads the runtime status and either advances the state
+/// machine, or — if the sandbox has gone missing — re-spawns a replacement pod so the
+/// run resumes from its last checkpoint (crash recovery, `PLAN.md` §6). The `finished`
+/// event remains the only terminal signal, so a missing sandbox never marks a run
+/// terminal here.
+pub async fn reconcile_runs<R, S, T, B>(
+    runs: Vec<Run>,
+    runtime: &R,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<usize>
+where
+    R: AgentRuntime,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let mut changed = 0;
+
+    for run in runs {
+        if !matches!(run.state, RunState::PodPending | RunState::Running) {
             continue;
         }
 
-        let mut updated = run.clone();
-        for next in to_apply {
-            // One atomic transition per state change, so the log records the full walk
-            // (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
-            persist_transition(&mut updated, next, transitions, bus).await?;
-        }
-        sessions.sync_run(&updated).await?;
-        advanced += 1;
+        let status = runtime.status(run.id).await?;
+        match status {
+            // Crash recovery: a live run whose sandbox is gone gets a fresh pod. The
+            // harness resumes from its latest checkpoint (§6); a run with none starts
+            // over. We do not mark it terminal here — `finished` is the only signal
+            // that does (a stuck harness surfaces as `Failed`, not `None`).
+            None => {
+                runtime.spawn(&run).await?;
+                changed += 1;
+            }
+            Some(status) => {
+                let to_apply = reconcile_run(run.state, Some(status));
+                if to_apply.is_empty() {
+                    continue;
+                }
 
-        // Reclaim the execution once the run is done (details are already persisted).
-        let done = updated.state == RunState::Succeeded || is_terminal(updated.state);
-        if done && let Err(e) = runtime.terminate(updated.id).await {
-            eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
+                let mut updated = run.clone();
+                for next in to_apply {
+                    // One atomic transition per state change, so the log records the full
+                    // walk (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
+                    persist_transition(&mut updated, next, transitions, bus).await?;
+                }
+                sessions.sync_run(&updated).await?;
+                changed += 1;
+
+                // Reclaim the execution once the run is done (details already persisted).
+                let done = updated.state == RunState::Succeeded || is_terminal(updated.state);
+                if done && let Err(e) = runtime.terminate(updated.id).await {
+                    eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
+                }
+            }
         }
     }
 
-    Ok(advanced)
+    Ok(changed)
 }
 
 /// Outcome reported by the harness when an agent completes.
@@ -437,16 +504,27 @@ mod tests {
 
     struct StubRuntime {
         status: Option<RuntimeStatus>,
+        spawns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl StubRuntime {
         fn new(status: Option<RuntimeStatus>) -> Self {
-            Self { status }
+            Self {
+                status,
+                spawns: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+
+        /// How many times `spawn` has been called (crash-recovery / re-spawn).
+        fn spawn_count(&self) -> usize {
+            self.spawns.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
 
     impl AgentRuntime for StubRuntime {
         async fn spawn(&self, _run: &Run) -> DomainResult<()> {
+            self.spawns
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
         }
         async fn status(&self, _id: RunId) -> DomainResult<Option<RuntimeStatus>> {
@@ -601,9 +679,11 @@ mod tests {
             RunState::Running
         );
 
-        // gone -> succeeded (display row synced)
+        // gone -> succeeded is no longer the fallback: a missing sandbox re-spawns.
+        // Here the sandbox reports a clean terminal success, which advances Running
+        // -> Succeeded (display row synced).
         let n = reconcile_once(
-            &StubRuntime::new(None),
+            &StubRuntime::new(Some(RuntimeStatus::Succeeded)),
             &repo,
             &sessions,
             &transitions,
@@ -668,6 +748,115 @@ mod tests {
             repo.get(run.id).await.unwrap().unwrap().state,
             RunState::PodPending
         );
+    }
+
+    #[tokio::test]
+    async fn reconcile_respawns_missing_sandbox() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        // Advance PodPending -> Running so the run is live.
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        // The sandbox vanishes (crash). The reconciler must re-spawn, not mark the
+        // run terminal.
+        let rt = StubRuntime::new(None);
+        let n = reconcile_once(&rt, &repo, &sessions, &transitions, &StubBus)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(rt.spawn_count(), 1);
+        // Still Running — `finished` is the only terminal signal.
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_shards_only_touches_owned_runs() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+
+        // Several runs (ids assigned sequentially from 1), more shards than runs so
+        // some shards are guaranteed unowned.
+        let mut runs = Vec::new();
+        for _ in 0..4 {
+            runs.push(
+                start_run(
+                    req(),
+                    &StubRuntime::new(None),
+                    &repo,
+                    &sessions,
+                    &transitions,
+                    &StubBus,
+                )
+                .await
+                .unwrap(),
+            );
+        }
+
+        let shard_count = 16u32;
+        let shard_of = |id| cat_herder_domain::shard::shard_for(id, shard_count);
+
+        // Reconcile every shard in one call; each run must advance exactly once.
+        let all_shards: HashSet<u32> = (0..shard_count).collect();
+        let n = reconcile_shards(
+            &all_shards,
+            shard_count,
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, runs.len());
+        for run in &runs {
+            assert_eq!(
+                repo.get(run.id).await.unwrap().unwrap().state,
+                RunState::Running
+            );
+        }
+
+        // A shard set that owns none of the runs advances nothing (guaranteed to
+        // exist since runs < shards).
+        let owned: HashSet<u32> = runs.iter().map(|r| shard_of(r.id)).collect();
+        let unowned: HashSet<u32> = (0..shard_count).filter(|s| !owned.contains(s)).collect();
+        let n = reconcile_shards(
+            &unowned,
+            shard_count,
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]

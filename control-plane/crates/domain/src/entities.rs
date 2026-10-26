@@ -146,3 +146,42 @@ pub struct GitRepo {
     pub write_token_ciphertext: Option<String>,
     pub enabled: bool,
 }
+
+/// Lifecycle of a minted credential grant (`PLAN.md` §11.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialGrantStatus {
+    /// Minted and within its TTL.
+    Active,
+    /// Explicitly revoked (run end / policy / manual).
+    Revoked,
+    /// Lapsed past `expires_at` without explicit revocation.
+    Expired,
+}
+
+/// A JIT-minted credential grant (`PLAN.md` §11.3).
+///
+/// Every mint is recorded as a `CredentialGrant`; `revoke` marks it `Revoked` (or the
+/// TTL expires it). The materialized secret is **never stored here** — only metadata —
+/// so the grants table holds no credentials at rest. `id` is the opaque handle
+/// returned to the caller (`cred://…`); the secret itself is delivered out-of-band to
+/// the requesting client (credential helper / sidecar), never to the model.
+#[derive(Debug, Clone)]
+pub struct CredentialGrant {
+    pub id: String,
+    pub run_id: RunId,
+    /// The target the credential is scoped to (e.g. `github.com/org/repo`).
+    pub target: String,
+    /// The requested action (`clone`, `push`, `pr`, …).
+    pub action: String,
+    /// The requested scope (`read`, `write`).
+    pub scope: String,
+    pub status: CredentialGrantStatus,
+    pub expires_at: SystemTime,
+    pub created_at: SystemTime,
+    pub revoked_at: Option<SystemTime>,
+    /// The issuer's server-side identifier for this token (GitLab project-token id /
+    /// Forgejo token id), used to revoke it server-side. `None` when the issuer has no
+    /// per-token revocation (GitHub installation tokens lapse via TTL). Never the secret.
+    pub token_id: Option<String>,
+}

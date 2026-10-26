@@ -42,6 +42,10 @@ pub mod event_type {
     // Human-in-the-loop (PLAN.md §10).
     pub const APPROVAL_REQUESTED: &str = "approval.requested";
     pub const APPROVAL_RESPONDED: &str = "approval.responded";
+
+    // Credential brokering (PLAN.md §11.3) — every mint/revoke is audited.
+    pub const CREDENTIAL_MINTED: &str = "credential.minted";
+    pub const CREDENTIAL_REVOKED: &str = "credential.revoked";
 }
 
 /// Canonical event envelope. `seq` is assigned by the control plane (sole writer);
@@ -146,5 +150,37 @@ impl Event {
             // event carrying the state, so nothing is silently dropped from the log.
             _ => Self::lifecycle(run, "run.state"),
         }
+    }
+
+    /// A credential minted by the broker (`PLAN.md` §11.3). Carries only the opaque
+    /// `grant_id` + scope metadata — **never** the secret.
+    pub fn credential_minted(
+        run_id: RunId,
+        grant_id: &str,
+        target: &str,
+        action: &str,
+        scope: &str,
+    ) -> Self {
+        Self::new(
+            run_id,
+            event_type::CREDENTIAL_MINTED,
+            None,
+            serde_json::json!({
+                "grant_id": grant_id,
+                "target": target,
+                "action": action,
+                "scope": scope,
+            }),
+        )
+    }
+
+    /// A credential grant revoked (`PLAN.md` §11.3). Never carries the secret.
+    pub fn credential_revoked(run_id: RunId, grant_id: &str) -> Self {
+        Self::new(
+            run_id,
+            event_type::CREDENTIAL_REVOKED,
+            None,
+            serde_json::json!({ "grant_id": grant_id }),
+        )
     }
 }

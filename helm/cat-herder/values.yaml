@@ -49,6 +49,14 @@ controlPlane:
   #     agent-sandbox controller garbage-collects a runaway sandbox on its own.
   stuckTimeoutSecs: 900
   runTimeoutSecs: 3600
+  # Sharded, lease-based reconciler (PLAN.md §6). Reconcile work is partitioned by
+  # run_id hash across `shardCount` shards; each replica leases a set of shards (NATS
+  # JetStream KV) and reconciles only those runs. `leaseTtlSecs` is the crash-recovery
+  # bound — a replica that stops renewing has its shards taken over within this window.
+  # `reconcileIntervalSecs` is the reconcile/renew cadence (must be < leaseTtlSecs).
+  shardCount: 16
+  leaseTtlSecs: 30
+  reconcileIntervalSecs: 10
 
 harness:
   image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0

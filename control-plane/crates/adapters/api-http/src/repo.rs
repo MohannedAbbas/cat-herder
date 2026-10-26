@@ -6,27 +6,28 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool,
 };
 use cat_herder_domain::entities::{
-    ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId,
+    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Run, RunId,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository, DomainResult,
-    EventRepository, GitRepoRepository, ModelRepository, ProviderRepository, RunRepository,
-    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
+    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository,
+    CredentialGrantRepository, DomainResult, EventRepository, GitRepoRepository, ModelRepository,
+    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    TransitionRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
-    InMemoryCheckpointRepository, InMemoryEventRepository, InMemoryGitRepoRepository,
-    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
-    InMemorySessionRepository, InMemorySettingRepository, InMemoryToolRepository,
-    InMemoryTransitionRepository,
+    InMemoryCheckpointRepository, InMemoryCredentialGrantRepository, InMemoryEventRepository,
+    InMemoryGitRepoRepository, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySessionRepository, InMemorySettingRepository,
+    InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
-    PostgresCheckpointRepository, PostgresEventRepository, PostgresGitRepoRepository,
-    PostgresModelRepository, PostgresProviderRepository, PostgresRunRepository,
-    PostgresSessionRepository, PostgresSettingRepository, PostgresToolRepository,
-    PostgresTransitionRepository,
+    PostgresCheckpointRepository, PostgresCredentialGrantRepository, PostgresEventRepository,
+    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
+    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository,
+    PostgresToolRepository, PostgresTransitionRepository,
 };
 
 #[derive(Clone)]
@@ -147,6 +148,42 @@ impl ApprovalRepository for ApprovalRepo {
         match self {
             ApprovalRepo::InMemory(r) => r.decide(id, status, response).await,
             ApprovalRepo::Postgres(p) => p.decide(id, status, response).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum CredentialGrantRepo {
+    InMemory(InMemoryCredentialGrantRepository),
+    Postgres(PostgresCredentialGrantRepository),
+}
+
+impl CredentialGrantRepository for CredentialGrantRepo {
+    async fn create(&self, grant: &CredentialGrant) -> DomainResult<CredentialGrant> {
+        match self {
+            CredentialGrantRepo::InMemory(r) => r.create(grant).await,
+            CredentialGrantRepo::Postgres(p) => p.create(grant).await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<CredentialGrant>> {
+        match self {
+            CredentialGrantRepo::InMemory(r) => r.get(id).await,
+            CredentialGrantRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn list_active(&self, run_id: RunId) -> DomainResult<Vec<CredentialGrant>> {
+        match self {
+            CredentialGrantRepo::InMemory(r) => r.list_active(run_id).await,
+            CredentialGrantRepo::Postgres(p) => p.list_active(run_id).await,
+        }
+    }
+
+    async fn revoke(&self, id: &str) -> DomainResult<CredentialGrant> {
+        match self {
+            CredentialGrantRepo::InMemory(r) => r.revoke(id).await,
+            CredentialGrantRepo::Postgres(p) => p.revoke(id).await,
         }
     }
 }

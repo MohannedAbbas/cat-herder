@@ -10,13 +10,15 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{
-    ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId,
+    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, CredentialGrantStatus, GitRepo,
+    Run, RunId,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository, DomainResult,
-    EventRepository, GitRepoRepository, ModelRepository, ProviderRepository, RunRepository,
-    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
+    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository,
+    CredentialGrantRepository, DomainResult, EventRepository, GitRepoRepository, LeaseManager,
+    ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
+    ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -185,6 +187,55 @@ impl ApprovalRepository for InMemoryApprovalRepository {
         approval.response = response;
         approval.responded_at = Some(std::time::SystemTime::now());
         Ok(approval.clone())
+    }
+}
+
+/// In-memory credential-grant store (`PLAN.md` §11.3). Holds only grant metadata —
+/// never the materialized secret.
+#[derive(Clone, Default)]
+pub struct InMemoryCredentialGrantRepository {
+    inner: Arc<RwLock<HashMap<String, CredentialGrant>>>,
+}
+
+impl CredentialGrantRepository for InMemoryCredentialGrantRepository {
+    async fn create(&self, grant: &CredentialGrant) -> DomainResult<CredentialGrant> {
+        self.inner
+            .write()
+            .await
+            .insert(grant.id.clone(), grant.clone());
+        Ok(grant.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<CredentialGrant>> {
+        Ok(self.inner.read().await.get(id).cloned())
+    }
+
+    async fn list_active(&self, run_id: RunId) -> DomainResult<Vec<CredentialGrant>> {
+        let now = std::time::SystemTime::now();
+        Ok(self
+            .inner
+            .read()
+            .await
+            .values()
+            .filter(|g| {
+                g.run_id == run_id
+                    && g.status == CredentialGrantStatus::Active
+                    && g.expires_at > now
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn revoke(&self, id: &str) -> DomainResult<CredentialGrant> {
+        let mut map = self.inner.write().await;
+        let grant =
+            map.get_mut(id)
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "grant not found").into()
+                })?;
+        grant.status = CredentialGrantStatus::Revoked;
+        grant.revoked_at = Some(std::time::SystemTime::now());
+        Ok(grant.clone())
     }
 }
 
@@ -545,6 +596,95 @@ impl SessionRepository for InMemorySessionRepository {
     }
 }
 
+/// In-memory [`LeaseManager`] — process-local shard leases with TTL expiry. Reference
+/// adapter and the single-replica dev fallback when NATS is off: the first owner gets
+/// a shard; a second owner can take it over once the TTL lapses without renewal.
+#[derive(Clone)]
+pub struct InMemoryLeaseManager {
+    inner: Arc<tokio::sync::Mutex<HashMap<u32, Lease>>>,
+    ttl: std::time::Duration,
+}
+
+struct Lease {
+    owner: String,
+    expires_at: tokio::time::Instant,
+}
+
+impl InMemoryLeaseManager {
+    /// Build a lease manager whose leases lapse after `ttl` without renewal.
+    pub fn new(ttl: std::time::Duration) -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            ttl,
+        }
+    }
+}
+
+impl Default for InMemoryLeaseManager {
+    fn default() -> Self {
+        Self::new(std::time::Duration::from_secs(30))
+    }
+}
+
+impl LeaseManager for InMemoryLeaseManager {
+    async fn acquire(&self, shard: u32, owner: &str) -> DomainResult<bool> {
+        let mut map = self.inner.lock().await;
+        let now = tokio::time::Instant::now();
+        match map.get(&shard) {
+            // Re-acquiring our own lease just refreshes it.
+            Some(l) if l.owner == owner => {
+                map.insert(
+                    shard,
+                    Lease {
+                        owner: owner.to_string(),
+                        expires_at: now + self.ttl,
+                    },
+                );
+                Ok(true)
+            }
+            // Held by another live owner.
+            Some(l) if l.expires_at > now => Ok(false),
+            // Free, or the previous owner's lease lapsed: take it over.
+            _ => {
+                map.insert(
+                    shard,
+                    Lease {
+                        owner: owner.to_string(),
+                        expires_at: now + self.ttl,
+                    },
+                );
+                Ok(true)
+            }
+        }
+    }
+
+    async fn renew(&self, shard: u32, owner: &str) -> DomainResult<bool> {
+        let mut map = self.inner.lock().await;
+        let now = tokio::time::Instant::now();
+        match map.get(&shard) {
+            Some(l) if l.owner == owner && l.expires_at > now => {
+                map.insert(
+                    shard,
+                    Lease {
+                        owner: owner.to_string(),
+                        expires_at: now + self.ttl,
+                    },
+                );
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn release(&self, shard: u32, owner: &str) -> DomainResult<()> {
+        let mut map = self.inner.lock().await;
+        if map.get(&shard).is_some_and(|l| l.owner == owner) {
+            map.remove(&shard);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +796,56 @@ mod tests {
         );
         repo.delete("cat-herder").await.unwrap();
         assert!(repo.get("cat-herder").await.unwrap().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lease_acquire_renew_release_roundtrip() {
+        let lm = InMemoryLeaseManager::new(std::time::Duration::from_secs(10));
+        assert!(lm.acquire(1, "a").await.unwrap());
+        assert!(lm.acquire(1, "a").await.unwrap(), "re-acquiring own lease");
+        assert!(!lm.acquire(1, "b").await.unwrap(), "held by a");
+        assert!(lm.renew(1, "a").await.unwrap());
+        assert!(!lm.renew(1, "b").await.unwrap(), "b doesn't own it");
+        lm.release(1, "a").await.unwrap();
+        assert!(lm.acquire(1, "b").await.unwrap(), "freed by release");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lease_expires_and_is_taken_over() {
+        let lm = InMemoryLeaseManager::new(std::time::Duration::from_secs(10));
+        assert!(lm.acquire(1, "a").await.unwrap());
+        // a never renews; its lease lapses.
+        tokio::time::advance(std::time::Duration::from_secs(11)).await;
+        assert!(lm.acquire(1, "b").await.unwrap(), "b takes over");
+        assert!(!lm.acquire(1, "a").await.unwrap(), "a lost it");
+        // b still renews fine.
+        assert!(lm.renew(1, "b").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn grant_create_list_active_revoke_roundtrip() {
+        use std::time::Duration;
+
+        let repo = InMemoryCredentialGrantRepository::default();
+        let grant = CredentialGrant {
+            id: "cred-1".into(),
+            run_id: RunId(7),
+            target: "github.com/org/repo".into(),
+            action: "clone".into(),
+            scope: "read".into(),
+            status: CredentialGrantStatus::Active,
+            expires_at: std::time::SystemTime::now() + Duration::from_secs(3600),
+            created_at: std::time::SystemTime::now(),
+            revoked_at: None,
+            token_id: None,
+        };
+        repo.create(&grant).await.unwrap();
+        assert_eq!(repo.get("cred-1").await.unwrap().unwrap().id, "cred-1");
+        assert_eq!(repo.list_active(RunId(7)).await.unwrap().len(), 1);
+
+        let revoked = repo.revoke("cred-1").await.unwrap();
+        assert_eq!(revoked.status, CredentialGrantStatus::Revoked);
+        assert!(revoked.revoked_at.is_some());
+        assert!(repo.list_active(RunId(7)).await.unwrap().is_empty());
     }
 }

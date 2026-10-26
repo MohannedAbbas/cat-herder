@@ -122,7 +122,7 @@ export interface Tool {
   description: string
 }
 
-/** A git host option (e.g. GitHub/GitLab/Codeberg), driven by the settings store. */
+/** A git host option (GitHub only for now), driven by the settings store. */
 export interface GitHost {
   host: string
   label: string

@@ -3,7 +3,7 @@
 //! the JSON API's `snake_case`/`lowercase` representation.
 
 use cat_herder_domain::api::RuntimeTier;
-use cat_herder_domain::entities::{RunKind, RunState};
+use cat_herder_domain::entities::{CredentialGrantStatus, RunKind, RunState};
 use serde_json::Value;
 
 pub(crate) fn encode_state(s: RunState) -> String {
@@ -49,6 +49,18 @@ pub(crate) fn encode_tools(tools: &[String]) -> String {
 
 pub(crate) fn decode_tools(s: &str) -> Vec<String> {
     serde_json::from_str(s).unwrap_or_default()
+}
+
+pub(crate) fn encode_grant_status(s: CredentialGrantStatus) -> String {
+    serde_json::to_value(s)
+        .expect("grant status serializes")
+        .as_str()
+        .expect("grant status serializes to a string")
+        .to_string()
+}
+
+pub(crate) fn decode_grant_status(s: &str) -> CredentialGrantStatus {
+    serde_json::from_value(Value::String(s.to_string())).unwrap_or(CredentialGrantStatus::Active)
 }
 
 #[cfg(test)]

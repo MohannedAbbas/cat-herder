@@ -97,12 +97,24 @@ pod death and pause/resume at an interrupt.
   with a read-only clone-scoped credential, §11.3/§13), snapshotted to in-cluster MinIO
   at quiesced points (interrupt/termination), restored if the volume is lost.
 
-- [ ] **6. Lease-based, sharded reconcile + crash recovery (§6).**
+- [x] **6. Lease-based, sharded reconcile + crash recovery (§6).**
   `application/src/lib.rs::reconcile_once` is a single in-process 10s loop over all
   runs; no leader election, no sharding, no orphan recovery on leader change.
   *Done when:* reconcile work is partitioned by `run_id` hash across lease-holding
   leaders (Postgres advisory lock or NATS KV), and a new owner re-attaches watchers /
   recreates pods for its non-terminal runs.
+  *Status:* ✅ `shard_for`/`owns` (SplitMix64 hash) in `domain/src/shard.rs`; ✅
+  `LeaseManager` port + NATS JetStream KV adapter (`store-nats/src/lease.rs`, `LEASES`
+  bucket with `max_age` TTL) + in-memory fallback (`InMemoryLeaseManager`, the
+  single-replica dev path that leases every shard); ✅ leader loop in
+  `bin/cat-herder` acquires/renews shard leases and runs `reconcile_shards` once per
+  tick (one `list_all()` covers all owned shards); ✅ crash recovery — a non-terminal
+  run whose sandbox is gone is **re-spawned** to resume from its last checkpoint
+  instead of being marked `Succeeded` (`(Running, None)` is now a no-op in the state
+  machine; `finished` is the only terminal signal), so a new owner re-creates pods for
+  its non-terminal runs on its first tick. See `docs/design/reconcile.md`. ⬜ Deferred:
+  balanced shard distribution (greedy acquisition), SQL shard push-down, retry
+  policy; the heartbeat-based stuck-run watchdog remains the #2 slice.
 
 ---
 
@@ -117,10 +129,22 @@ Brokered credentials and a real budget hard-stop; both are called out as
   mint → revoke` broker, no Vault/GitHub-App/STS, no scoped short-lived credentials,
   no `CredentialGrant` records.
   *Done when:* the `CredentialBroker` port has a real adapter minting scoped,
-  short-lived, revocable credentials (GitHub App install tokens, Vault dynamic
-  secrets, cloud STS); the secret is delivered out-of-band (credential helper /
+  short-lived, revocable credentials (GitHub App install tokens for now — other hosts
+  are extension points); the secret is delivered out-of-band (credential helper /
   sidecar), never to the model; every mint/revoke is an audited event. Broker runs as
   its own hardened service (mTLS/SVID caller auth, no ambient cloud creds).
+  *Status:* 🟡 foundation landed (GitHub-only, extensible) — ✅ `CredentialGrant` +
+  `CredentialGrantStatus` + `CredentialBroker` port (`mint`→`MintedCredential{grant,
+  secret}` / `revoke`) + `CredentialGrantRepository` port; ✅
+  `credential.minted`/`credential.revoked` events; ✅ `adapters/credentials-github`
+  (`GitHubApp`: RS256 JWT + dynamic installation resolution — one App serves all its
+  repos); ✅ `adapters/credential-broker` (`CredentialBrokerService` + `Issuer` host
+  dispatch: mint/revoke + grant + audited events); ✅ grant persistence (Postgres
+  migration `0025` + in-memory) wired into `AppState`/composition root. GitLab/Codeberg
+  issuers intentionally deferred (extension point via the `Issuer` enum). See
+  `docs/design/credentials.md`. ⬜ Remaining: clone-path mint+inject+revoke wiring,
+  separate broker service (gRPC + mTLS/SVID), harness sidecar `credential` tool +
+  opaque handles.
 
 - [ ] **8. Budget engine with a hard stop (§12).**
   Only post-hoc token counting exists (harness `record_usage` + `input/output_tokens`).

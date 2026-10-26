@@ -5,7 +5,9 @@
 //! per `PLAN.md` §5.
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use crate::entities::{ApprovalRequest, ApprovalStatus, Checkpoint, GitRepo, Run, RunId, RunState};
+use crate::entities::{
+    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Run, RunId, RunState,
+};
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
 
@@ -166,6 +168,26 @@ pub trait EventBus {
     async fn publish(&self, event: &Event) -> DomainResult<()>;
 }
 
+/// Lease primitive for the sharded, lease-based reconciler (`PLAN.md` §6).
+///
+/// A lease is the mutual-exclusion token that grants a leader ownership of a shard
+/// (a bucket of `run_id` hashes) for a bounded time. The TTL is an adapter concern
+/// (configured at construction); callers renew before it expires. A lease that is
+/// not renewed lapses, and another leader can then take the shard over — that is the
+/// crash-recovery mechanism: a dead leader's shards are re-acquired and their
+/// non-terminal runs re-attached.
+pub trait LeaseManager {
+    /// Attempt to acquire the `shard` lease as `owner`. Returns `Ok(true)` if this
+    /// caller now holds it (freshly acquired, or taken over after the previous
+    /// holder's lease lapsed); `Ok(false)` if another live owner holds it.
+    async fn acquire(&self, shard: u32, owner: &str) -> DomainResult<bool>;
+    /// Renew an owned lease, extending its expiry. Returns `Ok(false)` if the lease
+    /// was lost (lapsed and taken over by another owner) and must be re-acquired.
+    async fn renew(&self, shard: u32, owner: &str) -> DomainResult<bool>;
+    /// Release an owned lease (best-effort, no-op if no longer owned).
+    async fn release(&self, shard: u32, owner: &str) -> DomainResult<()>;
+}
+
 /// Persists a lifecycle transition atomically (`PLAN.md` §6/§9): the run's new state
 /// and its lifecycle event land together in one transaction, so the event log never
 /// diverges from the run's lifecycle. `save_transition` upserts the run (assigning its
@@ -182,8 +204,44 @@ pub trait IdentityProvider {
     async fn validate(&self, token: &str) -> DomainResult<()>;
 }
 
+/// A freshly minted credential and its grant record. The `secret` is returned to the
+/// **trusted** caller only (the control plane / broker), which injects it out-of-band —
+/// into a pod env, a credential helper, or a sidecar — and **never** into model context.
+pub struct MintedCredential {
+    pub grant: CredentialGrant,
+    pub secret: String,
+}
+
+/// Just-in-time credential brokering (`PLAN.md` §11.3).
+///
+/// Mints scoped, short-lived, revocable credentials for a run's declared targets
+/// (`request → authorize → mint → revoke`). Every mint/revoke is an audited event; the
+/// grant itself is persisted via [`CredentialGrantRepository`]. The secret is delivered
+/// out-of-band (see [`MintedCredential`]); it must never reach the model, its
+/// checkpoints, or the event log.
 pub trait CredentialBroker {
-    async fn request(&self, run: RunId, target: &str, action: &str) -> DomainResult<String>;
+    /// Mint a credential for `run_id` against `target` (action + scope). Returns the
+    /// grant (opaque handle) and the materialized secret for out-of-band delivery.
+    async fn mint(
+        &self,
+        run: RunId,
+        target: &str,
+        action: &str,
+        scope: &str,
+    ) -> DomainResult<MintedCredential>;
+    /// Revoke a previously minted grant, marking it `Revoked`.
+    async fn revoke(&self, run: RunId, grant_id: &str) -> DomainResult<()>;
+}
+
+/// Persistence for minted credential grants (`PLAN.md` §11.3). The materialized secret
+/// is never written here — only the grant metadata.
+pub trait CredentialGrantRepository {
+    async fn create(&self, grant: &CredentialGrant) -> DomainResult<CredentialGrant>;
+    async fn get(&self, id: &str) -> DomainResult<Option<CredentialGrant>>;
+    /// All grants for a run whose TTL has not lapsed and which aren't revoked.
+    async fn list_active(&self, run_id: RunId) -> DomainResult<Vec<CredentialGrant>>;
+    /// Mark a grant `Revoked` (and stamp `revoked_at`). Idempotent.
+    async fn revoke(&self, id: &str) -> DomainResult<CredentialGrant>;
 }
 
 pub trait Notifier {

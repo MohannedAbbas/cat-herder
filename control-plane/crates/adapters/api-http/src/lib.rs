@@ -36,8 +36,9 @@ pub use key_store::KeySecretStore;
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
-    AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, EventRepo, GitRepoRepo, ModelRepo,
-    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo,
+    AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, CredentialGrantRepo, EventRepo,
+    GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    TransitionRepo,
 };
 
 mod admin;
@@ -74,6 +75,7 @@ pub struct AppState {
     pub transitions: TransitionRepo,
     pub checkpoints: CheckpointRepo,
     pub approvals: ApprovalRepo,
+    pub grants: CredentialGrantRepo,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -121,6 +123,7 @@ impl Default for AppState {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
+            grants: CredentialGrantRepo::InMemory(Default::default()),
             bus: EventBusImpl::Noop,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),

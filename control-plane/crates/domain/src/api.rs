@@ -312,8 +312,8 @@ pub fn is_safe_repo_url(url: &str) -> bool {
     scheme == "https" || scheme == "ssh"
 }
 
-/// A git host option for the repo form, e.g. GitHub/GitLab/Codeberg. The list is
-/// seeded into the settings store (`git_hosts`) so it's configurable, not hardcoded.
+/// A git host option for the repo form (GitHub only for now; the list is seeded into
+/// settings so it's configurable/extensible, not hardcoded).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHost {
@@ -321,22 +321,13 @@ pub struct GitHost {
     pub label: String,
 }
 
-/// Default supported git hosts (seeded into settings on first boot).
+/// Default supported git hosts (seeded into settings on first boot). GitHub only for
+/// now; other hosts are an extension point (add a `GitHost` + a credential issuer).
 pub fn default_git_hosts() -> Vec<GitHost> {
-    vec![
-        GitHost {
-            host: "github.com".into(),
-            label: "GitHub".into(),
-        },
-        GitHost {
-            host: "gitlab.com".into(),
-            label: "GitLab".into(),
-        },
-        GitHost {
-            host: "codeberg.org".into(),
-            label: "Codeberg".into(),
-        },
-    ]
+    vec![GitHost {
+        host: "github.com".into(),
+        label: "GitHub".into(),
+    }]
 }
 
 /// A transport-agnostic git repository identity: a host plus a repo path.
@@ -347,7 +338,7 @@ pub struct RepoIdentity {
 }
 
 impl RepoIdentity {
-    /// Canonical unique id, e.g. `gitlab.com/group/subgroup/repo`.
+    /// Canonical unique id, e.g. `github.com/org/repo`.
     pub fn id(&self) -> String {
         format!("{}/{}", self.host, self.path)
     }
@@ -369,9 +360,9 @@ pub fn is_valid_host(host: &str) -> bool {
         && !host.ends_with('.')
 }
 
-/// GitHub paths are case-insensitive; other hosts (GitLab/Codeberg) are
-/// case-sensitive. Fold accordingly so spellings of the *same* repo collapse to one
-/// identity without corrupting case-sensitive hosts.
+/// GitHub paths are case-insensitive; other hosts are case-sensitive (extension
+/// point). Fold accordingly so spellings of the *same* repo collapse to one identity
+/// without corrupting case-sensitive hosts.
 fn fold_path(host: &str, path: &str) -> String {
     if host == "github.com" {
         path.to_ascii_lowercase()
@@ -470,7 +461,7 @@ mod tests {
     fn default_git_hosts_are_seeded() {
         let hosts = default_git_hosts();
         let names: Vec<&str> = hosts.iter().map(|h| h.host.as_str()).collect();
-        assert_eq!(names, ["github.com", "gitlab.com", "codeberg.org"]);
+        assert_eq!(names, ["github.com"]);
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod entities;
 pub mod events;
 pub mod ports;
 pub mod reconcile;
+pub mod shard;
 pub mod state;
 
 pub use entities::*;
