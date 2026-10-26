@@ -2,8 +2,8 @@
 
 use cat_herder_domain::entities::GitRepo;
 use cat_herder_domain::ports::{DomainResult, GitRepoRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::schema::PostgresStore;
 
@@ -36,7 +36,10 @@ impl GitRepoRepository for PostgresGitRepoRepository {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(repo_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(repo_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn save(&self, repo: &GitRepo) -> DomainResult<GitRepo> {

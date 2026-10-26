@@ -9,7 +9,7 @@
 //! leaves room to rotate algorithms later.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey, NONCE_LEN};
+use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 
 const KEY_LEN: usize = 32;
@@ -27,18 +27,24 @@ impl AesGcmCipher {
             .decode(b64.trim())
             .map_err(|e| format!("invalid base64 encryption key: {e}"))?;
         if raw.len() != KEY_LEN {
-            return Err(format!("encryption key must be {KEY_LEN} bytes, got {}", raw.len()));
+            return Err(format!(
+                "encryption key must be {KEY_LEN} bytes, got {}",
+                raw.len()
+            ));
         }
         let unbound =
             UnboundKey::new(&AES_256_GCM, &raw).map_err(|e| format!("invalid key: {e}"))?;
-        Ok(Self { key: LessSafeKey::new(unbound) })
+        Ok(Self {
+            key: LessSafeKey::new(unbound),
+        })
     }
 
     /// Generate a fresh random key (base64-encoded 32 bytes).
     pub fn generate_key_base64() -> Result<String, String> {
         let rng = SystemRandom::new();
         let mut bytes = [0u8; KEY_LEN];
-        rng.fill(&mut bytes).map_err(|e| format!("rng failure: {e}"))?;
+        rng.fill(&mut bytes)
+            .map_err(|e| format!("rng failure: {e}"))?;
         Ok(STANDARD.encode(bytes))
     }
 
@@ -52,7 +58,8 @@ impl AesGcmCipher {
     pub fn encrypt(&self, plaintext: &str) -> Result<String, String> {
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        rng.fill(&mut nonce_bytes).map_err(|e| format!("rng failure: {e}"))?;
+        rng.fill(&mut nonce_bytes)
+            .map_err(|e| format!("rng failure: {e}"))?;
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
         let mut in_out = plaintext.as_bytes().to_vec();
@@ -67,11 +74,15 @@ impl AesGcmCipher {
 
     /// Decrypt a value produced by [`Self::encrypt`].
     pub fn decrypt(&self, stored: &str) -> Result<String, String> {
-        let (version, b64) = stored.split_once(':').ok_or("ciphertext missing version prefix")?;
+        let (version, b64) = stored
+            .split_once(':')
+            .ok_or("ciphertext missing version prefix")?;
         if version != VERSION {
             return Err(format!("unsupported ciphertext version: {version}"));
         }
-        let raw = STANDARD.decode(b64).map_err(|e| format!("invalid ciphertext: {e}"))?;
+        let raw = STANDARD
+            .decode(b64)
+            .map_err(|e| format!("invalid ciphertext: {e}"))?;
         if raw.len() <= NONCE_LEN {
             return Err("ciphertext too short".to_string());
         }

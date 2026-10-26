@@ -52,7 +52,11 @@ pub async fn handle(request: JsonRpcRequest, state: &AppState) -> Value {
         }),
         "tools/call" => {
             let name = request.params["name"].as_str().unwrap_or("");
-            let args = request.params.get("arguments").cloned().unwrap_or(Value::Null);
+            let args = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(Value::Null);
             let (text, is_error) = call_tool(name, &args, state).await;
             json!({
                 "jsonrpc": "2.0",
@@ -146,7 +150,16 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 language: opt("language"),
             };
 
-            match start_run(req, runtime, &state.repo, &state.sessions, &state.transitions, &state.bus).await {
+            match start_run(
+                req,
+                runtime,
+                &state.repo,
+                &state.sessions,
+                &state.transitions,
+                &state.bus,
+            )
+            .await
+            {
                 Ok(run) => (
                     serde_json::to_string(&RunResponse::from(&run)).unwrap_or_default(),
                     false,

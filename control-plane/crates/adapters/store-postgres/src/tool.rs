@@ -2,8 +2,8 @@
 
 use cat_herder_domain::api::Tool;
 use cat_herder_domain::ports::{DomainResult, ToolRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::schema::PostgresStore;
 
@@ -25,7 +25,10 @@ impl ToolRepository for PostgresToolRepository {
         let rows = sqlx::query("SELECT * FROM tools ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter().map(tool_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(tool_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Tool>> {
@@ -33,7 +36,10 @@ impl ToolRepository for PostgresToolRepository {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(tool_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(tool_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn save(&self, tool: &Tool) -> DomainResult<Tool> {

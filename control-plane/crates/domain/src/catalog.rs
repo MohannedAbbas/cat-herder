@@ -73,7 +73,10 @@ pub fn default_agents_with(
     model_overrides: &HashMap<String, String>,
 ) -> Vec<AgentTemplate> {
     let model = |id: &str, default: &str| -> String {
-        model_overrides.get(id).cloned().unwrap_or_else(|| default.to_string())
+        model_overrides
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| default.to_string())
     };
 
     vec![
@@ -124,7 +127,10 @@ mod tests {
     #[test]
     fn model_overrides_apply_to_matching_agents_only() {
         let mut m = HashMap::new();
-        m.insert("agent-codeact".to_string(), "deepseek:deepseek-chat".to_string());
+        m.insert(
+            "agent-codeact".to_string(),
+            "deepseek:deepseek-chat".to_string(),
+        );
         let agents = default_agents(&m);
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
         let reviewer = agents.iter().find(|a| a.id == "agent-reviewer").unwrap();
@@ -156,7 +162,11 @@ mod tests {
         d.harness_image = "ghcr.io/acme/harness:9.9.9".into();
         d.max_concurrency.insert("agent-codeact".into(), 16);
         let agents = default_agents_with(&d, &HashMap::new());
-        assert!(agents.iter().all(|a| a.image == "ghcr.io/acme/harness:9.9.9"));
+        assert!(
+            agents
+                .iter()
+                .all(|a| a.image == "ghcr.io/acme/harness:9.9.9")
+        );
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
         assert_eq!(codeact.max_concurrency, 16);
     }
@@ -198,23 +208,61 @@ pub fn default_providers() -> Vec<Provider> {
 /// `{provider_id}:{model_id}`.
 pub fn default_models() -> Vec<Model> {
     vec![
-        Model { id: "deepseek-chat".into(), provider_id: "deepseek".into(), display_name: "DeepSeek Chat (V3)".into() },
-        Model { id: "deepseek-reasoner".into(), provider_id: "deepseek".into(), display_name: "DeepSeek Reasoner (R1)".into() },
-        Model { id: "gpt-5.5".into(), provider_id: "openai".into(), display_name: "GPT-5.5".into() },
-        Model { id: "gpt-4o".into(), provider_id: "openai".into(), display_name: "GPT-4o".into() },
-        Model { id: "claude-sonnet-4-6".into(), provider_id: "anthropic".into(), display_name: "Claude Sonnet 4.6".into() },
+        Model {
+            id: "deepseek-chat".into(),
+            provider_id: "deepseek".into(),
+            display_name: "DeepSeek Chat (V3)".into(),
+        },
+        Model {
+            id: "deepseek-reasoner".into(),
+            provider_id: "deepseek".into(),
+            display_name: "DeepSeek Reasoner (R1)".into(),
+        },
+        Model {
+            id: "gpt-5.5".into(),
+            provider_id: "openai".into(),
+            display_name: "GPT-5.5".into(),
+        },
+        Model {
+            id: "gpt-4o".into(),
+            provider_id: "openai".into(),
+            display_name: "GPT-4o".into(),
+        },
+        Model {
+            id: "claude-sonnet-4-6".into(),
+            provider_id: "anthropic".into(),
+            display_name: "Claude Sonnet 4.6".into(),
+        },
     ]
 }
 
 /// Default available tools.
 pub fn default_tools() -> Vec<Tool> {
     vec![
-        Tool { id: "filesystem".into(), description: "Read/write files in the workspace".into() },
-        Tool { id: "execute".into(), description: "Run shell commands".into() },
-        Tool { id: "git".into(), description: "Git operations".into() },
-        Tool { id: "github".into(), description: "GitHub issues and PRs".into() },
-        Tool { id: "credential".into(), description: "Scoped credential brokering".into() },
-        Tool { id: "web_search".into(), description: "Web search".into() },
+        Tool {
+            id: "filesystem".into(),
+            description: "Read/write files in the workspace".into(),
+        },
+        Tool {
+            id: "execute".into(),
+            description: "Run shell commands".into(),
+        },
+        Tool {
+            id: "git".into(),
+            description: "Git operations".into(),
+        },
+        Tool {
+            id: "github".into(),
+            description: "GitHub issues and PRs".into(),
+        },
+        Tool {
+            id: "credential".into(),
+            description: "Scoped credential brokering".into(),
+        },
+        Tool {
+            id: "web_search".into(),
+            description: "Web search".into(),
+        },
     ]
 }
 
@@ -232,7 +280,8 @@ pub fn default_sessions() -> Vec<Session> {
                     state: RunState::Running,
                     agent_id: "agent-codeact".into(),
                     agent_name: "CodeAct coding agent".into(),
-                    task_spec: "Investigate and fix the token refresh race in auth middleware.".into(),
+                    task_spec: "Investigate and fix the token refresh race in auth middleware."
+                        .into(),
                     created_at: "2026-10-23T09:15:00Z".into(),
                     started_at: Some("2026-10-23T09:16:00Z".into()),
                     finished_at: None,

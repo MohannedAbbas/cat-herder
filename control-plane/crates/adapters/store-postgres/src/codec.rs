@@ -81,11 +81,23 @@ mod tests {
     #[test]
     fn kind_and_tier_roundtrip() {
         assert_eq!(decode_kind(&encode_kind(RunKind::Agent)), RunKind::Agent);
-        assert_eq!(decode_kind(&encode_kind(RunKind::Workflow)), RunKind::Workflow);
+        assert_eq!(
+            decode_kind(&encode_kind(RunKind::Workflow)),
+            RunKind::Workflow
+        );
 
-        assert_eq!(decode_tier(&encode_tier(RuntimeTier::Default)), RuntimeTier::Default);
-        assert_eq!(decode_tier(&encode_tier(RuntimeTier::Gvisor)), RuntimeTier::Gvisor);
-        assert_eq!(decode_tier(&encode_tier(RuntimeTier::Kata)), RuntimeTier::Kata);
+        assert_eq!(
+            decode_tier(&encode_tier(RuntimeTier::Default)),
+            RuntimeTier::Default
+        );
+        assert_eq!(
+            decode_tier(&encode_tier(RuntimeTier::Gvisor)),
+            RuntimeTier::Gvisor
+        );
+        assert_eq!(
+            decode_tier(&encode_tier(RuntimeTier::Kata)),
+            RuntimeTier::Kata
+        );
     }
 
     #[test]

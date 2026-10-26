@@ -33,9 +33,13 @@ impl PostgresStore {
 async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainResult<()> {
     // Reference data is seeded only when its table is empty, so admin edits (via the
     // admin UI) persist across restarts instead of being overwritten.
-    let agents: i64 = sqlx::query_scalar("SELECT count(*) FROM agents").fetch_one(pool).await?;
+    let agents: i64 = sqlx::query_scalar("SELECT count(*) FROM agents")
+        .fetch_one(pool)
+        .await?;
     if agents == 0 {
-        for agent in catalog::default_agents_with(&catalog::CatalogDefaults::from_env(), agent_models) {
+        for agent in
+            catalog::default_agents_with(&catalog::CatalogDefaults::from_env(), agent_models)
+        {
             sqlx::query(
                 "INSERT INTO agents (id, name, description, image, runtime_tier, model, tools, max_concurrency) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -53,7 +57,9 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
         }
     }
 
-    let providers: i64 = sqlx::query_scalar("SELECT count(*) FROM providers").fetch_one(pool).await?;
+    let providers: i64 = sqlx::query_scalar("SELECT count(*) FROM providers")
+        .fetch_one(pool)
+        .await?;
     if providers == 0 {
         for provider in catalog::default_providers() {
             sqlx::query(
@@ -71,21 +77,23 @@ async fn seed(pool: &PgPool, agent_models: &HashMap<String, String>) -> DomainRe
         }
     }
 
-    let models: i64 = sqlx::query_scalar("SELECT count(*) FROM models").fetch_one(pool).await?;
+    let models: i64 = sqlx::query_scalar("SELECT count(*) FROM models")
+        .fetch_one(pool)
+        .await?;
     if models == 0 {
         for model in catalog::default_models() {
-            sqlx::query(
-                "INSERT INTO models (id, provider_id, display_name) VALUES ($1, $2, $3)",
-            )
-            .bind(model.id.as_str())
-            .bind(model.provider_id.as_str())
-            .bind(model.display_name.as_str())
-            .execute(pool)
-            .await?;
+            sqlx::query("INSERT INTO models (id, provider_id, display_name) VALUES ($1, $2, $3)")
+                .bind(model.id.as_str())
+                .bind(model.provider_id.as_str())
+                .bind(model.display_name.as_str())
+                .execute(pool)
+                .await?;
         }
     }
 
-    let tools: i64 = sqlx::query_scalar("SELECT count(*) FROM tools").fetch_one(pool).await?;
+    let tools: i64 = sqlx::query_scalar("SELECT count(*) FROM tools")
+        .fetch_one(pool)
+        .await?;
     if tools == 0 {
         for tool in catalog::default_tools() {
             sqlx::query("INSERT INTO tools (id, description) VALUES ($1, $2)")

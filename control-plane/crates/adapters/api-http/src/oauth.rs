@@ -114,17 +114,29 @@ pub struct OAuthConfig {
 impl OAuthConfig {
     /// The authorize endpoint, honouring [`Self::base_url`] if set.
     fn resolved_authorize_url(&self) -> String {
-        resolve_url(self.base_url.as_deref(), self.provider.authorize_path, self.provider.authorize_url)
+        resolve_url(
+            self.base_url.as_deref(),
+            self.provider.authorize_path,
+            self.provider.authorize_url,
+        )
     }
 
     /// The token endpoint, honouring [`Self::base_url`] if set.
     pub fn token_url(&self) -> String {
-        resolve_url(self.base_url.as_deref(), self.provider.token_path, self.provider.token_url)
+        resolve_url(
+            self.base_url.as_deref(),
+            self.provider.token_path,
+            self.provider.token_url,
+        )
     }
 
     /// The user endpoint, honouring [`Self::base_url`] if set.
     pub fn user_url(&self) -> String {
-        resolve_url(self.base_url.as_deref(), self.provider.user_path, self.provider.user_url)
+        resolve_url(
+            self.base_url.as_deref(),
+            self.provider.user_path,
+            self.provider.user_url,
+        )
     }
 
     /// Load GitHub config from `GITHUB_OAUTH_*`.
@@ -192,7 +204,11 @@ impl OAuthConfig {
     /// (provider logins are case-insensitive).
     pub fn is_allowed(&self, login: &str) -> bool {
         let login = login.trim();
-        !login.is_empty() && self.allowed_users.iter().any(|u| u.eq_ignore_ascii_case(login))
+        !login.is_empty()
+            && self
+                .allowed_users
+                .iter()
+                .any(|u| u.eq_ignore_ascii_case(login))
     }
 
     /// The URL to redirect the browser to in order to start the flow.
@@ -362,15 +378,23 @@ impl OAuthClient {
         // GitHub: `login`. GitLab: `username`.
         match user.login.or(user.username) {
             Some(login) if !login.is_empty() => Ok(OAuthUser { login }),
-            _ => Err(OAuthError::UserFetch("no login/username in user payload".into())),
+            _ => Err(OAuthError::UserFetch(
+                "no login/username in user payload".into(),
+            )),
         }
     }
 
     /// Run the full flow: exchange the code, fetch the user, enforce the allow-list.
     /// Returns the provider login on success.
     pub async fn authenticate(&self, code: &str) -> Result<String, AuthOutcome> {
-        let token = self.exchange_code(code).await.map_err(|_| AuthOutcome::ExchangeFailed)?;
-        let user = self.fetch_user(&token).await.map_err(|_| AuthOutcome::UserFetchFailed)?;
+        let token = self
+            .exchange_code(code)
+            .await
+            .map_err(|_| AuthOutcome::ExchangeFailed)?;
+        let user = self
+            .fetch_user(&token)
+            .await
+            .map_err(|_| AuthOutcome::UserFetchFailed)?;
         if !self.config.is_allowed(&user.login) {
             return Err(AuthOutcome::NotAllowed);
         }
@@ -389,10 +413,7 @@ pub enum AuthOutcome {
 impl IdentityProvider for OAuthClient {
     /// Not used by the browser flow; validates a provider *access token* by resolving
     /// the user it belongs to and requiring that user to be allow-listed.
-    async fn validate(
-        &self,
-        token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<()> {
+    async fn validate(&self, token: &str) -> cat_herder_domain::ports::DomainResult<()> {
         let user = self.fetch_user(token).await?;
         if self.config.is_allowed(&user.login) {
             Ok(())
@@ -429,10 +450,7 @@ impl GitHubOAuth {
 }
 
 impl IdentityProvider for GitHubOAuth {
-    async fn validate(
-        &self,
-        token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<()> {
+    async fn validate(&self, token: &str) -> cat_herder_domain::ports::DomainResult<()> {
         self.0.validate(token).await
     }
 }
@@ -464,10 +482,7 @@ impl GitLabOAuth {
 }
 
 impl IdentityProvider for GitLabOAuth {
-    async fn validate(
-        &self,
-        token: &str,
-    ) -> cat_herder_domain::ports::DomainResult<()> {
+    async fn validate(&self, token: &str) -> cat_herder_domain::ports::DomainResult<()> {
         self.0.validate(token).await
     }
 }
@@ -549,7 +564,9 @@ mod tests {
         assert!(url.starts_with(GITHUB_AUTHORIZE_URL));
         assert!(url.contains("client_id=cid"));
         // The callback URL's slashes and colons must be percent-encoded.
-        assert!(url.contains("redirect_uri=https%3A%2F%2Fcat-herder.example.com%2Fv1%2Fauth%2Fgithub%2Fcallback"));
+        assert!(url.contains(
+            "redirect_uri=https%3A%2F%2Fcat-herder.example.com%2Fv1%2Fauth%2Fgithub%2Fcallback"
+        ));
         assert!(url.contains("scope=read:user"));
     }
 
@@ -566,10 +583,16 @@ mod tests {
         };
         let c = OAuthConfig::from_lookup(lookup).expect("configured");
         assert_eq!(c.client_id, "cid");
-        assert_eq!(c.allowed_users, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(
+            c.allowed_users,
+            vec!["alice".to_string(), "bob".to_string()]
+        );
 
         // Missing client secret => SSO disabled.
-        assert!(OAuthConfig::from_lookup(|k| (k != "GITHUB_OAUTH_CLIENT_SECRET").then(|| "x".into())).is_none());
+        assert!(
+            OAuthConfig::from_lookup(|k| (k != "GITHUB_OAUTH_CLIENT_SECRET").then(|| "x".into()))
+                .is_none()
+        );
     }
 
     #[test]
@@ -592,9 +615,15 @@ mod tests {
         };
         let c = OAuthConfig::from_lookup(lookup).expect("configured");
         assert_eq!(c.base_url.as_deref(), Some("https://ghe.example.com"));
-        assert_eq!(c.token_url(), "https://ghe.example.com/login/oauth/access_token");
+        assert_eq!(
+            c.token_url(),
+            "https://ghe.example.com/login/oauth/access_token"
+        );
         assert_eq!(c.user_url(), "https://ghe.example.com/user");
-        assert!(c.authorize_url().starts_with("https://ghe.example.com/login/oauth/authorize"));
+        assert!(
+            c.authorize_url()
+                .starts_with("https://ghe.example.com/login/oauth/authorize")
+        );
 
         // GitLab override keeps the /api/v4 user path.
         let gl = OAuthConfig {
@@ -608,7 +637,11 @@ mod tests {
     #[test]
     fn from_lookup_treats_blank_as_missing() {
         let lookup = |k: &str| -> Option<String> {
-            if k == "GITHUB_OAUTH_CLIENT_ID" { Some("  ".into()) } else { Some("v".into()) }
+            if k == "GITHUB_OAUTH_CLIENT_ID" {
+                Some("  ".into())
+            } else {
+                Some("v".into())
+            }
         };
         assert!(OAuthConfig::from_lookup(lookup).is_none());
     }
@@ -636,7 +669,10 @@ mod tests {
         assert_eq!(c.client_id, "gl-client");
         assert_eq!(c.client_secret, "gl-secret");
         assert_eq!(c.provider.name, "GITLAB");
-        assert_eq!(c.allowed_users, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(
+            c.allowed_users,
+            vec!["alice".to_string(), "bob".to_string()]
+        );
     }
 
     #[test]
@@ -659,20 +695,26 @@ mod tests {
     #[test]
     fn gitlab_from_lookup_requires_all_secrets() {
         // Missing client secret => GitLab SSO disabled.
-        assert!(OAuthConfig::from_lookup_for(&GITLAB, |k| {
-            (k != "GITLAB_OAUTH_CLIENT_SECRET").then(|| "x".into())
-        })
-        .is_none());
+        assert!(
+            OAuthConfig::from_lookup_for(&GITLAB, |k| {
+                (k != "GITLAB_OAUTH_CLIENT_SECRET").then(|| "x".into())
+            })
+            .is_none()
+        );
         // Missing client id => disabled.
-        assert!(OAuthConfig::from_lookup_for(&GITLAB, |k| {
-            (k != "GITLAB_OAUTH_CLIENT_ID").then(|| "x".into())
-        })
-        .is_none());
+        assert!(
+            OAuthConfig::from_lookup_for(&GITLAB, |k| {
+                (k != "GITLAB_OAUTH_CLIENT_ID").then(|| "x".into())
+            })
+            .is_none()
+        );
         // Missing redirect URL => disabled.
-        assert!(OAuthConfig::from_lookup_for(&GITLAB, |k| {
-            (k != "GITLAB_OAUTH_REDIRECT_URL").then(|| "x".into())
-        })
-        .is_none());
+        assert!(
+            OAuthConfig::from_lookup_for(&GITLAB, |k| {
+                (k != "GITLAB_OAUTH_REDIRECT_URL").then(|| "x".into())
+            })
+            .is_none()
+        );
         // Nothing configured => disabled.
         assert!(OAuthConfig::from_lookup_for(&GITLAB, |_| None).is_none());
     }
@@ -717,7 +759,9 @@ mod tests {
         let url = c.authorize_url();
         assert!(url.starts_with(GITLAB_AUTHORIZE_URL));
         assert!(url.contains("client_id=gcid"));
-        assert!(url.contains("redirect_uri=https%3A%2F%2Fcat-herder.example.com%2Fv1%2Fauth%2Fgitlab%2Fcallback"));
+        assert!(url.contains(
+            "redirect_uri=https%3A%2F%2Fcat-herder.example.com%2Fv1%2Fauth%2Fgitlab%2Fcallback"
+        ));
         assert!(url.contains("scope=read_user"));
     }
 }

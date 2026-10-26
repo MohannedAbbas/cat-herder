@@ -4,8 +4,8 @@
 use cat_herder_domain::api::{Session, SessionRun, now_iso};
 use cat_herder_domain::entities::Run;
 use cat_herder_domain::ports::{DomainResult, SessionRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::codec::{decode_kind, decode_state, encode_kind, encode_state};
 use crate::schema::PostgresStore;
@@ -25,9 +25,10 @@ impl PostgresSessionRepository {
 
 impl SessionRepository for PostgresSessionRepository {
     async fn list(&self) -> DomainResult<Vec<Session>> {
-        let rows = sqlx::query("SELECT id, title, created_at, updated_at FROM sessions ORDER BY id")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT id, title, created_at, updated_at FROM sessions ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             let id: String = row.try_get("id")?;
@@ -43,10 +44,11 @@ impl SessionRepository for PostgresSessionRepository {
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Session>> {
-        let row = sqlx::query("SELECT id, title, created_at, updated_at FROM sessions WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT id, title, created_at, updated_at FROM sessions WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -144,8 +146,8 @@ fn run_from_row(row: &PgRow) -> Result<SessionRun, sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cat_herder_domain::ports::SessionRepository;
     use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::SessionRepository;
     use std::time::SystemTime;
 
     // Live test against a real Postgres; skipped unless CAT_HERDER_TEST_DATABASE_URL set.
@@ -155,7 +157,9 @@ mod tests {
             eprintln!("skipping postgres_sessions_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new())
+            .await
+            .expect("connect");
         let repo = PostgresSessionRepository::new(&store);
         let sessions = repo.list().await.expect("list");
         assert!(!sessions.is_empty());
@@ -172,7 +176,9 @@ mod tests {
             eprintln!("skipping postgres_create_and_add_run: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new())
+            .await
+            .expect("connect");
         let repo = PostgresSessionRepository::new(&store);
 
         let id = cat_herder_domain::api::new_session_id();
@@ -207,7 +213,9 @@ mod tests {
             eprintln!("skipping postgres_sync_run: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new())
+            .await
+            .expect("connect");
         let repo = PostgresSessionRepository::new(&store);
 
         let id = cat_herder_domain::api::new_session_id();

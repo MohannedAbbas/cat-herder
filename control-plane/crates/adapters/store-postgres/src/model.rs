@@ -2,8 +2,8 @@
 
 use cat_herder_domain::api::Model;
 use cat_herder_domain::ports::{DomainResult, ModelRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::schema::PostgresStore;
 
@@ -25,7 +25,10 @@ impl ModelRepository for PostgresModelRepository {
         let rows = sqlx::query("SELECT * FROM models ORDER BY provider_id, id")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter().map(model_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(model_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Model>> {
@@ -33,7 +36,10 @@ impl ModelRepository for PostgresModelRepository {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(model_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(model_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn save(&self, model: &Model) -> DomainResult<Model> {

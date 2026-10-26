@@ -57,7 +57,10 @@ mod tests {
 
     #[test]
     fn running_becomes_succeeded_when_gone() {
-        assert_eq!(reconcile_run(RunState::Running, None), vec![RunState::Succeeded]);
+        assert_eq!(
+            reconcile_run(RunState::Running, None),
+            vec![RunState::Succeeded]
+        );
     }
 
     #[test]

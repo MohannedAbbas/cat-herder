@@ -55,7 +55,11 @@ pub struct TransitionError {
 
 impl std::fmt::Display for TransitionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid state transition {:?} -> {:?}", self.from, self.to)
+        write!(
+            f,
+            "invalid state transition {:?} -> {:?}",
+            self.from, self.to
+        )
     }
 }
 
@@ -130,7 +134,14 @@ mod tests {
 
     #[test]
     fn cancellation_from_any_nonterminal_is_valid() {
-        for from in [Queued, Scheduled, PodPending, Running, AwaitingInput, BudgetPaused] {
+        for from in [
+            Queued,
+            Scheduled,
+            PodPending,
+            Running,
+            AwaitingInput,
+            BudgetPaused,
+        ] {
             assert!(can_transition(from, Cancelled), "{from:?} -> Cancelled");
         }
     }
@@ -164,7 +175,13 @@ mod tests {
         for s in [Reviewed, Rejected, Failed, TimedOut, Cancelled, Stuck] {
             assert!(is_terminal(s), "{s:?} should be terminal");
         }
-        for s in [Running, AwaitingInput, BudgetPaused, Succeeded, AwaitingReview] {
+        for s in [
+            Running,
+            AwaitingInput,
+            BudgetPaused,
+            Succeeded,
+            AwaitingReview,
+        ] {
             assert!(!is_terminal(s), "{s:?} should not be terminal");
         }
     }

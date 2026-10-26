@@ -1,10 +1,10 @@
 //! Admin + auth HTTP handlers (see `PLAN.md` §3/§14). Everything under `/v1/admin`
 //! requires an authenticated admin session (HttpOnly cookie).
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 
@@ -49,21 +49,16 @@ pub async fn login(
     Json(creds): Json<LoginRequest>,
 ) -> Result<(StatusCode, CookieJar, Json<serde_json::Value>), (StatusCode, String)> {
     match state.auth.login(&creds.username, &creds.password).await {
-        Some(token) => {
-            Ok((
-                StatusCode::OK,
-                jar.add(session_cookie(token)),
-                Json(serde_json::json!({ "ok": true })),
-            ))
-        }
+        Some(token) => Ok((
+            StatusCode::OK,
+            jar.add(session_cookie(token)),
+            Json(serde_json::json!({ "ok": true })),
+        )),
         None => Err((StatusCode::UNAUTHORIZED, "invalid credentials".into())),
     }
 }
 
-pub async fn logout(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> (StatusCode, CookieJar) {
+pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> (StatusCode, CookieJar) {
     if let Some(c) = jar.get("session") {
         state.auth.logout(c.value()).await;
     }
@@ -543,7 +538,9 @@ pub async fn upsert_repo(
             };
             Some(encrypted.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?)
         }
-        _ => existing.as_ref().and_then(|r| r.write_token_ciphertext.clone()),
+        _ => existing
+            .as_ref()
+            .and_then(|r| r.write_token_ciphertext.clone()),
     };
 
     let entity = GitRepoEntity {
@@ -594,7 +591,10 @@ pub async fn rotate_encryption_key(
         "encryption key store not configured".to_string(),
     ))?;
 
-    let old_key = store.load().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let old_key = store
+        .load()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let old_cipher = old_key
         .as_deref()
         .map(super::crypto::AesGcmCipher::from_base64_key)
@@ -617,10 +617,12 @@ pub async fn rotate_encryption_key(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         for repo in repos {
             if let Some(ct) = &repo.token_ciphertext {
-                let plaintext =
-                    old.decrypt(ct).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-                let new_ct =
-                    new_cipher.encrypt(&plaintext).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                let plaintext = old
+                    .decrypt(ct)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                let new_ct = new_cipher
+                    .encrypt(&plaintext)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
                 let mut updated = repo.clone();
                 updated.token_ciphertext = Some(new_ct);
                 reencrypted.push(updated);
@@ -630,7 +632,10 @@ pub async fn rotate_encryption_key(
 
     // Phase 2: persist the new key FIRST — a failure here (e.g. RBAC) leaves both
     // the Secret and the stored tokens unchanged.
-    store.store(&new_key).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store
+        .store(&new_key)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Phase 3: save the re-encrypted tokens under the now-persisted new key.
     for updated in reencrypted {
@@ -644,7 +649,14 @@ pub async fn rotate_encryption_key(
     // Phase 4: make the new key the active in-memory cipher.
     *state.cipher.write().await = new_cipher;
 
-    audit(&state, &actor, "encryption-key.rotate", "settings", "encryption_key").await;
+    audit(
+        &state,
+        &actor,
+        "encryption-key.rotate",
+        "settings",
+        "encryption_key",
+    )
+    .await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -674,6 +686,13 @@ pub async fn regenerate_webhook_secret(
         .set(super::WEBHOOK_SECRET_KEY, &secret)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    audit(&state, &actor, "webhook-secret.regenerate", "settings", "webhook_secret").await;
+    audit(
+        &state,
+        &actor,
+        "webhook-secret.regenerate",
+        "settings",
+        "webhook_secret",
+    )
+    .await;
     Ok(Json(serde_json::json!({ "secret": secret })))
 }

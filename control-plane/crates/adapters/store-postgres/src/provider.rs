@@ -2,8 +2,8 @@
 
 use cat_herder_domain::api::Provider;
 use cat_herder_domain::ports::{DomainResult, ProviderRepository};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::schema::PostgresStore;
 
@@ -25,7 +25,10 @@ impl ProviderRepository for PostgresProviderRepository {
         let rows = sqlx::query("SELECT * FROM providers ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter().map(provider_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(provider_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<Provider>> {
@@ -33,7 +36,10 @@ impl ProviderRepository for PostgresProviderRepository {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(provider_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(provider_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn save(&self, provider: &Provider) -> DomainResult<Provider> {

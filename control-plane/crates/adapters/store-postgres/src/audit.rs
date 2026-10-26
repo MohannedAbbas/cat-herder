@@ -2,8 +2,8 @@
 
 use cat_herder_domain::api::{AuditEntry, now_iso};
 use cat_herder_domain::ports::{AuditRepository, DomainResult};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::schema::PostgresStore;
 
@@ -50,7 +50,10 @@ impl AuditRepository for PostgresAuditRepository {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(entry_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(entry_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 }
 

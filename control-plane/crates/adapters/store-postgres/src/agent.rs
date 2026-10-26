@@ -2,8 +2,8 @@
 
 use cat_herder_domain::api::AgentTemplate;
 use cat_herder_domain::ports::{AgentRepository, DomainResult};
-use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow};
 
 use crate::codec::{decode_tier, decode_tools, encode_tier, encode_tools};
 use crate::schema::PostgresStore;
@@ -26,7 +26,10 @@ impl AgentRepository for PostgresAgentRepository {
         let rows = sqlx::query("SELECT * FROM agents ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter().map(agent_from_row).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        rows.iter()
+            .map(agent_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: &str) -> DomainResult<Option<AgentTemplate>> {
@@ -34,7 +37,10 @@ impl AgentRepository for PostgresAgentRepository {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref().map(agent_from_row).transpose().map_err(Into::into)
+        row.as_ref()
+            .map(agent_from_row)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate> {
@@ -94,12 +100,18 @@ mod tests {
             eprintln!("skipping postgres_agents_roundtrip: CAT_HERDER_TEST_DATABASE_URL not set");
             return;
         };
-        let store = PostgresStore::connect(&url, &std::collections::HashMap::new()).await.expect("connect");
+        let store = PostgresStore::connect(&url, &std::collections::HashMap::new())
+            .await
+            .expect("connect");
         let repo = PostgresAgentRepository::new(&store);
         let agents = repo.list().await.expect("list");
         assert!(agents.iter().any(|a| a.id == "agent-codeact"));
 
-        let a = repo.get("agent-codeact").await.expect("get").expect("seeded");
+        let a = repo
+            .get("agent-codeact")
+            .await
+            .expect("get")
+            .expect("seeded");
         assert_eq!(a.tools.len(), 5);
         assert_eq!(a.runtime_tier, RuntimeTier::Default);
         assert_eq!(a.max_concurrency, 8);

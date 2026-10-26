@@ -23,6 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile_protos(&[root.join("proto/control.proto")], &[root.join("proto")])?;
 
     // Re-run the build script if the proto changes.
-    println!("cargo:rerun-if-changed={}", root.join("proto/control.proto").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("proto/control.proto").display()
+    );
     Ok(())
 }

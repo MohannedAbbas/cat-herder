@@ -78,8 +78,7 @@ impl SandboxPodConfig {
                 .unwrap_or(defaults.container_port),
             readiness_path: non_blank("CAT_HERDER_READINESS_PATH")
                 .unwrap_or(defaults.readiness_path),
-            liveness_path: non_blank("CAT_HERDER_LIVENESS_PATH")
-                .unwrap_or(defaults.liveness_path),
+            liveness_path: non_blank("CAT_HERDER_LIVENESS_PATH").unwrap_or(defaults.liveness_path),
             ephemeral_storage_request: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_REQUEST")
                 .unwrap_or(defaults.ephemeral_storage_request),
             ephemeral_storage_limit: non_blank("CAT_HERDER_EPHEMERAL_STORAGE_LIMIT")
@@ -125,7 +124,12 @@ impl SandboxRuntime {
         namespace: impl Into<String>,
         harness_image: impl Into<String>,
     ) -> DomainResult<Self> {
-        Self::new_with_client_config(client, namespace, harness_image, SandboxPodConfig::from_env())
+        Self::new_with_client_config(
+            client,
+            namespace,
+            harness_image,
+            SandboxPodConfig::from_env(),
+        )
     }
 
     /// Build from an existing client with an explicit pod-template config.
@@ -155,7 +159,10 @@ impl SandboxRuntime {
         map.clear();
         for p in providers {
             if p.enabled && !p.api_key_secret.is_empty() {
-                map.insert(p.id.clone(), (p.api_key_secret.clone(), p.api_key_secret_key.clone()));
+                map.insert(
+                    p.id.clone(),
+                    (p.api_key_secret.clone(), p.api_key_secret_key.clone()),
+                );
             }
         }
     }
@@ -179,7 +186,8 @@ impl SandboxRuntime {
     /// Falls back to `None` if there is no provider match or the read fails.
     async fn resolve_api_key(&self, run: &Run) -> Option<String> {
         let provider = run.model.as_deref()?.split(':').next()?;
-        let (secret_name, secret_key) = self.provider_secrets.read().await.get(provider).cloned()?;
+        let (secret_name, secret_key) =
+            self.provider_secrets.read().await.get(provider).cloned()?;
         let secret = self.secrets.get(&secret_name).await.ok()?;
         let data = secret.data?;
         let bytes = data.get(&secret_key)?;
@@ -196,7 +204,12 @@ impl SandboxRuntime {
         format!("run-{}", id.0)
     }
 
-    fn sandbox_object(&self, run: &Run, api_key: Option<&str>, git_token: Option<&str>) -> DynamicObject {
+    fn sandbox_object(
+        &self,
+        run: &Run,
+        api_key: Option<&str>,
+        git_token: Option<&str>,
+    ) -> DynamicObject {
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
@@ -219,8 +232,9 @@ impl SandboxRuntime {
             env.push(serde_json::json!({ "name": "REPO_URL", "value": clone_url }));
         }
         // The control plane's in-cluster URL, so the harness can report events back.
-        let control_url = std::env::var("CAT_HERDER_CONTROL_URL")
-            .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));
+        let control_url = std::env::var("CAT_HERDER_CONTROL_URL").unwrap_or_else(|_| {
+            format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace)
+        });
         env.push(serde_json::json!({ "name": "CAT_HERDER_CONTROL_URL", "value": control_url }));
 
         // The control plane's in-cluster gRPC endpoint (host:port), for the harness
@@ -230,7 +244,10 @@ impl SandboxRuntime {
                 .ok()
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(50051u16);
-            format!("cat-herder-api.{}.svc.cluster.local:{grpc_port}", self.namespace)
+            format!(
+                "cat-herder-api.{}.svc.cluster.local:{grpc_port}",
+                self.namespace
+            )
         });
         env.push(serde_json::json!({ "name": "CAT_HERDER_GRPC_URL", "value": grpc_url }));
 
@@ -319,8 +336,8 @@ impl SandboxRuntime {
 
     /// RFC-3339 deadline for the Sandbox's `shutdownTime`: now + `run_timeout_secs`.
     fn shutdown_time(&self) -> String {
-        let deadline = chrono::Utc::now()
-            + chrono::Duration::seconds(self.pod.run_timeout_secs as i64);
+        let deadline =
+            chrono::Utc::now() + chrono::Duration::seconds(self.pod.run_timeout_secs as i64);
         deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 }
@@ -345,7 +362,8 @@ impl AgentRuntime for SandboxRuntime {
             Some(obj) => {
                 let conditions = obj.data["status"]["conditions"].as_array();
                 let find = |ty: &str| {
-                    conditions.and_then(|conds| conds.iter().find(|c| c["type"].as_str() == Some(ty)))
+                    conditions
+                        .and_then(|conds| conds.iter().find(|c| c["type"].as_str() == Some(ty)))
                 };
 
                 // Ready=True is the authoritative "running/ready" signal.

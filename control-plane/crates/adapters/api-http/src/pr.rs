@@ -115,12 +115,15 @@ impl PrClient {
     pub fn from_env() -> Self {
         let mut client = Self::new();
         if let Ok(raw) = std::env::var("CAT_HERDER_GIT_API_BASES")
-            && let Ok(overrides) = serde_json::from_str::<std::collections::HashMap<String, String>>(&raw)
+            && let Ok(overrides) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(&raw)
         {
             for (host, base) in overrides {
                 let base = base.trim().trim_end_matches('/').to_string();
                 if !host.trim().is_empty() && !base.is_empty() {
-                    client.host_api_bases.insert(host.trim().to_lowercase(), base);
+                    client
+                        .host_api_bases
+                        .insert(host.trim().to_lowercase(), base);
                 }
             }
         }
@@ -161,7 +164,12 @@ impl PrClient {
         }
     }
 
-    fn auth(&self, bearer: bool, token: &str, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn auth(
+        &self,
+        bearer: bool,
+        token: &str,
+        req: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
         let req = req
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
             .header(reqwest::header::USER_AGENT, "cat-herder");
@@ -236,74 +244,182 @@ impl PrClient {
             }
         }
 
-        let tree_sha = self.git_data_create_tree(&ctx, &base_tree, &entries).await?;
-        let commit_sha = self.git_data_create_commit(&ctx, spec.title, &tree_sha, &base_sha).await?;
-        self.git_data_create_ref(&ctx, spec.head, &commit_sha).await?;
-        self.git_data_create_pull(&ctx, spec.title, spec.head, &default_branch, spec.body).await
+        let tree_sha = self
+            .git_data_create_tree(&ctx, &base_tree, &entries)
+            .await?;
+        let commit_sha = self
+            .git_data_create_commit(&ctx, spec.title, &tree_sha, &base_sha)
+            .await?;
+        self.git_data_create_ref(&ctx, spec.head, &commit_sha)
+            .await?;
+        self.git_data_create_pull(&ctx, spec.title, spec.head, &default_branch, spec.body)
+            .await
     }
 
     async fn git_data_default_branch(&self, ctx: &GitDataCtx<'_>) -> Result<String, String> {
         let url = format!("{}/repos/{}/{}", ctx.base, ctx.owner, ctx.repo);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.get(url)).send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<DefaultBranchResponse>().await.map(|r| r.default_branch).map_err(|e| e.to_string())
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.get(url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<DefaultBranchResponse>()
+            .await
+            .map(|r| r.default_branch)
+            .map_err(|e| e.to_string())
     }
 
     async fn git_data_ref(&self, ctx: &GitDataCtx<'_>, branch: &str) -> Result<String, String> {
-        let url = format!("{}/repos/{}/{}/git/ref/heads/{}", ctx.base, ctx.owner, ctx.repo, branch);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.get(url)).send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<RefResponse>().await.map(|r| r.object.sha).map_err(|e| e.to_string())
+        let url = format!(
+            "{}/repos/{}/{}/git/ref/heads/{}",
+            ctx.base, ctx.owner, ctx.repo, branch
+        );
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.get(url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<RefResponse>()
+            .await
+            .map(|r| r.object.sha)
+            .map_err(|e| e.to_string())
     }
 
-    async fn git_data_commit_tree(&self, ctx: &GitDataCtx<'_>, sha: &str) -> Result<String, String> {
-        let url = format!("{}/repos/{}/{}/git/commits/{}", ctx.base, ctx.owner, ctx.repo, sha);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.get(url)).send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<CommitResponse>().await.map(|r| r.tree.sha).map_err(|e| e.to_string())
+    async fn git_data_commit_tree(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        sha: &str,
+    ) -> Result<String, String> {
+        let url = format!(
+            "{}/repos/{}/{}/git/commits/{}",
+            ctx.base, ctx.owner, ctx.repo, sha
+        );
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.get(url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<CommitResponse>()
+            .await
+            .map(|r| r.tree.sha)
+            .map_err(|e| e.to_string())
     }
 
-    async fn git_data_create_blob(&self, ctx: &GitDataCtx<'_>, content: &str) -> Result<String, String> {
+    async fn git_data_create_blob(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        content: &str,
+    ) -> Result<String, String> {
         let url = format!("{}/repos/{}/{}/git/blobs", ctx.base, ctx.owner, ctx.repo);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.post(url))
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.post(url))
             .json(&serde_json::json!({ "content": content, "encoding": "base64" }))
-            .send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<ShaResponse>().await.map(|r| r.sha).map_err(|e| e.to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<ShaResponse>()
+            .await
+            .map(|r| r.sha)
+            .map_err(|e| e.to_string())
     }
 
-    async fn git_data_create_tree(&self, ctx: &GitDataCtx<'_>, base_tree: &str, entries: &[serde_json::Value]) -> Result<String, String> {
+    async fn git_data_create_tree(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        base_tree: &str,
+        entries: &[serde_json::Value],
+    ) -> Result<String, String> {
         let url = format!("{}/repos/{}/{}/git/trees", ctx.base, ctx.owner, ctx.repo);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.post(url))
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.post(url))
             .json(&serde_json::json!({ "base_tree": base_tree, "tree": entries }))
-            .send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<ShaResponse>().await.map(|r| r.sha).map_err(|e| e.to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<ShaResponse>()
+            .await
+            .map(|r| r.sha)
+            .map_err(|e| e.to_string())
     }
 
-    async fn git_data_create_commit(&self, ctx: &GitDataCtx<'_>, message: &str, tree: &str, parent: &str) -> Result<String, String> {
+    async fn git_data_create_commit(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        message: &str,
+        tree: &str,
+        parent: &str,
+    ) -> Result<String, String> {
         let url = format!("{}/repos/{}/{}/git/commits", ctx.base, ctx.owner, ctx.repo);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.post(url))
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.post(url))
             .json(&serde_json::json!({ "message": message, "tree": tree, "parents": [parent] }))
-            .send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<ShaResponse>().await.map(|r| r.sha).map_err(|e| e.to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<ShaResponse>()
+            .await
+            .map(|r| r.sha)
+            .map_err(|e| e.to_string())
     }
 
-    async fn git_data_create_ref(&self, ctx: &GitDataCtx<'_>, branch: &str, sha: &str) -> Result<(), String> {
+    async fn git_data_create_ref(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        branch: &str,
+        sha: &str,
+    ) -> Result<(), String> {
         let url = format!("{}/repos/{}/{}/git/refs", ctx.base, ctx.owner, ctx.repo);
-        let resp = self.auth(ctx.bearer, ctx.token, self.http.post(url))
+        let resp = self
+            .auth(ctx.bearer, ctx.token, self.http.post(url))
             .json(&serde_json::json!({ "ref": format!("refs/heads/{branch}"), "sha": sha }))
-            .send().await.map_err(|e| e.to_string())?;
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         self.expect_ok(resp).await?;
         Ok(())
     }
 
-    async fn git_data_create_pull(&self, ctx: &GitDataCtx<'_>, title: &str, head: &str, base_branch: &str, body: &str) -> Result<String, String> {
+    async fn git_data_create_pull(
+        &self,
+        ctx: &GitDataCtx<'_>,
+        title: &str,
+        head: &str,
+        base_branch: &str,
+        body: &str,
+    ) -> Result<String, String> {
         let url = format!("{}/repos/{}/{}/pulls", ctx.base, ctx.owner, ctx.repo);
         let resp = self.auth(ctx.bearer, ctx.token, self.http.post(url))
             .json(&serde_json::json!({ "title": title, "head": head, "base": base_branch, "body": body }))
             .send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<PullResponse>().await.map(|r| r.html_url).map_err(|e| e.to_string())
+        self.expect_ok(resp)
+            .await?
+            .json::<PullResponse>()
+            .await
+            .map(|r| r.html_url)
+            .map_err(|e| e.to_string())
     }
 
     // --- GitLab (commits-with-actions flow) --------------------------------
 
-    async fn gitlab_flow(&self, base: &str, path: &str, token: &str, spec: &PrSpec<'_>) -> Result<String, String> {
+    async fn gitlab_flow(
+        &self,
+        base: &str,
+        path: &str,
+        token: &str,
+        spec: &PrSpec<'_>,
+    ) -> Result<String, String> {
         // GitLab project id = URL-encoded path (group/subgroup/repo).
         let project: String = form_urlencode_path(path);
         let default_branch = self.gitlab_default_branch(base, &project, token).await?;
@@ -328,29 +444,48 @@ impl PrClient {
 
         // Create the branch + commit with all file actions in one call.
         let resp = self
-            .gitlab_req(token, self.http.post(format!("{base}/projects/{project}/repository/commits")))
+            .gitlab_req(
+                token,
+                self.http
+                    .post(format!("{base}/projects/{project}/repository/commits")),
+            )
             .json(&serde_json::json!({
                 "branch": spec.head,
                 "start_branch": default_branch,
                 "commit_message": spec.title,
                 "actions": actions,
             }))
-            .send().await.map_err(|e| e.to_string())?;
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         self.expect_ok(resp).await?;
 
         // Open the merge request.
         let resp = self
-            .gitlab_req(token, self.http.post(format!("{base}/projects/{project}/merge_requests")))
+            .gitlab_req(
+                token,
+                self.http
+                    .post(format!("{base}/projects/{project}/merge_requests")),
+            )
             .json(&serde_json::json!({
                 "source_branch": spec.head,
                 "target_branch": default_branch,
                 "title": spec.title,
                 "description": spec.body,
             }))
-            .send().await.map_err(|e| e.to_string())?;
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         #[derive(Deserialize)]
-        struct MrResponse { web_url: String }
-        self.expect_ok(resp).await?.json::<MrResponse>().await.map(|r| r.web_url).map_err(|e| e.to_string())
+        struct MrResponse {
+            web_url: String,
+        }
+        self.expect_ok(resp)
+            .await?
+            .json::<MrResponse>()
+            .await
+            .map(|r| r.web_url)
+            .map_err(|e| e.to_string())
     }
 
     fn gitlab_req(&self, token: &str, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -359,11 +494,23 @@ impl PrClient {
             .header(reqwest::header::USER_AGENT, "cat-herder")
     }
 
-    async fn gitlab_default_branch(&self, base: &str, project: &str, token: &str) -> Result<String, String> {
+    async fn gitlab_default_branch(
+        &self,
+        base: &str,
+        project: &str,
+        token: &str,
+    ) -> Result<String, String> {
         let resp = self
             .gitlab_req(token, self.http.get(format!("{base}/projects/{project}")))
-            .send().await.map_err(|e| e.to_string())?;
-        self.expect_ok(resp).await?.json::<DefaultBranchResponse>().await.map(|r| r.default_branch).map_err(|e| e.to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.expect_ok(resp)
+            .await?
+            .json::<DefaultBranchResponse>()
+            .await
+            .map(|r| r.default_branch)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -386,7 +533,9 @@ fn urlencode(input: &str) -> String {
     let mut out = String::new();
     for b in input.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -417,23 +566,38 @@ mod tests {
 
     #[test]
     fn gitlab_project_path_is_percent_encoded() {
-        assert_eq!(form_urlencode_path("group/subgroup/repo"), "group%2Fsubgroup%2Frepo");
+        assert_eq!(
+            form_urlencode_path("group/subgroup/repo"),
+            "group%2Fsubgroup%2Frepo"
+        );
         assert_eq!(form_urlencode_path("owner/repo"), "owner%2Frepo");
     }
 
     #[test]
     fn default_host_api_bases_match_public_cloud() {
         let bases = default_host_api_bases();
-        assert_eq!(bases.get("github.com").map(String::as_str), Some("https://api.github.com"));
-        assert_eq!(bases.get("gitlab.com").map(String::as_str), Some("https://gitlab.com/api/v4"));
-        assert_eq!(bases.get("codeberg.org").map(String::as_str), Some("https://codeberg.org/api/v1"));
+        assert_eq!(
+            bases.get("github.com").map(String::as_str),
+            Some("https://api.github.com")
+        );
+        assert_eq!(
+            bases.get("gitlab.com").map(String::as_str),
+            Some("https://gitlab.com/api/v4")
+        );
+        assert_eq!(
+            bases.get("codeberg.org").map(String::as_str),
+            Some("https://codeberg.org/api/v1")
+        );
     }
 
     #[test]
     fn with_host_api_base_overrides_and_strips_trailing_slash() {
-        let c = PrClient::new().with_host_api_base("GitHub.Example.com", "https://ghe.example.com/api/v3/");
+        let c = PrClient::new()
+            .with_host_api_base("GitHub.Example.com", "https://ghe.example.com/api/v3/");
         assert_eq!(
-            c.host_api_bases.get("github.example.com").map(String::as_str),
+            c.host_api_bases
+                .get("github.example.com")
+                .map(String::as_str),
             Some("https://ghe.example.com/api/v3")
         );
     }
@@ -441,8 +605,14 @@ mod tests {
     #[test]
     fn host_is_gitlab_detects_by_host_or_base() {
         assert!(host_is_gitlab("gitlab.com", "https://gitlab.com/api/v4"));
-        assert!(host_is_gitlab("git.example.com", "https://git.example.com/api/v4"));
+        assert!(host_is_gitlab(
+            "git.example.com",
+            "https://git.example.com/api/v4"
+        ));
         assert!(!host_is_gitlab("github.com", "https://api.github.com"));
-        assert!(!host_is_gitlab("codeberg.org", "https://codeberg.org/api/v1"));
+        assert!(!host_is_gitlab(
+            "codeberg.org",
+            "https://codeberg.org/api/v1"
+        ));
     }
 }

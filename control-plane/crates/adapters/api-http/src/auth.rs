@@ -157,7 +157,10 @@ mod tests {
         // SSO sessions remember the provider login; password sessions the admin user.
         let auth = Auth::new("admin", "hunter2");
         let sso = auth.create_session_for("octocat").await;
-        assert_eq!(auth.session_username(&sso).await.as_deref(), Some("octocat"));
+        assert_eq!(
+            auth.session_username(&sso).await.as_deref(),
+            Some("octocat")
+        );
         let pw = auth.login("admin", "hunter2").await.unwrap();
         assert_eq!(auth.session_username(&pw).await.as_deref(), Some("admin"));
         assert_eq!(auth.session_username("unknown").await, None);
