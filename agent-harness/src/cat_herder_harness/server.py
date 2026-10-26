@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import queue
 import subprocess
 import tempfile
 import threading
@@ -19,10 +20,18 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import grpc
+
+import control_pb2
+import control_pb2_grpc
+
 RUN_ID = os.environ.get("RUN_ID", "unknown")
 PORT = int(os.environ.get("PORT", "8080"))
 # Control-plane URL used to report run events (injected by the control plane).
 CONTROL_URL = os.environ.get("CAT_HERDER_CONTROL_URL", "").rstrip("/")
+# Control-plane gRPC endpoint (host:port) for the control channel (PLAN.md §6/§9).
+# When set, events + heartbeats stream over gRPC instead of the HTTP POST.
+GRPC_URL = os.environ.get("CAT_HERDER_GRPC_URL", "").strip()
 # The repository to clone and work on (injected from the run's `repo` field).
 REPO_URL = os.environ.get("REPO_URL", "").strip()
 # Working directory the repo is cloned into and the agent is rooted at. Overridable
@@ -117,6 +126,78 @@ def report_stuck_once() -> None:
     threading.Thread(target=lambda: report_event("stuck"), daemon=True).start()
 
 
+# --- gRPC control channel ---------------------------------------------------
+# Replaces the HTTP events POST when CAT_HERDER_GRPC_URL is set: the harness streams
+# events + a periodic heartbeat over one bidirectional gRPC stream per run (§6/§9).
+HEARTBEAT_INTERVAL_SECS = 30.0
+
+_control_channel: "ControlChannel | None" = None
+
+
+class ControlChannel:
+    """Streams run events + heartbeats to the control plane over gRPC."""
+
+    def __init__(self, grpc_url: str, run_id: int) -> None:
+        self._queue: "queue.Queue[tuple]" = queue.Queue()
+        self._run_id = run_id
+        self._channel = grpc.insecure_channel(grpc_url)
+        self._stub = control_pb2_grpc.HarnessControlStub(self._channel)
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="control-channel"
+        )
+        self._thread.start()
+
+    def send_event(
+        self,
+        event_type: str,
+        status: str | None = None,
+        report: str | None = None,
+        changes: list | None = None,
+        usage: dict | None = None,
+    ) -> None:
+        self._queue.put((event_type, status or "", report or "", changes or [], usage))
+
+    def _generator(self):
+        # The first message identifies the run.
+        yield control_pb2.HarnessMessage(register=control_pb2.Register(run_id=self._run_id))
+
+        last_heartbeat = time.monotonic()
+        while True:
+            try:
+                event_type, status, report, changes, usage = self._queue.get(timeout=1.0)
+                msg = control_pb2.Event(
+                    event_type=event_type,
+                    status=status,
+                    report=report,
+                    changes=[
+                        control_pb2.FileChange(
+                            path=c["path"],
+                            status=c["status"],
+                            content_base64=c.get("content_base64") or "",
+                        )
+                        for c in changes
+                    ],
+                )
+                if usage:
+                    msg.usage.input_tokens = int(usage.get("input_tokens", 0))
+                    msg.usage.output_tokens = int(usage.get("output_tokens", 0))
+                yield control_pb2.HarnessMessage(event=msg)
+            except queue.Empty:
+                pass
+
+            if time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL_SECS:
+                last_heartbeat = time.monotonic()
+                yield control_pb2.HarnessMessage(heartbeat=control_pb2.Heartbeat())
+
+    def _run(self) -> None:
+        try:
+            # The server -> harness direction (signals) is unused until HITL (§10).
+            for _resp in self._stub.Connect(self._generator()):
+                pass
+        except grpc.RpcError as exc:  # noqa: BLE001 — the run still completes
+            print(f"gRPC control channel error: {exc}", flush=True)
+
+
 def report_event(
     event_type: str,
     status: str | None = None,
@@ -125,6 +206,14 @@ def report_event(
     usage: dict | None = None,
 ) -> None:
     """Report a run event back to the control plane (best-effort, non-fatal)."""
+    if _control_channel is not None:
+        try:
+            _control_channel.send_event(event_type, status, report, changes, usage)
+        except Exception as exc:  # noqa: BLE001 — reporting is best-effort
+            print(f"failed to enqueue {event_type} event: {exc}", flush=True)
+        return
+
+    # HTTP fallback (no gRPC endpoint configured, e.g. local dev).
     if not CONTROL_URL:
         return
     payload: dict = {"type": event_type}
@@ -357,9 +446,24 @@ def collect_changes() -> list[dict]:
 
 
 def main() -> None:
+    global _control_channel
+
     server = ThreadingHTTPServer(("0.0.0.0", PORT), HealthHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"harness listening on :{PORT} (run_id={RUN_ID})", flush=True)
+
+    # Start the gRPC control channel (if configured) so events + heartbeats stream
+    # back to the control plane over one bidirectional stream (§6/§9).
+    if GRPC_URL:
+        run_id_int = int(RUN_ID) if RUN_ID.isdigit() else 0
+        try:
+            _control_channel = ControlChannel(GRPC_URL, run_id_int)
+            print(
+                f"gRPC control channel connected to {GRPC_URL} (run_id={RUN_ID})",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — fall back to HTTP
+            print(f"failed to start gRPC control channel: {exc}", flush=True)
 
     task_spec = os.environ.get("TASK_SPEC", "").strip()
     model = os.environ.get("MODEL", "").strip()

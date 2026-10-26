@@ -39,6 +39,8 @@ controlPlane:
   image: ghcr.io/your-org/cat-herder:0.1.0
   replicas: 1
   port: 8080
+  # gRPC control-channel port (harness -> control plane event stream, PLAN.md §6/§9).
+  grpcPort: 50051
   # Stuck-run watchdog (PLAN.md §6). The runtime adapter writes both timeouts onto
   # each run's Sandbox:
   #   - stuckTimeoutSecs -> the harness reports `stuck` (and its pod liveness probe

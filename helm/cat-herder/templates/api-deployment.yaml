@@ -53,6 +53,8 @@ spec:
                   name: {{ .Values.llmApiKeySecret }}
                   key: api-key
                   optional: true
+            - name: CAT_HERDER_GRPC_PORT
+              value: {{ .Values.controlPlane.grpcPort | quote }}
             {{- if .Values.dependencies.postgres.enabled }}
             - name: CAT_HERDER_DATABASE_URL
               valueFrom:
@@ -107,6 +109,8 @@ spec:
             {{- end }}
           ports:
             - containerPort: {{ .Values.controlPlane.port }}
+            - name: grpc
+              containerPort: {{ .Values.controlPlane.grpcPort }}
           readinessProbe:
             httpGet:
               path: /healthz

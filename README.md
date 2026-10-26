@@ -141,6 +141,8 @@ in production.**
 ## Toolchain notes
 
 - Rust 1.95+ and Python 3.12+ (via `uv`) are the primary toolchains.
-- `protoc`/`buf` is required to generate gRPC code (not yet wired into the build).
+- gRPC code is generated from `proto/control.proto` at build time: the Rust side via a
+  vendored `protoc` (no system `protoc`/`buf` needed), the Python harness via checked-in
+  stubs (`control_pb2.py` + `control_pb2_grpc.py`).
 - `helm` + `kubectl` (+ a cluster) are required to install the chart.
 - `podman` (or docker) is used to build the harness/sandbox images.

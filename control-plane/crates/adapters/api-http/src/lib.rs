@@ -26,6 +26,7 @@ use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 pub use auth::Auth;
 pub use bus::EventBusImpl;
 pub use crypto::AesGcmCipher;
+pub use grpc::{grpc_serve, grpc_server};
 pub use key_store::KeySecretStore;
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
@@ -38,6 +39,7 @@ mod admin;
 mod auth;
 mod bus;
 mod crypto;
+mod grpc;
 mod key_store;
 mod mcp;
 mod oauth;
@@ -345,13 +347,18 @@ async fn get_run_events(
     }))
 }
 
-/// Ingest a harness-reported event for a run.
-async fn post_run_event(
-    State(state): State<AppState>,
-    Path(id): Path<u64>,
-    Json(event): Json<RunEvent>,
-) -> Result<Json<RunResponse>, (StatusCode, String)> {
-    let run_id = RunId(id);
+/// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the
+/// agent-projection event, then — for `finished`/`stuck` — advances the run's lifecycle,
+/// reclaims the sandbox, and (on success with a diff) opens a PR.
+pub(crate) async fn ingest_harness_event(
+    state: &AppState,
+    run_id: RunId,
+    event_type: &str,
+    status: Option<String>,
+    report: Option<String>,
+    changes: Option<Vec<FileChange>>,
+    usage: Option<Usage>,
+) -> Result<RunResponse, (StatusCode, String)> {
     let exists = state
         .repo
         .get(run_id)
@@ -359,15 +366,8 @@ async fn post_run_event(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
 
-    match event.event_type.as_str() {
+    match event_type {
         "finished" => {
-            let RunEvent {
-                event_type: _,
-                status,
-                report,
-                changes,
-                usage,
-            } = event;
             let outcome = match status.as_deref() {
                 Some("failed") => Outcome::Failed,
                 _ => Outcome::Succeeded,
@@ -386,7 +386,7 @@ async fn post_run_event(
                     "usage": usage,
                 }),
             );
-            append_agent_event(&state, run_id, agent_event).await;
+            append_agent_event(state, run_id, agent_event).await;
 
             let run = complete_run(
                 run_id,
@@ -416,24 +416,19 @@ async fn post_run_event(
             // On success with a diff, open a PR in the background (the write token
             // lives here in the control plane, never in the sandbox).
             if outcome == Outcome::Succeeded {
-                maybe_open_pr(&state, &run, report, changes).await;
+                maybe_open_pr(state, &run, report, changes).await;
             }
 
-            Ok(Json(RunResponse::from(&run)))
+            Ok(RunResponse::from(&run))
         }
         // The harness's own stuck watchdog reports `stuck` when the agent stops making
         // progress: mark the run terminal and reclaim the sandbox (the liveness probe is
         // the kubelet-side backstop if the harness itself is too wedged to report).
         "stuck" => {
             append_agent_event(
-                &state,
+                state,
                 run_id,
-                Event::new(
-                    run_id,
-                    event_type::AGENT_STUCK,
-                    None,
-                    serde_json::Value::Null,
-                ),
+                Event::new(run_id, event_type::AGENT_STUCK, None, serde_json::Value::Null),
             )
             .await;
 
@@ -455,26 +450,39 @@ async fn post_run_event(
                 eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
             }
 
-            Ok(Json(RunResponse::from(&run)))
+            Ok(RunResponse::from(&run))
         }
         // "started" is acknowledged and recorded; any other event type is acknowledged
         // without a state change.
         "started" => {
             append_agent_event(
-                &state,
+                state,
                 run_id,
-                Event::new(
-                    run_id,
-                    event_type::AGENT_STARTED,
-                    None,
-                    serde_json::Value::Null,
-                ),
+                Event::new(run_id, event_type::AGENT_STARTED, None, serde_json::Value::Null),
             )
             .await;
-            Ok(Json(RunResponse::from(&exists)))
+            Ok(RunResponse::from(&exists))
         }
-        _ => Ok(Json(RunResponse::from(&exists))),
+        _ => Ok(RunResponse::from(&exists)),
     }
+}
+
+/// HTTP handler for `POST /v1/runs/{id}/events`.
+async fn post_run_event(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(event): Json<RunEvent>,
+) -> Result<Json<RunResponse>, (StatusCode, String)> {
+    let RunEvent {
+        event_type,
+        status,
+        report,
+        changes,
+        usage,
+    } = event;
+    let run = ingest_harness_event(&state, RunId(id), &event_type, status, report, changes, usage)
+        .await?;
+    Ok(Json(run))
 }
 
 /// Open a PR/MR from the agent's diff, if the repo has a write token and changes

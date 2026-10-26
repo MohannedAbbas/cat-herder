@@ -46,11 +46,15 @@ pod death and pause/resume at an interrupt.
   (`…/events/stream`) and the harness local-spool/async-flush (rides in with the gRPC
   control channel, step 2).
 
-- [ ] **2. Harness↔control-plane control channel over gRPC (§6, §9, §14).**
+- [x] **2. Harness↔control-plane control channel over gRPC (§6, §9, §14).**
   `proto/control.proto` is stubbed but unused; the harness speaks HTTP POST today.
   *Done when:* `StartRun`/`Signal`/`RunEvent` stream via `tonic`, replacing the HTTP
   events path; heartbeat (`/livez` → gRPC) carried on the same channel; protoc/buf
   wired into the build (README notes it isn't).
+  *Status:* ✅ bidirectional `HarnessControl.Connect` stream (tonic) — harness streams
+  `Register`/`Event`/`Heartbeat`; `Signal` reserved for HITL; vendored protoc in the
+  Rust build + checked-in Python stubs. ⬜ Remaining: the stuck-run watchdog that
+  *consumes* heartbeats (step 6).
 
 - [ ] **3. External Postgres LangGraph checkpointing + resume (§6).**
   The harness runs `create_deep_agent(...)` with no checkpointer and no resume path;

@@ -10,7 +10,7 @@ use std::time::Duration;
 use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, EventBusImpl, EventRepo, GIT_HOSTS_SETTING,
     GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient,
-    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, router,
+    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
@@ -385,7 +385,24 @@ async fn main() {
         pr_client: Arc::new(PrClient::from_env()),
     };
 
-    let app = router(state);
+    let app = router(state.clone());
+
+    // gRPC control channel (harness -> control plane, PLAN.md §6/§9/§14) on a
+    // dedicated port — tonic (h2) and axum (h1) can't share a listener.
+    let grpc_state = state;
+    let grpc_port: u16 = std::env::var("CAT_HERDER_GRPC_PORT")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(50051);
+    tokio::spawn(async move {
+        let addr = format!("0.0.0.0:{grpc_port}")
+            .parse()
+            .expect("valid gRPC bind address");
+        eprintln!("gRPC control channel listening on :{grpc_port}");
+        if let Err(e) = grpc_serve(grpc_state, addr).await {
+            eprintln!("gRPC server error: {e}");
+        }
+    });
 
     // Bind address. `PORT` is injected by the chart from `controlPlane.port` so the
     // listen port and the Service/probe targets can't drift; 8080 is the default.

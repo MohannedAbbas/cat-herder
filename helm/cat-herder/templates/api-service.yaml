@@ -13,3 +13,6 @@ spec:
     - name: http
       port: 80
       targetPort: {{ .Values.controlPlane.port }}
+    - name: grpc
+      port: {{ .Values.controlPlane.grpcPort }}
+      targetPort: {{ .Values.controlPlane.grpcPort }}

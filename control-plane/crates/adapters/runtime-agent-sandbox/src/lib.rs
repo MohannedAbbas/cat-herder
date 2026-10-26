@@ -223,6 +223,17 @@ impl SandboxRuntime {
             .unwrap_or_else(|_| format!("http://cat-herder-api.{}.svc.cluster.local", self.namespace));
         env.push(serde_json::json!({ "name": "CAT_HERDER_CONTROL_URL", "value": control_url }));
 
+        // The control plane's in-cluster gRPC endpoint (host:port), for the harness
+        // control channel (§6/§9). Defaults to the API Service's gRPC port.
+        let grpc_url = std::env::var("CAT_HERDER_GRPC_URL").unwrap_or_else(|_| {
+            let grpc_port = std::env::var("CAT_HERDER_GRPC_PORT")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(50051u16);
+            format!("cat-herder-api.{}.svc.cluster.local:{grpc_port}", self.namespace)
+        });
+        env.push(serde_json::json!({ "name": "CAT_HERDER_GRPC_URL", "value": grpc_url }));
+
         // The inactivity threshold the harness's own stuck watchdog uses (kept in lock
         // step with the pod liveness probe below via `self.pod`).
         env.push(serde_json::json!({
