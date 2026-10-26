@@ -886,6 +886,151 @@ async fn admin_delete_provider() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
+#[tokio::test]
+async fn admin_list_providers() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+    let (status, body) = authed(app, "GET", "/v1/admin/providers", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let providers: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(providers.as_array().unwrap().len() >= 3);
+}
+
+#[tokio::test]
+async fn admin_list_git_hosts_returns_defaults() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+    let (status, body) = authed(app, "GET", "/v1/admin/git-hosts", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let hosts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        hosts
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["host"] == "github.com")
+    );
+}
+
+#[tokio::test]
+async fn admin_repo_crud_roundtrip() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+
+    // Initially empty.
+    let (status, body) = authed(app.clone(), "GET", "/v1/admin/repos", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Upsert a repo with both tokens (encrypted server-side; never returned).
+    let (status, body) = authed(
+        app.clone(),
+        "PUT",
+        "/v1/admin/repos",
+        &cookie,
+        r#"{"host":"github.com","repo":"org/repo","token":"read-token","writeToken":"write-token"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], "github.com/org/repo");
+    assert_eq!(v["hasToken"], true);
+    assert_eq!(v["hasWriteToken"], true);
+    assert!(v["token"].is_null(), "tokens are never returned");
+
+    // Listed once.
+    let (status, body) = authed(app.clone(), "GET", "/v1/admin/repos", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Invalid host/repo -> 400.
+    let (status, _) = authed(
+        app.clone(),
+        "PUT",
+        "/v1/admin/repos",
+        &cookie,
+        r#"{"host":"https://github.com","repo":"org/repo"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Delete by id.
+    let (status, _) = authed(
+        app,
+        "DELETE",
+        "/v1/admin/repos?id=github.com%2Forg%2Frepo",
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn admin_rotate_encryption_key_without_store_returns_503() {
+    let app = app();
+    let (_, cookie) = login(app.clone()).await;
+    let (status, _) = authed(
+        app,
+        "POST",
+        "/v1/admin/settings/encryption-key/rotate",
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn admin_logout_and_me() {
+    let app = app();
+
+    // `me` before login -> not authenticated.
+    let (status, body) = authed(app.clone(), "GET", "/v1/auth/me", "", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["authenticated"],
+        false
+    );
+
+    let (_, cookie) = login(app.clone()).await;
+    // `me` after login -> authenticated.
+    let (status, body) = authed(app.clone(), "GET", "/v1/auth/me", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["authenticated"],
+        true
+    );
+
+    // logout -> OK.
+    let (status, _) = authed(app, "POST", "/v1/auth/logout", &cookie, "").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn oauth_callbacks_unconfigured_return_404() {
+    let app = app();
+    let (status, _) = send(app.clone(), "/v1/auth/github/callback?code=x&state=y").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(app.clone(), "/v1/auth/gitlab/login").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(app, "/v1/auth/gitlab/callback?code=x&state=y").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 // --- mcp tools -------------------------------------------------------------
 
 #[tokio::test]

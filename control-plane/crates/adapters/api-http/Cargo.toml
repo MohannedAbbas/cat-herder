@@ -35,3 +35,4 @@ protoc-bin-vendored.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
+wiremock = "0.6"

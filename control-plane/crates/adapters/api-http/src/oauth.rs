@@ -764,4 +764,135 @@ mod tests {
         ));
         assert!(url.contains("scope=read_user"));
     }
+
+    // --- HTTP flows (wiremock) ---------------------------------------------
+
+    #[tokio::test]
+    async fn exchange_code_returns_access_token() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "access_token": "tok-123" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            base_url: Some(server.uri()),
+            ..cfg(&[])
+        });
+        assert_eq!(client.exchange_code("code").await.unwrap(), "tok-123");
+    }
+
+    #[tokio::test]
+    async fn exchange_code_maps_token_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "error": "bad_verification_code" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            base_url: Some(server.uri()),
+            ..cfg(&[])
+        });
+        assert!(matches!(
+            client.exchange_code("code").await,
+            Err(OAuthError::TokenExchange(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_user_returns_login() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "login": "octocat" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            base_url: Some(server.uri()),
+            ..cfg(&[])
+        });
+        assert_eq!(client.fetch_user("tok").await.unwrap().login, "octocat");
+    }
+
+    #[tokio::test]
+    async fn authenticate_returns_login_when_allowed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "access_token": "tok" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "login": "octocat" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            base_url: Some(server.uri()),
+            ..cfg(&["octocat"])
+        });
+        assert_eq!(client.authenticate("code").await.unwrap(), "octocat");
+    }
+
+    #[tokio::test]
+    async fn authenticate_rejects_when_not_allowed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "access_token": "tok" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "login": "octocat" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            base_url: Some(server.uri()),
+            ..cfg(&["alice"])
+        });
+        assert_eq!(
+            client.authenticate("code").await,
+            Err(AuthOutcome::NotAllowed)
+        );
+    }
 }

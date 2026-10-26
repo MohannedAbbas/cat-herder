@@ -615,4 +615,149 @@ mod tests {
             "https://codeberg.org/api/v1"
         ));
     }
+
+    #[test]
+    fn create_pr_unsupported_host_errors() {
+        // A host with no configured API base is rejected.
+        let client = PrClient::new();
+        let spec = PrSpec {
+            head: "b",
+            title: "t",
+            body: "b",
+            changes: &[],
+        };
+        let err = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(client.create_pr("unknown.example.com", "token", "o/r", &spec));
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn create_pr_github_flow_returns_pull_url() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        use serde_json::json;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "default_branch": "main" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/git/ref/heads/main"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "object": { "sha": "base-sha" } })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/git/commits/base-sha"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "tree": { "sha": "base-tree" } })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/git/blobs"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "sha": "blob-sha" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/git/trees"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "sha": "tree-sha" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/git/commits"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "sha": "commit-sha" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/git/refs"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls"))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(json!({ "html_url": "https://github.com/org/repo/pull/1" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = PrClient::new().with_host_api_base("github.com", &server.uri());
+        let spec = PrSpec {
+            head: "cat-herder/run-1",
+            title: "do the thing",
+            body: "body",
+            changes: &[FileChange {
+                path: "README.md".into(),
+                status: "added".into(),
+                content_base64: Some("aGVsbG8=".into()),
+            }],
+        };
+        let url = client
+            .create_pr("github.com", "token", "org/repo", &spec)
+            .await
+            .unwrap();
+        assert_eq!(url, "https://github.com/org/repo/pull/1");
+    }
+
+    #[tokio::test]
+    async fn create_pr_gitlab_flow_returns_mr_url() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        use serde_json::json;
+        let project = "group%2Fsubgroup%2Frepo";
+
+        Mock::given(method("GET"))
+            .and(path(format!("/projects/{project}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "default_branch": "main" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/projects/{project}/repository/commits")))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/projects/{project}/merge_requests")))
+            .respond_with(ResponseTemplate::new(201).set_body_json(
+                json!({ "web_url": "https://gitlab.com/group/subgroup/repo/-/merge_requests/1" }),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PrClient::new().with_host_api_base("gitlab.com", &server.uri());
+        let spec = PrSpec {
+            head: "cat-herder/run-1",
+            title: "do the thing",
+            body: "body",
+            changes: &[FileChange {
+                path: "README.md".into(),
+                status: "added".into(),
+                content_base64: Some("aGVsbG8=".into()),
+            }],
+        };
+        let url = client
+            .create_pr("gitlab.com", "token", "group/subgroup/repo", &spec)
+            .await
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://gitlab.com/group/subgroup/repo/-/merge_requests/1"
+        );
+    }
 }
