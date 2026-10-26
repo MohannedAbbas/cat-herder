@@ -24,6 +24,9 @@ use cat_herder_domain::ports::{
     GitRepoRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
+use cat_herder_store_inmemory::{
+    InMemoryEventRepository, InMemoryRunRepository, InMemoryTransitionRepository,
+};
 
 pub use auth::Auth;
 pub use bus::EventBusImpl;
@@ -100,6 +103,12 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        // Share the in-memory run + event stores with the transition repository, so a
+        // lifecycle transition is visible through the run/event repos — matching the
+        // real composition root (see `bin/cat-herder/src/main.rs::Repos::in_memory`).
+        let run = InMemoryRunRepository::new();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(run.clone(), events.clone());
         Self {
             agents: AgentRepo::InMemory(Default::default()),
             providers: ProviderRepo::InMemory(Default::default()),
@@ -107,9 +116,9 @@ impl Default for AppState {
             tools: ToolRepo::InMemory(Default::default()),
             git_repos: GitRepoRepo::InMemory(Default::default()),
             sessions: SessionRepo::InMemory(Default::default()),
-            repo: RunRepo::InMemory(Default::default()),
-            events: EventRepo::InMemory(Default::default()),
-            transitions: TransitionRepo::InMemory(Default::default()),
+            repo: RunRepo::InMemory(run),
+            events: EventRepo::InMemory(events),
+            transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
             bus: EventBusImpl::Noop,

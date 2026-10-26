@@ -472,4 +472,56 @@ mod tests {
         assert!(!sessions.list().await.unwrap().is_empty());
         assert!(sessions.get("sess-01").await.unwrap().is_some());
     }
+
+    #[tokio::test]
+    async fn inmemory_checkpoint_repo_delegates() {
+        use cat_herder_domain::entities::Checkpoint;
+
+        let repo = CheckpointRepo::InMemory(InMemoryCheckpointRepository::default());
+        assert!(repo.latest(RunId(1)).await.unwrap().is_none());
+
+        let cp = Checkpoint {
+            run_id: RunId(1),
+            seq: 0,
+            thread_id: "1".into(),
+            checkpoint_ns: String::new(),
+            checkpoint_id: "c1".into(),
+            serde_type: "json".into(),
+            payload: b"data".to_vec(),
+            occurred_at: SystemTime::now(),
+        };
+        let stored = repo.append(RunId(1), &cp).await.unwrap();
+        assert_eq!(stored.seq, 1);
+        assert_eq!(
+            repo.latest(RunId(1)).await.unwrap().unwrap().checkpoint_id,
+            "c1"
+        );
+    }
+
+    #[tokio::test]
+    async fn inmemory_approval_repo_delegates() {
+        use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus};
+
+        let repo = ApprovalRepo::InMemory(InMemoryApprovalRepository::default());
+        let approval = ApprovalRequest {
+            id: "a1".into(),
+            run_id: RunId(1),
+            resume_token: "ckpt-1".into(),
+            payload: serde_json::json!({ "tool": "push" }),
+            status: ApprovalStatus::Pending,
+            response: None,
+            created_at: SystemTime::now(),
+            responded_at: None,
+        };
+        repo.create(&approval).await.unwrap();
+        assert_eq!(
+            repo.get("a1").await.unwrap().unwrap().status,
+            ApprovalStatus::Pending
+        );
+        let decided = repo
+            .decide("a1", ApprovalStatus::Approved, Some("ok".into()))
+            .await
+            .unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+    }
 }

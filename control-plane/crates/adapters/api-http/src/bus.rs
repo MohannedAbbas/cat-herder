@@ -48,3 +48,16 @@ impl EventBusImpl {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn noop_bus_publish_and_subscribe_are_noops() {
+        let bus = EventBusImpl::Noop;
+        let event = Event::new(RunId(1), "run.queued", None, serde_json::Value::Null);
+        assert!(bus.publish(&event).await.is_ok());
+        assert!(bus.subscribe(RunId(1)).await.is_none());
+    }
+}

@@ -257,6 +257,70 @@ async fn respond_approval_already_decided_returns_409() {
 }
 
 #[tokio::test]
+async fn respond_approval_approves_and_resumes_run() {
+    use cat_herder_domain::entities::{
+        ApprovalRequest, ApprovalStatus, Run, RunId, RunKind, RunState,
+    };
+    use cat_herder_domain::ports::{ApprovalRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    // A run paused for input + a pending approval.
+    let run = Run {
+        id: RunId(42),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingInput,
+        task_spec: "needs approval".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .approvals
+        .create(&ApprovalRequest {
+            id: "pending-1".into(),
+            run_id: RunId(42),
+            resume_token: "ckpt-1".into(),
+            payload: serde_json::json!({ "tool": "push" }),
+            status: ApprovalStatus::Pending,
+            response: None,
+            created_at: SystemTime::now(),
+            responded_at: None,
+        })
+        .await
+        .unwrap();
+
+    let (status, _) = post_json(
+        router(state.clone()),
+        "/v1/approvals/pending-1/respond",
+        r#"{"approve":true,"response":"go ahead"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The run resumed, and the decision was recorded.
+    assert_eq!(
+        state.repo.get(RunId(42)).await.unwrap().unwrap().state,
+        RunState::Running
+    );
+    let decided = state.approvals.get("pending-1").await.unwrap().unwrap();
+    assert_eq!(decided.status, ApprovalStatus::Approved);
+    assert_eq!(decided.response.as_deref(), Some("go ahead"));
+}
+
+#[tokio::test]
 async fn webhook_without_runtime_returns_503() {
     let (status, _) = post_json(
         app(),

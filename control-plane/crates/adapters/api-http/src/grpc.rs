@@ -164,38 +164,10 @@ impl HarnessControl for HarnessControlService {
                         }
                     }
                     Some(Msg::Checkpoint(cp)) => {
-                        let checkpoint = Checkpoint {
-                            run_id,
-                            seq: 0,
-                            thread_id: cp.thread_id,
-                            checkpoint_ns: cp.checkpoint_ns,
-                            checkpoint_id: cp.checkpoint_id,
-                            serde_type: cp.serde_type,
-                            payload: cp.payload,
-                            occurred_at: SystemTime::now(),
-                        };
-                        if let Err(e) = ingest_state.checkpoints.append(run_id, &checkpoint).await {
-                            eprintln!("checkpoint persist failed for run {}: {e}", run_id.0);
-                        }
+                        ingest_checkpoint(&ingest_state, run_id, cp).await;
                     }
                     Some(Msg::Interrupt(interrupt)) => {
-                        let payload: serde_json::Value = serde_json::from_str(&interrupt.payload)
-                            .unwrap_or(serde_json::Value::Null);
-                        let result = interrupt_run(
-                            run_id,
-                            interrupt.resume_token,
-                            payload,
-                            &ingest_state.approvals,
-                            &ingest_state.events,
-                            &ingest_state.repo,
-                            &ingest_state.sessions,
-                            &ingest_state.transitions,
-                            &ingest_state.bus,
-                        )
-                        .await;
-                        if let Err(e) = result {
-                            eprintln!("interrupt persist failed for run {}: {e}", run_id.0);
-                        }
+                        ingest_interrupt(&ingest_state, run_id, interrupt).await;
                     }
                     // The stuck-run watchdog (a later step) consumes heartbeats; here we
                     // just keep the channel alive and acknowledge implicitly.
@@ -216,6 +188,45 @@ impl HarnessControl for HarnessControlService {
                 rx.recv().await.map(|msg| (msg, rx))
             }));
         Ok(Response::new(out))
+    }
+}
+
+/// Persist a harness-reported interrupt: create the durable approval and advance the
+/// run to `AwaitingInput` (`PLAN.md` §10). Best-effort — errors are logged, not fatal.
+async fn ingest_interrupt(state: &AppState, run_id: RunId, interrupt: control::v1::Interrupt) {
+    let payload: serde_json::Value =
+        serde_json::from_str(&interrupt.payload).unwrap_or(serde_json::Value::Null);
+    let result = interrupt_run(
+        run_id,
+        interrupt.resume_token,
+        payload,
+        &state.approvals,
+        &state.events,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+    )
+    .await;
+    if let Err(e) = result {
+        eprintln!("interrupt persist failed for run {}: {e}", run_id.0);
+    }
+}
+
+/// Persist a harness-flushed LangGraph checkpoint (`PLAN.md` §6). Best-effort.
+async fn ingest_checkpoint(state: &AppState, run_id: RunId, cp: control::v1::Checkpoint) {
+    let checkpoint = Checkpoint {
+        run_id,
+        seq: 0,
+        thread_id: cp.thread_id,
+        checkpoint_ns: cp.checkpoint_ns,
+        checkpoint_id: cp.checkpoint_id,
+        serde_type: cp.serde_type,
+        payload: cp.payload,
+        occurred_at: SystemTime::now(),
+    };
+    if let Err(e) = state.checkpoints.append(run_id, &checkpoint).await {
+        eprintln!("checkpoint persist failed for run {}: {e}", run_id.0);
     }
 }
 
@@ -316,5 +327,145 @@ mod tests {
             }
             _ => panic!("expected a checkpoint seed"),
         }
+    }
+
+    #[tokio::test]
+    async fn control_links_routes_signal_and_unregisters() {
+        let links = ControlLinks::default();
+        let (tx, mut rx) = mpsc::channel::<Result<ControlMessage, Status>>(8);
+        links.register(RunId(7), tx).await;
+
+        // A registered run receives the signal.
+        assert!(
+            links
+                .send_signal(RunId(7), "resume", Some("ok".into()))
+                .await
+        );
+        let msg = rx.recv().await.expect("signal sent").expect("ok");
+        match msg.msg.expect("has a message") {
+            control::v1::control_message::Msg::Signal(s) => {
+                assert_eq!(s.signal, "resume");
+                assert_eq!(s.response, "ok");
+            }
+            _ => panic!("expected a signal"),
+        }
+
+        // An unregistered run has no live link.
+        assert!(!links.send_signal(RunId(8), "resume", None).await);
+
+        // After unregister, the link is gone.
+        links.unregister(RunId(7)).await;
+        assert!(!links.send_signal(RunId(7), "resume", None).await);
+    }
+
+    #[tokio::test]
+    async fn ingest_interrupt_creates_approval_and_awaits_input() {
+        use cat_herder_domain::entities::{Run, RunKind, RunState};
+        use cat_herder_domain::ports::{EventRepository, RunRepository};
+
+        let state = AppState::default();
+        let run = Run {
+            id: RunId(42),
+            kind: RunKind::Agent,
+            state: RunState::Running,
+            task_spec: "interrupt me".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            started_at: None,
+            finished_at: None,
+            pr_url: None,
+            report: None,
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        state.repo.save(&run).await.unwrap();
+
+        ingest_interrupt(
+            &state,
+            RunId(42),
+            control::v1::Interrupt {
+                resume_token: "ckpt-1".into(),
+                payload: r#"{"tool":"push"}"#.into(),
+            },
+        )
+        .await;
+
+        // The run paused for input, and the approval + its event were recorded.
+        assert_eq!(
+            state.repo.get(RunId(42)).await.unwrap().unwrap().state,
+            RunState::AwaitingInput
+        );
+        let types: Vec<String> = state
+            .events
+            .list(RunId(42), 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"approval.requested".to_string()));
+        assert!(types.contains(&"run.awaiting_input".to_string()));
+    }
+
+    #[tokio::test]
+    async fn ingest_checkpoint_persists_checkpoint() {
+        use cat_herder_domain::ports::CheckpointRepository;
+
+        let state = AppState::default();
+        ingest_checkpoint(
+            &state,
+            RunId(9),
+            control::v1::Checkpoint {
+                thread_id: "9".into(),
+                checkpoint_ns: String::new(),
+                checkpoint_id: "c9".into(),
+                serde_type: "json".into(),
+                payload: b"data".to_vec(),
+            },
+        )
+        .await;
+
+        let latest = state.checkpoints.latest(RunId(9)).await.unwrap().unwrap();
+        assert_eq!(latest.checkpoint_id, "c9");
+        assert_eq!(latest.payload, b"data");
+    }
+
+    #[test]
+    fn proto_conversion_helpers() {
+        assert_eq!(empty_to_none(String::new()), None);
+        assert_eq!(empty_to_none("x".into()), Some("x".into()));
+
+        let fc = to_file_change(control::v1::FileChange {
+            path: "a".into(),
+            status: "modified".into(),
+            content_base64: String::new(),
+        });
+        assert_eq!(fc.path, "a");
+        assert_eq!(fc.content_base64, None);
+
+        let usage = to_usage(control::v1::Usage {
+            input_tokens: 3,
+            output_tokens: 4,
+        });
+        assert_eq!((usage.input_tokens, usage.output_tokens), (3, 4));
+
+        let proto = to_proto_checkpoint(&Checkpoint {
+            run_id: RunId(1),
+            seq: 0,
+            thread_id: "1".into(),
+            checkpoint_ns: String::new(),
+            checkpoint_id: "c".into(),
+            serde_type: "json".into(),
+            payload: b"p".to_vec(),
+            occurred_at: SystemTime::now(),
+        });
+        assert_eq!(proto.checkpoint_id, "c");
+        assert_eq!(proto.payload, b"p");
     }
 }
