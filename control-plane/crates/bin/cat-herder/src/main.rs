@@ -8,25 +8,27 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, EventBusImpl, EventRepo, GIT_HOSTS_SETTING,
-    GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient,
-    ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    AesGcmCipher, AgentRepo, AppState, AuditRepo, Auth, CheckpointRepo, EventBusImpl, EventRepo,
+    GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo,
+    OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_once;
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{GitRepoRepository, ProviderRepository, SettingRepository};
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
-    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryEventRepository,
-    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
-    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryAgentRepository, InMemoryAuditRepository, InMemoryCheckpointRepository,
+    InMemoryEventRepository, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::NatsEventBus;
 use cat_herder_store_postgres::{
-    PostgresAgentRepository, PostgresAuditRepository, PostgresEventRepository,
-    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
-    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository, PostgresStore,
-    PostgresToolRepository, PostgresTransitionRepository,
+    PostgresAgentRepository, PostgresAuditRepository, PostgresCheckpointRepository,
+    PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
+    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresSettingRepository, PostgresStore, PostgresToolRepository, PostgresTransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -93,6 +95,7 @@ struct Repos {
     run: RunRepo,
     events: EventRepo,
     transitions: TransitionRepo,
+    checkpoints: CheckpointRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -114,6 +117,7 @@ impl Repos {
             run: RunRepo::InMemory(run),
             events: EventRepo::InMemory(events),
             transitions: TransitionRepo::InMemory(transitions),
+            checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -146,6 +150,9 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     run: RunRepo::Postgres(PostgresRunRepository::new(&store)),
                     events: EventRepo::Postgres(PostgresEventRepository::new(&store)),
                     transitions: TransitionRepo::Postgres(PostgresTransitionRepository::new(
+                        &store,
+                    )),
+                    checkpoints: CheckpointRepo::Postgres(PostgresCheckpointRepository::new(
                         &store,
                     )),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
@@ -366,6 +373,7 @@ async fn main() {
         repo: repos.run,
         events: repos.events,
         transitions: repos.transitions,
+        checkpoints: repos.checkpoints,
         bus,
         agents: repos.agents,
         providers: repos.providers,

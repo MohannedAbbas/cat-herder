@@ -6,6 +6,7 @@
 
 mod agent;
 mod audit;
+mod checkpoint;
 mod codec;
 mod event;
 mod git_repo;
@@ -20,6 +21,7 @@ mod transition;
 
 pub use agent::PostgresAgentRepository;
 pub use audit::PostgresAuditRepository;
+pub use checkpoint::PostgresCheckpointRepository;
 pub use event::PostgresEventRepository;
 pub use git_repo::PostgresGitRepoRepository;
 pub use model::PostgresModelRepository;

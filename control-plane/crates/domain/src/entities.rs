@@ -80,6 +80,22 @@ pub struct Run {
     pub output_tokens: u64,
 }
 
+/// A LangGraph checkpoint flushed by the harness and persisted opaquely by the control
+/// plane (`PLAN.md` §6, `docs/design/checkpointing.md`). `seq` is the per-run monotonic
+/// order assigned by the control plane (sole writer); `payload` is the serialized
+/// `CheckpointTuple` (opaque — the control plane never parses LangGraph internals).
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    pub run_id: RunId,
+    pub seq: i64,
+    pub thread_id: String,
+    pub checkpoint_ns: String,
+    pub checkpoint_id: String,
+    pub serde_type: String,
+    pub payload: Vec<u8>,
+    pub occurred_at: SystemTime,
+}
+
 /// Result-review decision (see `PLAN.md` §10).
 #[derive(Debug, Clone)]
 pub struct ReviewDecision {

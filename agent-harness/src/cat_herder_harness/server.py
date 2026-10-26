@@ -135,13 +135,17 @@ _control_channel: "ControlChannel | None" = None
 
 
 class ControlChannel:
-    """Streams run events + heartbeats to the control plane over gRPC."""
+    """Streams run events + checkpoints + heartbeats to the control plane over gRPC,
+    and receives the resume-seed checkpoint back (§6/§9, docs/design/checkpointing.md)."""
 
     def __init__(self, grpc_url: str, run_id: int) -> None:
-        self._queue: "queue.Queue[tuple]" = queue.Queue()
+        self._queue: "queue.Queue[control_pb2.HarnessMessage]" = queue.Queue()
         self._run_id = run_id
         self._channel = grpc.insecure_channel(grpc_url)
         self._stub = control_pb2_grpc.HarnessControlStub(self._channel)
+        # The resume seed (latest checkpoint) the control plane sends after Register.
+        self._seed_event = threading.Event()
+        self._seed: "tuple[str, str, str, str, bytes] | None" = None
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="control-channel"
         )
@@ -155,7 +159,46 @@ class ControlChannel:
         changes: list | None = None,
         usage: dict | None = None,
     ) -> None:
-        self._queue.put((event_type, status or "", report or "", changes or [], usage))
+        msg = control_pb2.HarnessMessage()
+        ev = msg.event
+        ev.event_type = event_type
+        ev.status = status or ""
+        ev.report = report or ""
+        for c in changes or []:
+            fc = ev.changes.add()
+            fc.path = c["path"]
+            fc.status = c["status"]
+            fc.content_base64 = c.get("content_base64") or ""
+        if usage:
+            ev.usage.input_tokens = int(usage.get("input_tokens", 0))
+            ev.usage.output_tokens = int(usage.get("output_tokens", 0))
+        self._queue.put(msg)
+
+    def send_checkpoint(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        serde_type: str,
+        payload: bytes,
+    ) -> None:
+        msg = control_pb2.HarnessMessage()
+        cp = msg.checkpoint
+        cp.thread_id = thread_id
+        cp.checkpoint_ns = checkpoint_ns
+        cp.checkpoint_id = checkpoint_id
+        cp.serde_type = serde_type
+        cp.payload = payload
+        self._queue.put(msg)
+
+    def wait_for_seed(self, timeout: float = 30.0) -> "tuple[str, str, str, str, bytes] | None":
+        """Block until the control plane's resume seed arrives (or timeout).
+
+        Returns `(thread_id, checkpoint_ns, checkpoint_id, serde_type, payload)` when a
+        checkpoint exists to resume from, else `None` (fresh run).
+        """
+        self._seed_event.wait(timeout)
+        return self._seed
 
     def _generator(self):
         # The first message identifies the run.
@@ -164,24 +207,8 @@ class ControlChannel:
         last_heartbeat = time.monotonic()
         while True:
             try:
-                event_type, status, report, changes, usage = self._queue.get(timeout=1.0)
-                msg = control_pb2.Event(
-                    event_type=event_type,
-                    status=status,
-                    report=report,
-                    changes=[
-                        control_pb2.FileChange(
-                            path=c["path"],
-                            status=c["status"],
-                            content_base64=c.get("content_base64") or "",
-                        )
-                        for c in changes
-                    ],
-                )
-                if usage:
-                    msg.usage.input_tokens = int(usage.get("input_tokens", 0))
-                    msg.usage.output_tokens = int(usage.get("output_tokens", 0))
-                yield control_pb2.HarnessMessage(event=msg)
+                msg = self._queue.get(timeout=1.0)
+                yield msg
             except queue.Empty:
                 pass
 
@@ -191,11 +218,28 @@ class ControlChannel:
 
     def _run(self) -> None:
         try:
-            # The server -> harness direction (signals) is unused until HITL (§10).
-            for _resp in self._stub.Connect(self._generator()):
-                pass
+            responses = self._stub.Connect(self._generator())
+            got_seed = False
+            for resp in responses:
+                if not got_seed:
+                    got_seed = True
+                    if resp.WhichOneof("msg") == "checkpoint" and resp.checkpoint.checkpoint_id:
+                        cp = resp.checkpoint
+                        self._seed = (
+                            cp.thread_id,
+                            cp.checkpoint_ns,
+                            cp.checkpoint_id,
+                            cp.serde_type,
+                            cp.payload,
+                        )
+                    self._seed_event.set()
+                # The Signal direction (pause/resume/cancel) is unused until HITL (§10).
         except grpc.RpcError as exc:  # noqa: BLE001 — the run still completes
             print(f"gRPC control channel error: {exc}", flush=True)
+        finally:
+            # Ensure callers waiting on the seed don't block forever if the channel
+            # errors before the seed arrives.
+            self._seed_event.set()
 
 
 def report_event(
@@ -349,8 +393,18 @@ def clone_repo(repo_url: str) -> bool:
         return False
 
 
-def run_agent(task_spec: str, model: str) -> str:
-    """Run a Deep Agents agent on the task and return its final message."""
+def run_agent(
+    task_spec: str,
+    model: str,
+    checkpointer=None,
+    resume: bool = False,
+) -> str:
+    """Run a Deep Agents agent on the task and return its final message.
+
+    When `checkpointer` is set, the agent's LangGraph state is checkpointed on
+    `thread_id = RUN_ID` (flushed to the control plane). `resume=True` continues from
+    the last checkpoint (no new input) instead of starting a fresh run.
+    """
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
 
@@ -372,15 +426,17 @@ def run_agent(task_spec: str, model: str) -> str:
         model=model,
         system_prompt="You are a coding agent.",
         backend=backend,
+        checkpointer=checkpointer,
     )
+    config = {"configurable": {"thread_id": RUN_ID}}
     # Stream so we can heartbeat progress; the stuck watchdog's `/livez` reads the
     # last-activity timestamp we bump on each yielded chunk.
     mark_activity()
     result: dict = {}
-    for chunk in agent.stream(
-        {"messages": [{"role": "user", "content": task_spec}]},
-        stream_mode="values",
-    ):
+    # Resume from the last checkpoint (no new input) when a seed was restored;
+    # otherwise start a fresh run with the task spec.
+    initial = None if resume else {"messages": [{"role": "user", "content": task_spec}]}
+    for chunk in agent.stream(initial, config=config, stream_mode="values"):
         mark_activity()
         record_usage(chunk)
         result = chunk
@@ -486,10 +542,30 @@ def main() -> None:
     if REPO_URL:
         clone_repo(REPO_URL)
 
+    # Checkpointing (§6, docs/design/checkpointing.md): the agent's LangGraph state is
+    # checkpointed locally and flushed to the control plane over the gRPC channel. On a
+    # re-created pod the control plane returns the latest checkpoint (the resume seed)
+    # and we resume from it. Import lazily so the health server is up before langgraph.
+    from checkpoint_saver import RemoteCheckpointSaver
+
+    saver = None
+    resume = False
+    if _control_channel is not None:
+        seed = _control_channel.wait_for_seed()
+        saver = RemoteCheckpointSaver(_control_channel.send_checkpoint)
+        if seed is not None:
+            thread_id, checkpoint_ns, checkpoint_id, serde_type, payload = seed
+            saver.seed(thread_id, checkpoint_ns, checkpoint_id, serde_type, payload)
+            resume = True
+            print(f"resuming run {RUN_ID} from checkpoint {checkpoint_id}", flush=True)
+    else:
+        # No control channel (local dev / HTTP fallback): checkpoint locally only.
+        saver = RemoteCheckpointSaver(lambda *_: None)
+
     report_event("started")
     set_agent_running(True)
     try:
-        result = run_agent(task_spec, model)
+        result = run_agent(task_spec, model, checkpointer=saver, resume=resume)
         print(f"agent completed: {result}", flush=True)
         changes = collect_changes()
         usage = {"input_tokens": _usage_input, "output_tokens": _usage_output}

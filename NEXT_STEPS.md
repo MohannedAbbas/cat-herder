@@ -56,12 +56,21 @@ pod death and pause/resume at an interrupt.
   Rust build + checked-in Python stubs. ⬜ Remaining: the stuck-run watchdog that
   *consumes* heartbeats (step 6).
 
-- [ ] **3. External Postgres LangGraph checkpointing + resume (§6).**
+- [x] **3. External Postgres LangGraph checkpointing + resume (§6).**
   The harness runs `create_deep_agent(...)` with no checkpointer and no resume path;
   the workspace is pod-local `/repo`. A crash loses everything.
   *Done when:* the harness attaches a Postgres-backed checkpointer (via the control
   plane — pod has no DB creds), flushes checkpoints on the control channel, and a
   re-created pod resumes from the last checkpoint.
+  *Status:* ✅ the harness attaches a `RemoteCheckpointSaver` (in-memory local buffer +
+  `JsonPlusSerializer` serialization) that flushes each checkpoint over the gRPC control
+  channel; the control plane persists checkpoints opaquely in Postgres (migration
+  `0022`/`0023`, `CheckpointRepository` port) as the sole writer; on `Register` it sends
+  the latest checkpoint back as the resume seed and the re-created pod resumes from it
+  (`thread_id = run_id`, `None` input). Pending writes round-trip, so HITL (#4) builds on
+  this. See `docs/design/checkpointing.md`. ⬜ Remaining: the workspace/file edits are
+  still pod-local `/repo` — that is the durable-workspace slice, item #5 (not this item).
+  Not yet exercised end-to-end against a live cluster/LLM.
 
 - [ ] **4. HITL: interrupts → durable `ApprovalRequest` → resume (§10).**
   `AwaitingInput` exists in the state machine but nothing produces it. No approval

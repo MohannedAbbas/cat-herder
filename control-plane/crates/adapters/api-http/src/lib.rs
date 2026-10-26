@@ -31,8 +31,8 @@ pub use key_store::KeySecretStore;
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
-    AgentRepo, AuditRepo, EventRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo,
-    SettingRepo, ToolRepo, TransitionRepo,
+    AgentRepo, AuditRepo, CheckpointRepo, EventRepo, GitRepoRepo, ModelRepo, ProviderRepo, RunRepo,
+    SessionRepo, SettingRepo, ToolRepo, TransitionRepo,
 };
 
 mod admin;
@@ -67,6 +67,7 @@ pub struct AppState {
     pub repo: RunRepo,
     pub events: EventRepo,
     pub transitions: TransitionRepo,
+    pub checkpoints: CheckpointRepo,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -104,6 +105,7 @@ impl Default for AppState {
             repo: RunRepo::InMemory(Default::default()),
             events: EventRepo::InMemory(Default::default()),
             transitions: TransitionRepo::InMemory(Default::default()),
+            checkpoints: CheckpointRepo::InMemory(Default::default()),
             bus: EventBusImpl::Noop,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
@@ -428,7 +430,12 @@ pub(crate) async fn ingest_harness_event(
             append_agent_event(
                 state,
                 run_id,
-                Event::new(run_id, event_type::AGENT_STUCK, None, serde_json::Value::Null),
+                Event::new(
+                    run_id,
+                    event_type::AGENT_STUCK,
+                    None,
+                    serde_json::Value::Null,
+                ),
             )
             .await;
 
@@ -458,7 +465,12 @@ pub(crate) async fn ingest_harness_event(
             append_agent_event(
                 state,
                 run_id,
-                Event::new(run_id, event_type::AGENT_STARTED, None, serde_json::Value::Null),
+                Event::new(
+                    run_id,
+                    event_type::AGENT_STARTED,
+                    None,
+                    serde_json::Value::Null,
+                ),
             )
             .await;
             Ok(RunResponse::from(&exists))
@@ -480,8 +492,16 @@ async fn post_run_event(
         changes,
         usage,
     } = event;
-    let run = ingest_harness_event(&state, RunId(id), &event_type, status, report, changes, usage)
-        .await?;
+    let run = ingest_harness_event(
+        &state,
+        RunId(id),
+        &event_type,
+        status,
+        report,
+        changes,
+        usage,
+    )
+    .await?;
     Ok(Json(run))
 }
 

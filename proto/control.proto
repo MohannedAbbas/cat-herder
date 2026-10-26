@@ -20,6 +20,7 @@ message HarnessMessage {
     Register register = 1;
     Event event = 2;
     Heartbeat heartbeat = 3;
+    Checkpoint checkpoint = 4;
   }
 }
 
@@ -59,10 +60,26 @@ message Usage {
 // watchdog consumes this; a run with no heartbeat/event within its timeout is Stuck.
 message Heartbeat {}
 
+// A LangGraph checkpoint flushed by the harness (PLAN.md §6, NEXT_STEPS #3). The
+// control plane stores it opaquely; `serde_type` + `payload` are the output of
+// LangGraph's JsonPlusSerializer.dumps_typed on the full CheckpointTuple.
+message Checkpoint {
+  string thread_id = 1;
+  string checkpoint_ns = 2;
+  string checkpoint_id = 3;
+  // "json" | "msgpack" (the JsonPlusSerializer.dumps_typed tag).
+  string serde_type = 4;
+  // Serialized CheckpointTuple (opaque to the control plane).
+  bytes payload = 5;
+}
+
 // Control plane -> harness.
 message ControlMessage {
   oneof msg {
     Signal signal = 1;
+    // Sent once after Register: the latest checkpoint for the run (resume seed), or an
+    // empty Checkpoint (empty checkpoint_id) meaning a fresh run.
+    Checkpoint checkpoint = 2;
   }
 }
 

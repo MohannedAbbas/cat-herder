@@ -9,12 +9,12 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool, now_iso,
 };
 use cat_herder_domain::catalog;
-use cat_herder_domain::entities::{GitRepo, Run, RunId};
+use cat_herder_domain::entities::{Checkpoint, GitRepo, Run, RunId};
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, AuditRepository, DomainResult, EventRepository, GitRepoRepository,
-    ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
-    ToolRepository, TransitionRepository,
+    AgentRepository, AuditRepository, CheckpointRepository, DomainResult, EventRepository,
+    GitRepoRepository, ModelRepository, ProviderRepository, RunRepository, SessionRepository,
+    SettingRepository, ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -117,6 +117,34 @@ impl TransitionRepository for InMemoryTransitionRepository {
         stored_event.run_id = stored_run.id;
         let stored_event = self.events.append(stored_run.id, &stored_event).await?;
         Ok((stored_run, stored_event))
+    }
+}
+
+/// In-memory LangGraph checkpoint store (per-run `seq`-ordered, append-only).
+#[derive(Clone, Default)]
+pub struct InMemoryCheckpointRepository {
+    inner: Arc<RwLock<HashMap<RunId, Vec<Checkpoint>>>>,
+}
+
+impl CheckpointRepository for InMemoryCheckpointRepository {
+    async fn append(&self, run_id: RunId, checkpoint: &Checkpoint) -> DomainResult<Checkpoint> {
+        let mut map = self.inner.write().await;
+        let seq = map.get(&run_id).map(|v| v.len() as i64).unwrap_or(0) + 1;
+        let stored = Checkpoint {
+            run_id,
+            seq,
+            ..checkpoint.clone()
+        };
+        map.entry(run_id).or_default().push(stored.clone());
+        Ok(stored)
+    }
+
+    async fn latest(&self, run_id: RunId) -> DomainResult<Option<Checkpoint>> {
+        let map = self.inner.read().await;
+        Ok(map
+            .get(&run_id)
+            .and_then(|v| v.iter().max_by_key(|c| c.seq))
+            .cloned())
     }
 }
 
@@ -513,6 +541,31 @@ mod tests {
         assert_ne!(saved.id, RunId(0));
         let got = repo.get(saved.id).await.unwrap().unwrap();
         assert_eq!(got.id, saved.id);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_append_assigns_seq_and_latest_returns_newest() {
+        let repo = InMemoryCheckpointRepository::default();
+        assert!(repo.latest(RunId(1)).await.unwrap().is_none());
+
+        let mk = |id: &str| Checkpoint {
+            run_id: RunId(1),
+            seq: 0,
+            thread_id: "1".into(),
+            checkpoint_ns: String::new(),
+            checkpoint_id: id.into(),
+            serde_type: "json".into(),
+            payload: vec![1, 2, 3],
+            occurred_at: std::time::SystemTime::now(),
+        };
+        let first = repo.append(RunId(1), &mk("c1")).await.unwrap();
+        assert_eq!(first.seq, 1);
+        let second = repo.append(RunId(1), &mk("c2")).await.unwrap();
+        assert_eq!(second.seq, 2);
+
+        let latest = repo.latest(RunId(1)).await.unwrap().unwrap();
+        assert_eq!(latest.checkpoint_id, "c2");
+        assert_eq!(latest.seq, 2);
     }
 
     #[tokio::test]

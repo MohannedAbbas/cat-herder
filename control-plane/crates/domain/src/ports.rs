@@ -5,7 +5,7 @@
 //! per `PLAN.md` §5.
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
-use crate::entities::{GitRepo, Run, RunId, RunState};
+use crate::entities::{Checkpoint, GitRepo, Run, RunId, RunState};
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
 
@@ -132,6 +132,16 @@ pub trait EventRepository {
     async fn append(&self, run_id: RunId, event: &Event) -> DomainResult<Event>;
     /// Replay events for a run strictly after `after_seq`, ascending, capped at `limit`.
     async fn list(&self, run_id: RunId, after_seq: i64, limit: i64) -> DomainResult<Vec<Event>>;
+}
+
+/// Durable LangGraph checkpoint store (`PLAN.md` §6). The control plane is the sole
+/// writer; `append` assigns the per-run monotonic `seq`. The payload is opaque — the
+/// control plane persists the harness's serialized `CheckpointTuple` without parsing it.
+pub trait CheckpointRepository {
+    /// Persist `checkpoint` for `run_id`, assigning `seq`. Returns the stored checkpoint.
+    async fn append(&self, run_id: RunId, checkpoint: &Checkpoint) -> DomainResult<Checkpoint>;
+    /// The latest checkpoint for a run (highest `seq`), or `None`.
+    async fn latest(&self, run_id: RunId) -> DomainResult<Option<Checkpoint>>;
 }
 
 /// Fan-out transport for events (`PLAN.md` §9) — e.g. NATS JetStream. Best-effort:
