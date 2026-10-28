@@ -37,7 +37,11 @@ pub trait TriggerSource {
 
 /// Outbound (driven): create/watch/signal/terminate agent executions.
 pub trait AgentRuntime {
-    async fn spawn(&self, run: &Run) -> DomainResult<()>;
+    /// Spawn the execution for `run`. `git_token` is an already-minted credential the
+    /// runtime injects into the pod (out-of-band, e.g. `GIT_TOKEN` → git askpass);
+    /// `None` means no broker-minted credential is available (the runtime may fall back
+    /// to a registered repo token, or none for public repos).
+    async fn spawn(&self, run: &Run, git_token: Option<&str>) -> DomainResult<()>;
     /// Report the execution's current status (`None` = gone).
     async fn status(&self, id: RunId) -> DomainResult<Option<RuntimeStatus>>;
     async fn signal(&self, id: RunId, state: RunState) -> DomainResult<()>;
@@ -231,6 +235,9 @@ pub trait CredentialBroker {
     ) -> DomainResult<MintedCredential>;
     /// Revoke a previously minted grant, marking it `Revoked`.
     async fn revoke(&self, run: RunId, grant_id: &str) -> DomainResult<()>;
+    /// Revoke every active grant for a run (terminal teardown). Idempotent: a run with
+    /// no active grants is a no-op.
+    async fn revoke_run(&self, run: RunId) -> DomainResult<()>;
 }
 
 /// Persistence for minted credential grants (`PLAN.md` §11.3). The materialized secret

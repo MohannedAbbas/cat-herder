@@ -196,6 +196,21 @@ oauth:
     enabled: true
     username: dev-user
 
+# JIT credential broker (PLAN.md §11.3). When a GitHub App is configured the control
+# plane mints short-lived (~1h), App-scoped installation tokens on demand for a run's
+# repo (clone/push) instead of injecting a long-lived user PAT. The App's private key
+# lives only in the control-plane trust boundary (never in a sandbox); it is read from
+# the Secret named in `secret` (key `private-key`). When disabled, runs fall back to a
+# registered repo token (or public repos), and no broker credentials are minted.
+broker:
+  github:
+    enabled: false
+    # The GitHub App's numeric id and its private key Secret (PEM, key `private-key`).
+    appId: ""
+    secret: cat-herder-github-app
+    # API base (defaults to the public GitHub API; override for GHE).
+    apiBase: ""
+
 ingress:
   enabled: false
   className: traefik

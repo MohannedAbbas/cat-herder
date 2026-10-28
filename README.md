@@ -74,6 +74,8 @@ The control plane is configured via environment variables:
 | `GITLAB_OAUTH_ALLOWED_USERS` | Comma-separated GitLab usernames allowed to become admin. |
 | `CAT_HERDER_OAUTH_MOCK` | Dev-only: when truthy (`true`/`1`/`yes`/`on`), pretend both SSO providers are configured and skip the provider redirect (see below). Default false. **Never enable in production.** |
 | `CAT_HERDER_OAUTH_MOCK_USERNAME` | Mock SSO username issued in mock mode (default `dev-user`). |
+| `CAT_HERDER_GITHUB_APP_ID` / `CAT_HERDER_GITHUB_APP_PRIVATE_KEY` | GitHub App credentials for the JIT credential broker (§11.3). When both are set, the control plane mints short-lived installation tokens for a run's repo instead of injecting a long-lived PAT. |
+| `CAT_HERDER_GITHUB_API_BASE` | Optional API base for the broker (default `https://api.github.com`; override for GitHub Enterprise). |
 
 ### GitHub OAuth SSO
 

@@ -343,9 +343,14 @@ impl SandboxRuntime {
 }
 
 impl AgentRuntime for SandboxRuntime {
-    async fn spawn(&self, run: &Run) -> DomainResult<()> {
+    async fn spawn(&self, run: &Run, git_token: Option<&str>) -> DomainResult<()> {
         let api_key = self.resolve_api_key(run).await;
-        let git_token = self.resolve_git_token(run).await;
+        // A broker-minted credential (passed in) wins; otherwise fall back to the
+        // registered repo token (legacy long-lived PAT path) for hosts without a broker.
+        let git_token = match git_token.map(str::to_owned) {
+            Some(t) if !t.is_empty() => Some(t),
+            _ => self.resolve_git_token(run).await,
+        };
         self.api
             .create(
                 &PostParams::default(),

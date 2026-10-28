@@ -157,6 +157,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 &state.sessions,
                 &state.transitions,
                 &state.bus,
+                &state.broker,
             )
             .await
             {

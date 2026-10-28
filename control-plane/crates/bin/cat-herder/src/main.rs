@@ -8,12 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, CheckpointRepo, ControlLinks,
-    CredentialGrantRepo, EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth,
-    GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo, RunRepo,
-    SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, Broker, CheckpointRepo,
+    ControlLinks, CredentialGrantRepo, EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth,
+    GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo,
+    RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
+use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
+use cat_herder_credentials_github::{GitHubApp, GitHubAppConfig};
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{
     DomainResult, GitRepoRepository, LeaseManager, ProviderRepository, SettingRepository,
@@ -135,6 +137,48 @@ async fn ensure_git_hosts(
             .await?;
     }
     Ok(())
+}
+
+/// The GitHub App config for the JIT credential broker, from the environment. `None`
+/// when the App id/private key are not both configured (the broker then mints nothing).
+fn github_app_config() -> Option<GitHubAppConfig> {
+    let app_id = std::env::var("CAT_HERDER_GITHUB_APP_ID")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())?;
+    let private_key_pem = std::env::var("CAT_HERDER_GITHUB_APP_PRIVATE_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let api_base = std::env::var("CAT_HERDER_GITHUB_API_BASE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://api.github.com".into());
+    Some(GitHubAppConfig {
+        app_id,
+        private_key_pem,
+        api_base,
+    })
+}
+
+/// Build the JIT credential broker (`PLAN.md` §11.3). With a GitHub App configured it
+/// mints short-lived installation tokens on demand; otherwise its issuer map is empty
+/// and `mint` fails gracefully (the runtime falls back to a registered repo token).
+fn build_broker(grants: CredentialGrantRepo, events: EventRepo, bus: EventBusImpl) -> Broker {
+    let mut issuers = std::collections::HashMap::new();
+    match github_app_config() {
+        Some(cfg) => match GitHubApp::new(cfg) {
+            Ok(app) => {
+                eprintln!("GitHub App credential broker enabled");
+                issuers.insert("github.com".to_string(), Issuer::Github(app));
+            }
+            Err(e) => eprintln!(
+                "warning: GitHub App configured but invalid ({e}); JIT credential broker disabled"
+            ),
+        },
+        None => {
+            eprintln!("JIT credential broker disabled (CAT_HERDER_GITHUB_APP_ID/PRIVATE_KEY unset)")
+        }
+    }
+    CredentialBrokerService::new(issuers, grants, events, bus)
 }
 
 /// The repositories (run/agent/session/provider/model), all in-memory or all Postgres.
@@ -283,6 +327,10 @@ async fn main() {
         None => EventBusImpl::Noop,
     };
 
+    // JIT credential broker (PLAN.md §11.3). Mints short-lived GitHub App installation
+    // tokens on demand when a GitHub App is configured; otherwise a no-op issuer map.
+    let broker: Broker = build_broker(repos.grants.clone(), repos.events.clone(), bus.clone());
+
     // Shard leases for the sharded reconciler (PLAN.md §6). NATS JetStream KV when
     // NATS is configured; otherwise the in-memory fallback (single-replica dev, where
     // the one process leases every shard). The TTL is the crash-recovery bound: a
@@ -375,6 +423,7 @@ async fn main() {
         let sessions = repos.sessions.clone();
         let transitions = repos.transitions.clone();
         let bus = bus.clone();
+        let broker = broker.clone();
         let shard_count = parse_env_u32("CAT_HERDER_SHARD_COUNT", 16).max(1);
         let interval = parse_env_secs("CAT_HERDER_RECONCILE_INTERVAL_SECS", 10);
         // Stable per-process owner id: the pod name in-cluster, else a fresh UUID.
@@ -412,6 +461,7 @@ async fn main() {
                         &sessions,
                         &transitions,
                         &bus,
+                        &broker,
                     )
                     .await
                 {
@@ -512,6 +562,7 @@ async fn main() {
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
         grants: repos.grants,
+        broker,
         bus,
         agents: repos.agents,
         providers: repos.providers,

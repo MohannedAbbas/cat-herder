@@ -5,12 +5,14 @@
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use cat_herder_domain::api::{SessionRun, is_safe_repo_url, new_session_id};
+use cat_herder_domain::api::{
+    SessionRun, is_safe_repo_url, new_session_id, repo_identity_from_url,
+};
 use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, Run, RunId, RunState, Usage};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRuntime, ApprovalRepository, DomainResult, EventBus, EventRepository, RunRepository,
-    RunRequest, SessionRepository, TransitionRepository,
+    AgentRuntime, ApprovalRepository, CredentialBroker, DomainResult, EventBus, EventRepository,
+    RunRepository, RunRequest, SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::shard::shard_for;
@@ -40,19 +42,60 @@ async fn persist_transition<T: TransitionRepository, B: EventBus>(
     Ok(())
 }
 
+/// Mint a short-lived, read-only clone credential for `run`'s declared repo via the
+/// broker, returning the materialized secret for out-of-band injection (`PLAN.md`
+/// §11.3 "Clone-scoped credentials"). Returns `None` when the run has no repo or the
+/// mint fails — the runtime then falls back to a registered repo token, or none for
+/// public repos. The mint never fails the run: a repo without a broker is not an error.
+async fn mint_clone_token<C: CredentialBroker>(broker: &C, run: &Run) -> Option<String> {
+    let repo = run.repo.as_deref()?;
+    let identity = repo_identity_from_url(repo)?;
+    match broker.mint(run.id, &identity.id(), "clone", "read").await {
+        Ok(minted) => Some(minted.secret),
+        Err(e) => {
+            eprintln!(
+                "clone credential mint failed for run {} ({identity_id}): {e}",
+                run.id.0,
+                identity_id = identity.id()
+            );
+            None
+        }
+    }
+}
+
+/// Spawn a run's execution, minting a clone credential first (best-effort).
+async fn spawn_run<C: CredentialBroker, R: AgentRuntime>(
+    broker: &C,
+    runtime: &R,
+    run: &Run,
+) -> DomainResult<()> {
+    let token = mint_clone_token(broker, run).await;
+    runtime.spawn(run, token.as_deref()).await
+}
+
+/// Revoke every active credential grant for a run (terminal teardown, `PLAN.md`
+/// §11.3). Best-effort: revocation is defense-in-depth, since installation tokens lapse
+/// via TTL regardless.
+async fn revoke_run_credentials<C: CredentialBroker>(broker: &C, run_id: RunId) {
+    if let Err(e) = broker.revoke_run(run_id).await {
+        eprintln!("credential revocation failed for run {}: {e}", run_id.0);
+    }
+}
+
 /// Use case: accept a trigger's request, persist it, spawn the agent, and advance the
 /// lifecycle state machine through to `PodPending`. The reconciler (`reconcile_once`)
 /// advances it to `Running` (and terminal states) once the sandbox is actually ready.
 ///
 /// Each run is auto-linked to a freshly created session (title derived from the
 /// task spec).
-pub async fn start_run<R, P, S, T, B>(
+pub async fn start_run<R, P, S, T, B, C>(
     req: RunRequest,
     runtime: &R,
     repo: &P,
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<Run>
 where
     R: AgentRuntime,
@@ -60,6 +103,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
     let run = Run {
         id: RunId(0), // assigned by the repository
@@ -104,7 +148,8 @@ where
         .add_run(&session_id, &SessionRun::from(&run))
         .await?;
 
-    runtime.spawn(&run).await?;
+    // Mint a short-lived clone credential and spawn (best-effort mint).
+    spawn_run(broker, runtime, &run).await?;
 
     Ok(run) // PodPending — the reconciler advances from here
 }
@@ -125,12 +170,13 @@ fn session_title(task_spec: &str) -> String {
 /// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
 /// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
 /// execution — mirroring the `finished` event path — so a dead sandbox doesn't linger.
-pub async fn reconcile_once<R, P, S, T, B>(
+pub async fn reconcile_once<R, P, S, T, B, C>(
     runtime: &R,
     repo: &P,
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -138,8 +184,17 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
-    reconcile_runs(repo.list_all().await?, runtime, sessions, transitions, bus).await
+    reconcile_runs(
+        repo.list_all().await?,
+        runtime,
+        sessions,
+        transitions,
+        bus,
+        broker,
+    )
+    .await
 }
 
 /// Reconcile the runs owned by `shards` (of `shard_count`) — the sharded-reconciler
@@ -147,7 +202,8 @@ where
 /// owned shards, so a leader reconciles all its shards from a single read regardless
 /// of how many it holds. Only runs whose `run_id` hashes to an owned shard are
 /// advanced/recovered.
-pub async fn reconcile_shards<R, P, S, T, B>(
+#[allow(clippy::too_many_arguments)]
+pub async fn reconcile_shards<R, P, S, T, B, C>(
     shards: &HashSet<u32>,
     shard_count: u32,
     runtime: &R,
@@ -155,6 +211,7 @@ pub async fn reconcile_shards<R, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -162,6 +219,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
     let runs = repo
         .list_all()
@@ -169,7 +227,7 @@ where
         .into_iter()
         .filter(|r| shards.contains(&shard_for(r.id, shard_count)))
         .collect();
-    reconcile_runs(runs, runtime, sessions, transitions, bus).await
+    reconcile_runs(runs, runtime, sessions, transitions, bus, broker).await
 }
 
 /// Core reconcile over an explicit set of runs (the caller already selected the runs
@@ -180,18 +238,20 @@ where
 /// run resumes from its last checkpoint (crash recovery, `PLAN.md` §6). The `finished`
 /// event remains the only terminal signal, so a missing sandbox never marks a run
 /// terminal here.
-pub async fn reconcile_runs<R, S, T, B>(
+pub async fn reconcile_runs<R, S, T, B, C>(
     runs: Vec<Run>,
     runtime: &R,
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
     let mut changed = 0;
 
@@ -207,7 +267,7 @@ where
             // over. We do not mark it terminal here — `finished` is the only signal
             // that does (a stuck harness surfaces as `Failed`, not `None`).
             None => {
-                runtime.spawn(&run).await?;
+                spawn_run(broker, runtime, &run).await?;
                 changed += 1;
             }
             Some(status) => {
@@ -227,8 +287,11 @@ where
 
                 // Reclaim the execution once the run is done (details already persisted).
                 let done = updated.state == RunState::Succeeded || is_terminal(updated.state);
-                if done && let Err(e) = runtime.terminate(updated.id).await {
-                    eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
+                if done {
+                    if let Err(e) = runtime.terminate(updated.id).await {
+                        eprintln!("failed to terminate sandbox for run {}: {e}", updated.id.0);
+                    }
+                    revoke_run_credentials(broker, updated.id).await;
                 }
             }
         }
@@ -258,7 +321,8 @@ pub struct Completion {
 /// Use case: record the harness's completion of a run, advancing it to `Succeeded`
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
-pub async fn complete_run<P, S, T, B>(
+#[allow(clippy::too_many_arguments)]
+pub async fn complete_run<P, S, T, B, C>(
     run_id: RunId,
     outcome: Outcome,
     completion: Completion,
@@ -266,12 +330,14 @@ pub async fn complete_run<P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<Run>
 where
     P: RunRepository,
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
     let Completion { report, usage } = completion;
 
@@ -327,10 +393,12 @@ where
     match run.state {
         RunState::Running => {
             persist_transition(&mut run, target, transitions, bus).await?;
+            revoke_run_credentials(broker, run.id).await;
         }
         RunState::PodPending => {
             persist_transition(&mut run, RunState::Running, transitions, bus).await?;
             persist_transition(&mut run, target, transitions, bus).await?;
+            revoke_run_credentials(broker, run.id).await;
         }
         // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
         _ => return Ok(run),
@@ -415,7 +483,7 @@ where
 /// the run (`AwaitingInput -> Running`); rejecting cancels it. The decision and response
 /// are persisted on the `ApprovalRequest`; an `approval.responded` event is appended.
 #[allow(clippy::too_many_arguments)]
-pub async fn respond_approval<A, E, P, S, T, B>(
+pub async fn respond_approval<A, E, P, S, T, B, C>(
     approval_id: &str,
     approved: bool,
     response: Option<String>,
@@ -425,6 +493,7 @@ pub async fn respond_approval<A, E, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    broker: &C,
 ) -> DomainResult<ApprovalRequest>
 where
     A: ApprovalRepository,
@@ -433,6 +502,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    C: CredentialBroker,
 {
     let approval = approvals.get(approval_id).await?.ok_or_else(|| {
         std::io::Error::new(
@@ -486,6 +556,10 @@ where
     if run.state == RunState::AwaitingInput {
         persist_transition(&mut run, target, transitions, bus).await?;
         sessions.sync_run(&run).await?;
+        // Rejection cancels the run: tear down its clone credential.
+        if !approved {
+            revoke_run_credentials(broker, run.id).await;
+        }
     }
 
     Ok(decided)
@@ -505,6 +579,7 @@ mod tests {
     struct StubRuntime {
         status: Option<RuntimeStatus>,
         spawns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        last_token: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl StubRuntime {
@@ -512,6 +587,7 @@ mod tests {
             Self {
                 status,
                 spawns: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                last_token: std::sync::Arc::new(std::sync::Mutex::new(None)),
             }
         }
 
@@ -519,12 +595,18 @@ mod tests {
         fn spawn_count(&self) -> usize {
             self.spawns.load(std::sync::atomic::Ordering::Relaxed)
         }
+
+        /// The git token most recently passed to `spawn` (the broker-minted secret).
+        fn last_token(&self) -> Option<String> {
+            self.last_token.lock().unwrap().clone()
+        }
     }
 
     impl AgentRuntime for StubRuntime {
-        async fn spawn(&self, _run: &Run) -> DomainResult<()> {
+        async fn spawn(&self, _run: &Run, git_token: Option<&str>) -> DomainResult<()> {
             self.spawns
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *self.last_token.lock().unwrap() = git_token.map(str::to_owned);
             Ok(())
         }
         async fn status(&self, _id: RunId) -> DomainResult<Option<RuntimeStatus>> {
@@ -544,6 +626,96 @@ mod tests {
     impl EventBus for StubBus {
         async fn publish(&self, _event: &Event) -> DomainResult<()> {
             Ok(())
+        }
+    }
+
+    /// No-op credential broker for tests: mint always fails (no broker configured), so
+    /// `spawn` falls back to `None` — matching the no-broker path the tests exercise.
+    struct StubBroker;
+
+    impl CredentialBroker for StubBroker {
+        async fn mint(
+            &self,
+            _run: RunId,
+            _target: &str,
+            _action: &str,
+            _scope: &str,
+        ) -> DomainResult<cat_herder_domain::ports::MintedCredential> {
+            Err("no broker configured".into())
+        }
+        async fn revoke(&self, _run: RunId, _grant_id: &str) -> DomainResult<()> {
+            Ok(())
+        }
+        async fn revoke_run(&self, _run: RunId) -> DomainResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Recording broker for the clone-path wiring tests: mint returns a known secret
+    /// and records the `(run_id, target)`; `revoke_run` records the run id so tests can
+    /// assert teardown happened.
+    #[derive(Default)]
+    struct RecordingBroker {
+        minted: std::sync::Mutex<Vec<(RunId, String)>>,
+        revoked_runs: std::sync::Mutex<Vec<RunId>>,
+    }
+
+    impl RecordingBroker {
+        fn minted(&self) -> Vec<(RunId, String)> {
+            self.minted.lock().unwrap().clone()
+        }
+        fn revoked_runs(&self) -> Vec<RunId> {
+            self.revoked_runs.lock().unwrap().clone()
+        }
+    }
+
+    impl CredentialBroker for RecordingBroker {
+        async fn mint(
+            &self,
+            run: RunId,
+            target: &str,
+            action: &str,
+            scope: &str,
+        ) -> DomainResult<cat_herder_domain::ports::MintedCredential> {
+            self.minted.lock().unwrap().push((run, target.to_string()));
+            let grant = cat_herder_domain::entities::CredentialGrant {
+                id: format!("cred-{}", self.minted.lock().unwrap().len()),
+                run_id: run,
+                target: target.to_string(),
+                action: action.to_string(),
+                scope: scope.to_string(),
+                status: cat_herder_domain::entities::CredentialGrantStatus::Active,
+                expires_at: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+                created_at: std::time::SystemTime::now(),
+                revoked_at: None,
+                token_id: None,
+            };
+            Ok(cat_herder_domain::ports::MintedCredential {
+                grant,
+                secret: "ghs_fake_token".into(),
+            })
+        }
+        async fn revoke(&self, _run: RunId, _grant_id: &str) -> DomainResult<()> {
+            Ok(())
+        }
+        async fn revoke_run(&self, run: RunId) -> DomainResult<()> {
+            self.revoked_runs.lock().unwrap().push(run);
+            Ok(())
+        }
+    }
+
+    /// A [`RunRequest`] with the repo field set (for clone-path tests).
+    fn req_with_repo(repo: &str) -> RunRequest {
+        RunRequest {
+            kind: RunKind::Agent,
+            task_spec: "test".into(),
+            dedup_key: String::new(),
+            max_concurrency: 1,
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: Some(repo.to_string()),
+            language: None,
         }
     }
 
@@ -574,6 +746,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -598,6 +771,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -622,6 +796,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -653,6 +828,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -666,6 +842,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -688,6 +865,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -729,6 +907,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -740,6 +919,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -763,6 +943,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -773,6 +954,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -780,7 +962,7 @@ mod tests {
         // The sandbox vanishes (crash). The reconciler must re-spawn, not mark the
         // run terminal.
         let rt = StubRuntime::new(None);
-        let n = reconcile_once(&rt, &repo, &sessions, &transitions, &StubBus)
+        let n = reconcile_once(&rt, &repo, &sessions, &transitions, &StubBus, &StubBroker)
             .await
             .unwrap();
         assert_eq!(n, 1);
@@ -811,6 +993,7 @@ mod tests {
                     &sessions,
                     &transitions,
                     &StubBus,
+                    &StubBroker,
                 )
                 .await
                 .unwrap(),
@@ -830,6 +1013,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -853,6 +1037,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -872,6 +1057,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -883,6 +1069,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -902,6 +1089,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -932,6 +1120,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -941,6 +1130,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -953,6 +1143,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -972,6 +1163,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -981,6 +1173,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -993,7 +1186,8 @@ mod tests {
                 &repo,
                 &sessions,
                 &transitions,
-                &StubBus
+                &StubBus,
+                &StubBroker
             )
             .await
             .unwrap()
@@ -1008,7 +1202,8 @@ mod tests {
                 &repo,
                 &sessions,
                 &transitions,
-                &StubBus
+                &StubBus,
+                &StubBroker
             )
             .await
             .unwrap()
@@ -1031,7 +1226,8 @@ mod tests {
                 &repo,
                 &sessions,
                 &transitions,
-                &StubBus
+                &StubBus,
+                &StubBroker
             )
             .await
             .is_err()
@@ -1052,6 +1248,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1062,6 +1259,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1112,6 +1310,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1121,6 +1320,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1148,6 +1348,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1174,6 +1375,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1183,6 +1385,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1210,6 +1413,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubBroker,
         )
         .await
         .unwrap();
@@ -1238,10 +1442,91 @@ mod tests {
                 &repo,
                 &sessions,
                 &transitions,
-                &StubBus
+                &StubBus,
+                &StubBroker
             )
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn start_run_mints_clone_credential_and_injects_secret() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let broker = RecordingBroker::default();
+        let runtime = StubRuntime::new(None);
+
+        let run = start_run(
+            req_with_repo("https://github.com/org/repo.git"),
+            &runtime,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &broker,
+        )
+        .await
+        .unwrap();
+
+        // The clone credential was minted for the canonical repo identity, and the
+        // minted secret was handed to the runtime for out-of-band injection.
+        assert_eq!(
+            broker.minted(),
+            vec![(run.id, "github.com/org/repo".to_string())]
+        );
+        assert_eq!(runtime.last_token().as_deref(), Some("ghs_fake_token"));
+    }
+
+    #[tokio::test]
+    async fn terminal_revokes_clone_credential() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let broker = RecordingBroker::default();
+        let runtime = StubRuntime::new(None);
+
+        let run = start_run(
+            req_with_repo("https://github.com/org/repo.git"),
+            &runtime,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &broker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(broker.revoked_runs(), vec![]);
+
+        // Advance to Running, then complete — the terminal transition must revoke the
+        // run's clone credential.
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &broker,
+        )
+        .await
+        .unwrap();
+        complete_run(
+            run.id,
+            Outcome::Succeeded,
+            Completion::default(),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &broker,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(broker.revoked_runs(), vec![run.id]);
     }
 }

@@ -110,6 +110,20 @@ spec:
             - name: GITLAB_OAUTH_ALLOWED_USERS
               value: {{ join "," .Values.oauth.gitlab.allowedUsers | quote }}
             {{- end }}
+            {{- if and .Values.broker.github.enabled }}
+            # JIT credential broker (PLAN.md §11.3): mints short-lived GitHub App
+            # installation tokens for clone/push. Disabled (empty issuer map) when not
+            # configured — runs fall back to a registered repo token or public repos.
+            - name: CAT_HERDER_GITHUB_APP_ID
+              value: {{ .Values.broker.github.appId | quote }}
+            - name: CAT_HERDER_GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.github.secret }}
+                  key: private-key
+            - name: CAT_HERDER_GITHUB_API_BASE
+              value: {{ .Values.broker.github.apiBase | default "https://api.github.com" | quote }}
+            {{- end }}
             {{- if .Values.oauth.mock.enabled }}
             # DEV-ONLY mock OAuth: bypasses real SSO and mints an admin session
             # directly. MUST be off in production.

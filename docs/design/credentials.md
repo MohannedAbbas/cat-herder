@@ -87,21 +87,29 @@ so a forged `run_id` mints nothing.
 ## 6. Ports, crates, files (landed so far)
 
 - `domain/src/entities.rs` — `CredentialGrant`, `CredentialGrantStatus`.
-- `domain/src/ports.rs` — `CredentialBroker` (mint/revoke) + `MintedCredential`,
-  `CredentialGrantRepository`.
+- `domain/src/ports.rs` — `CredentialBroker` (mint/revoke/**revoke_run**) + `MintedCredential`,
+  `CredentialGrantRepository`; `AgentRuntime::spawn` takes an injected `git_token`.
 - `domain/src/events.rs` — `credential.minted`/`credential.revoked` + constructors.
 - `adapters/credentials-github/` — `GitHubApp` (JWT + dynamic installation resolution).
 - `adapters/credential-broker/` — `CredentialBrokerService` + `Issuer` (host dispatch;
-  mint/revoke + grant + audit).
+  mint/revoke/**revoke_run** + grant + audit).
 - `adapters/store-postgres/` — migration `0025` + `PostgresCredentialGrantRepository`.
 - `adapters/store-inmemory/` — `InMemoryCredentialGrantRepository`.
 - `adapters/api-http/src/repo.rs` — `CredentialGrantRepo` enum; `AppState` gains
-  `grants`; `bin/cat-herder` wires it (Postgres/in-memory).
+  `grants` **and `broker`**; `bin/cat-herder` wires it (Postgres/in-memory).
+- `application/src/lib.rs` — `mint_clone_token`/`spawn_run`/`revoke_run_credentials`
+  helpers; `start_run`/`reconcile_*`/`complete_run`/`respond_approval` mint on spawn and
+  revoke on terminal.
+- `bin/cat-herder` — `build_broker` reads `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/
+  `_API_BASE` and constructs the broker (empty issuer map when unset).
 
 ## 7. Remaining slices (in build order)
 
-1. **Clone-path wiring** — mint in the run path and inject the short-lived token
-   (replacing whole-token injection), revoke on terminal.
+1. ~~**Clone-path wiring**~~ — ✅ landed: `start_run` mints a read-only clone credential
+   (`action=clone`, `scope=read`) for the run's repo, injects the short-lived secret into
+   the pod (replacing whole-token injection; the runtime still falls back to a registered
+   repo token when no broker is configured), and `revoke_run` tears it down on terminal
+   (reconcile terminal path, `complete_run`, approval reject).
 2. **Separate broker service** — extract the broker behind a gRPC interface with
    mTLS/SVID caller auth (tonic + rustls; SPIFFE IDs in cert SANs).
 3. **Harness sidecar + credential tool** — `credential(target, action, scope)` returns

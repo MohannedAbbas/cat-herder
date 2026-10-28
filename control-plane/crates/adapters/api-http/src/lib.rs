@@ -13,6 +13,7 @@ use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use cat_herder_application::{Completion, Outcome, complete_run, respond_approval, start_run};
+use cat_herder_credential_broker::CredentialBrokerService;
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, EventListResponse, EventResponse, RunResponse, Session,
     SessionRun, SessionSummary, repo_identity_from_url,
@@ -59,6 +60,10 @@ pub const WEBHOOK_SECRET_KEY: &str = "webhook_secret";
 /// Settings key for the supported git hosts (a JSON array of `{host,label}`).
 pub const GIT_HOSTS_SETTING: &str = "git_hosts";
 
+/// The concrete credential broker wired into the application: the [`CredentialBroker`]
+/// service over the in-memory/Postgres grant + event repositories and the fan-out bus.
+pub type Broker = CredentialBrokerService<CredentialGrantRepo, EventRepo, EventBusImpl>;
+
 /// Application state: the data the handlers serve. Runs, agents, sessions,
 /// providers, and models are backed by their repositories (Postgres in production,
 /// in-memory fallback).
@@ -76,6 +81,10 @@ pub struct AppState {
     pub checkpoints: CheckpointRepo,
     pub approvals: ApprovalRepo,
     pub grants: CredentialGrantRepo,
+    /// The JIT credential broker (`PLAN.md` §11.3). When no GitHub App is configured,
+    /// its issuer map is empty and `mint` fails gracefully (the runtime falls back to a
+    /// registered repo token or none).
+    pub broker: Broker,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -111,6 +120,16 @@ impl Default for AppState {
         let run = InMemoryRunRepository::new();
         let events = InMemoryEventRepository::default();
         let transitions = InMemoryTransitionRepository::new(run.clone(), events.clone());
+        let grants = CredentialGrantRepo::InMemory(Default::default());
+        let bus = EventBusImpl::Noop;
+        // No GitHub App configured by default, so the broker has an empty issuer map
+        // and `mint` fails gracefully.
+        let broker = CredentialBrokerService::new(
+            Default::default(),
+            grants.clone(),
+            EventRepo::InMemory(events.clone()),
+            bus.clone(),
+        );
         Self {
             agents: AgentRepo::InMemory(Default::default()),
             providers: ProviderRepo::InMemory(Default::default()),
@@ -123,8 +142,9 @@ impl Default for AppState {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
-            grants: CredentialGrantRepo::InMemory(Default::default()),
-            bus: EventBusImpl::Noop,
+            grants,
+            broker,
+            bus,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
             auth: Auth::new("admin", "admin"),
@@ -271,6 +291,7 @@ async fn create_run(
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.broker,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -447,6 +468,7 @@ async fn respond_approval_handler(
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.broker,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -524,6 +546,7 @@ pub(crate) async fn ingest_harness_event(
                 &state.sessions,
                 &state.transitions,
                 &state.bus,
+                &state.broker,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -570,6 +593,7 @@ pub(crate) async fn ingest_harness_event(
                 &state.sessions,
                 &state.transitions,
                 &state.bus,
+                &state.broker,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -765,6 +789,7 @@ async fn webhook_generic(
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.broker,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

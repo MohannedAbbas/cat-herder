@@ -47,7 +47,7 @@ async fn main() -> DomainResult<()> {
     };
 
     println!("spawning Sandbox run-999 ...");
-    rt.spawn(&run).await?;
+    rt.spawn(&run, None).await?;
     println!("spawned — check it now, or wait for auto-terminate (15s) ...");
     tokio::time::sleep(Duration::from_secs(15)).await;
 

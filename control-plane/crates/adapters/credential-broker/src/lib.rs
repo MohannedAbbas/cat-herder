@@ -28,6 +28,7 @@ use cat_herder_domain::ports::{
 /// wrapping that host's minting client and handle it in [`Issuer::mint`]/[`Issuer::revoke`];
 /// the grant/audit core in [`CredentialBrokerService`] is host-agnostic and needs no
 /// change.
+#[derive(Clone)]
 pub enum Issuer {
     /// GitHub App (installation tokens, resolved dynamically per repo).
     Github(GitHubApp),
@@ -62,6 +63,7 @@ impl Issuer {
 }
 
 /// A [`CredentialBroker`] that dispatches to a per-host [`Issuer`].
+#[derive(Clone)]
 pub struct CredentialBrokerService<G, E, B> {
     issuers: HashMap<String, Issuer>,
     grants: G,
@@ -142,6 +144,28 @@ where
     }
 
     async fn revoke(&self, run: RunId, grant_id: &str) -> DomainResult<()> {
+        self.revoke_grant(run, grant_id).await
+    }
+
+    async fn revoke_run(&self, run: RunId) -> DomainResult<()> {
+        for grant in self.grants.list_active(run).await? {
+            if let Err(e) = self.revoke_grant(run, &grant.id).await {
+                eprintln!("revoke of grant {} for run {} failed: {e}", grant.id, run.0);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<G, E, B> CredentialBrokerService<G, E, B>
+where
+    G: CredentialGrantRepository,
+    E: EventRepository,
+    B: EventBus,
+{
+    /// Revoke one grant: best-effort server-side revocation, flip the local grant to
+    /// `Revoked`, and emit the audited `credential.revoked` event.
+    async fn revoke_grant(&self, run: RunId, grant_id: &str) -> DomainResult<()> {
         // Best-effort server-side revocation before flipping the local grant, so the
         // audited event reflects an actually-revoked token where the issuer supports it.
         if let Some(grant) = self.grants.get(grant_id).await?
@@ -338,6 +362,71 @@ mod tests {
                 event_type::CREDENTIAL_MINTED,
                 event_type::CREDENTIAL_REVOKED
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_run_revokes_all_active_grants() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/installation"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 123 })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/installations/123/access_tokens"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "token": "ghs_install_token",
+                "expires_at": "2030-01-01T00:00:00Z",
+            })))
+            .mount(&server)
+            .await;
+
+        let broker = broker(&server.uri()).await;
+        // Two mints (e.g. an initial clone + a crash-recovery re-spawn) both land as
+        // active grants for the same run.
+        broker
+            .mint(RunId(7), "github.com/org/repo", "clone", "read")
+            .await
+            .expect("mint 1");
+        broker
+            .mint(RunId(7), "github.com/org/repo", "clone", "read")
+            .await
+            .expect("mint 2");
+
+        broker.revoke_run(RunId(7)).await.expect("revoke_run ok");
+
+        let active = broker.grants.list_active(RunId(7)).await.unwrap();
+        assert!(
+            active.is_empty(),
+            "no active grants remain after revoke_run"
+        );
+        let events = broker.events.list(RunId(7), 0, 10).await.unwrap();
+        let revoked: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == event_type::CREDENTIAL_REVOKED)
+            .map(|e| e.event_type.as_str())
+            .collect();
+        assert_eq!(revoked.len(), 2, "one revoke event per active grant");
+    }
+
+    #[tokio::test]
+    async fn revoke_run_is_noop_without_active_grants() {
+        let server = wiremock::MockServer::start().await;
+        let broker = broker(&server.uri()).await;
+        broker.revoke_run(RunId(7)).await.expect("no-op ok");
+        assert!(
+            broker
+                .grants
+                .list_active(RunId(7))
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 }

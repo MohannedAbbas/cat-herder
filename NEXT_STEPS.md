@@ -140,11 +140,15 @@ Brokered credentials and a real budget hard-stop; both are called out as
   (`GitHubApp`: RS256 JWT + dynamic installation resolution — one App serves all its
   repos); ✅ `adapters/credential-broker` (`CredentialBrokerService` + `Issuer` host
   dispatch: mint/revoke + grant + audited events); ✅ grant persistence (Postgres
-  migration `0025` + in-memory) wired into `AppState`/composition root. GitLab/Codeberg
-  issuers intentionally deferred (extension point via the `Issuer` enum). See
-  `docs/design/credentials.md`. ⬜ Remaining: clone-path mint+inject+revoke wiring,
-  separate broker service (gRPC + mTLS/SVID), harness sidecar `credential` tool +
-  opaque handles.
+  migration `0025` + in-memory) wired into `AppState`/composition root; ✅ **clone-path
+  wiring** — `start_run` mints a read-only clone credential for the run's repo and
+  injects the short-lived secret into the pod (replacing whole-token injection; the
+  runtime still falls back to a registered repo token when no App is configured), and
+  `revoke_run` tears it down on terminal (reconcile terminal path, `complete_run`,
+  approval reject); wired via `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/`_API_BASE`
+  (+ Helm values). GitLab/Codeberg issuers intentionally deferred (extension point via
+  the `Issuer` enum). See `docs/design/credentials.md`. ⬜ Remaining: separate broker
+  service (gRPC + mTLS/SVID), harness sidecar `credential` tool + opaque handles.
 
 - [ ] **8. Budget engine with a hard stop (§12).**
   Only post-hoc token counting exists (harness `record_usage` + `input/output_tokens`).
