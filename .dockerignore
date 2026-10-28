@@ -1,0 +1,24 @@
+# Build context for the control-plane image is the repository root (see Tiltfile).
+# Exclude VCS and build artifacts so the podman build context stays small — most
+# importantly control-plane/target, which holds multi-GiB of local Rust artifacts.
+.git
+.gitignore
+.gitmodules
+
+# Rust build artifacts.
+control-plane/target
+**/target
+
+# Other component trees not needed by the control-plane build.
+agent-harness
+ui
+docs
+knowledge
+sandbox
+helm
+
+# Tooling caches.
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc

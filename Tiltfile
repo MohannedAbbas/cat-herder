@@ -16,12 +16,13 @@ default_registry('127.0.0.1:5000')
 
 # --- Images ---------------------------------------------------------------
 
-# Control plane (deployed by the chart). Build context is control-plane/, so the
-# Dockerfile's COPY paths (Cargo.toml/Cargo.lock, crates/) resolve inside it.
+# Control plane (deployed by the chart). Build context is the repo root, so the
+# Dockerfile can COPY both control-plane/ and proto/ (the gRPC contract the build
+# script needs). A repo-root .dockerignore keeps the context small.
 custom_build(
     'cat-herder',
-    'podman build -t $EXPECTED_REF -f control-plane/crates/bin/cat-herder/Dockerfile control-plane && podman push $EXPECTED_REF',
-    ['./control-plane/crates', 'control-plane/Cargo.toml', 'control-plane/Cargo.lock'],
+    'podman build -t $EXPECTED_REF -f control-plane/crates/bin/cat-herder/Dockerfile . && podman push $EXPECTED_REF',
+    ['./control-plane/crates', 'control-plane/Cargo.toml', 'control-plane/Cargo.lock', './proto', '.dockerignore'],
     skips_local_docker=True,
 )
 
@@ -55,14 +56,21 @@ helm_resource(
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
     image_keys=['controlPlane.image', 'harness.image', 'ui.image'],
     image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui'],
-    # Expose the API locally (localhost:8080).
-    port_forwards=['8080:8080'],
 )
 
-# Expose the UI with an explicit port-forward (Tilt's `port_forwards` is ambiguous
-# across the multiple pods in one helm resource).
+# Expose the API and UI with explicit Service-targeted port-forwards. Tilt's
+# `port_forwards` is ambiguous across the multiple pods in one helm resource (it can
+# pick the wrong pod and flap with "lost connection to pod"), so target the Services.
+# The retry loop makes the forward self-heal across the pod replacements that Tilt's
+# image-tag churn causes on each reload/restart.
+local_resource(
+    'api-port-forward',
+    serve_cmd='sh -c "while true; do kubectl port-forward -n cat-herder svc/cat-herder-api 8080:80; sleep 2; done"',
+    resource_deps=['cat-herder'],
+)
+
 local_resource(
     'ui-port-forward',
-    serve_cmd='kubectl port-forward -n cat-herder svc/cat-herder-ui 8081:80',
+    serve_cmd='sh -c "while true; do kubectl port-forward -n cat-herder svc/cat-herder-ui 8081:80; sleep 2; done"',
     resource_deps=['cat-herder'],
 )
