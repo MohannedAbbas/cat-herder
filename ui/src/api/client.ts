@@ -10,6 +10,7 @@ import type {
   Review,
   ReviewVerdict,
   RunDiff,
+  RunLogLine,
   RunRecord,
   Session,
   SessionSummary,
@@ -47,6 +48,16 @@ export interface CatHerderApi {
   getRunReview(id: number): Promise<Review | null>
   respondApproval(id: string, approve: boolean, response?: string): Promise<void>
   respondReview(id: string, verdict: ReviewVerdict, feedback?: string): Promise<void>
+
+  // live run logs (§16, NEXT_STEPS #18)
+  /** The buffered run logs as a JSON array (no live tail). */
+  getRunLogs(id: number): Promise<RunLogLine[]>
+  /**
+   * Tail a run's logs. Calls `onLine` for each buffered line then each live line, and
+   * returns a function that stops following. Best-effort: mock mode yields a few
+   * sample lines.
+   */
+  followRunLogs(id: number, onLine: (line: RunLogLine) => void): () => void
 
   // auth
   login(username: string, password: string): Promise<void>

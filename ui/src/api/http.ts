@@ -8,6 +8,7 @@ import type {
   Provider,
   Review,
   RunDiff,
+  RunLogLine,
   RunRecord,
   Session,
   SessionSummary,
@@ -76,6 +77,24 @@ export const httpApi: CatHerderApi = {
     request(`/v1/reviews/${id}/respond`, json('POST', { verdict, feedback })).then(
       () => undefined,
     ),
+
+  getRunLogs: (id) => request<RunLogLine[]>(`/v1/runs/${id}/logs?follow=false`),
+  followRunLogs: (id, onLine) => {
+    const source = new EventSource(
+      `${config.apiBaseUrl}/v1/runs/${id}/logs`,
+      { withCredentials: true },
+    )
+    source.onmessage = (ev) => {
+      try {
+        onLine(JSON.parse(ev.data) as RunLogLine)
+      } catch {
+        // Ignore malformed SSE frames (best-effort live tail).
+      }
+    }
+    // EventSource auto-reconnects; the server replays its buffer on reconnect, and we
+    // de-dupe nothing (lines are append-only), so a transient drop just re-tails.
+    return () => source.close()
+  },
 
   login: (username, password) =>
     request('/v1/auth/login', json('POST', { username, password })).then(() => undefined),

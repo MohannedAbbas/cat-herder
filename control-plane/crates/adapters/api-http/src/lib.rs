@@ -7,7 +7,7 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::sse::{Event as SseEvent, KeepAlive, Sse},
+    response::{IntoResponse, Response, sse::{Event as SseEvent, KeepAlive, Sse}},
     routing::{get, post, put},
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -37,6 +37,7 @@ use cat_herder_domain::ports::{
     GitRepoRepository, MintedCredential, ReviewRepository, RunRepository, RunRequest,
     SessionRepository, SettingRepository, WorkflowRepository,
 };
+use cat_herder_domain::redact::redact;
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryEventRepository, InMemoryRunRepository, InMemoryTransitionRepository,
@@ -48,6 +49,7 @@ pub use bus::EventBusImpl;
 pub use crypto::AesGcmCipher;
 pub use grpc::{ControlLinks, grpc_serve, grpc_server};
 pub use key_store::KeySecretStore;
+pub use logs::{RunLogLine, RunLogs};
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
@@ -68,6 +70,7 @@ mod bus;
 mod crypto;
 mod grpc;
 mod key_store;
+mod logs;
 mod mcp;
 mod oauth;
 mod pr;
@@ -180,6 +183,8 @@ pub struct AppState {
     pub runtime: Option<SandboxRuntime>,
     /// Live harness control links (`run_id -> outbound sender`) for HITL signals (§10).
     pub control_links: Arc<ControlLinks>,
+    /// In-memory spool of harness log lines + live-tail broadcast (`NEXT_STEPS #18`).
+    pub run_logs: RunLogs,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
     /// rotated via the admin API).
     pub cipher: Arc<RwLock<AesGcmCipher>>,
@@ -237,6 +242,7 @@ impl Default for AppState {
             mock_oauth: None,
             runtime: None,
             control_links: Arc::new(ControlLinks::default()),
+            run_logs: RunLogs::new(),
             cipher: Arc::new(RwLock::new(
                 AesGcmCipher::generate().expect("rng available"),
             )),
@@ -259,6 +265,7 @@ pub fn router(state: AppState) -> Router {
             get(get_run_events).post(post_run_event),
         )
         .route("/v1/runs/{id}/events/stream", get(stream_run_events))
+        .route("/v1/runs/{id}/logs", get(get_run_logs))
         .route("/v1/approvals/{id}/respond", post(respond_approval_handler))
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/reviews/{id}/respond", post(respond_review_handler))
@@ -667,6 +674,121 @@ async fn stream_run_events(
     });
 
     Ok(Sse::new(sse).keep_alive(KeepAlive::default()))
+}
+
+/// Query params for `GET /v1/runs/{id}/logs` (`NEXT_STEPS #18`).
+#[derive(Debug, serde::Deserialize)]
+struct LogsQuery {
+    /// When `false`, return the buffered lines as a JSON array (no live tail).
+    #[serde(default = "default_true")]
+    follow: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The wire form of one log line: redacted again on write (defense-in-depth) and timed
+/// as an RFC-3339 UTC timestamp for the UI.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunLogEvent {
+    stream: String,
+    line: String,
+    occurred_at: String,
+}
+
+impl From<&RunLogLine> for RunLogEvent {
+    fn from(l: &RunLogLine) -> Self {
+        RunLogEvent {
+            stream: l.stream.clone(),
+            line: redact(&l.line),
+            occurred_at: millis_to_iso(l.occurred_at),
+        }
+    }
+}
+
+fn millis_to_iso(ms: i64) -> String {
+    // Format epoch milliseconds as RFC-3339 UTC without a `chrono` dependency (the
+    // adapter doesn't pull it in). Seconds precision is plenty for a live log tail;
+    // the UI renders only the time-of-day.
+    let secs = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400);
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
+    // Civil-from-days (Howard Hinnant's algorithm) — days since 1970-01-01 → Y-M-D.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
+}
+
+/// The agent's live run logs (`NEXT_STEPS #18`): LLM output, tool calls, and shell
+/// stdout/stderr streamed by the harness over the gRPC control channel.
+///
+/// Defaults to an SSE live tail — replay the buffered lines, then stream new ones.
+/// `?follow=false` returns just the buffer as a JSON array.
+async fn get_run_logs(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(q): Query<LogsQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    if !q.follow {
+        let buffered: Vec<RunLogEvent> =
+            state.run_logs.buffered(run_id).iter().map(RunLogEvent::from).collect();
+        return Ok(Json(buffered).into_response());
+    }
+
+    // Subscribe before snapshotting the buffer so no line published in between is lost.
+    let rx = state.run_logs.subscribe(run_id);
+    let buffered: Vec<RunLogEvent> =
+        state.run_logs.buffered(run_id).iter().map(RunLogEvent::from).collect();
+
+    let replay = futures::stream::iter(buffered.into_iter().map(|ev| {
+        let json = serde_json::to_string(&ev).unwrap_or_default();
+        Ok::<_, std::convert::Infallible>(SseEvent::default().data(json))
+    }));
+    let live = futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(line) => {
+                    let ev = RunLogEvent::from(&line);
+                    let json = serde_json::to_string(&ev).unwrap_or_default();
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(SseEvent::default().data(json)),
+                        rx,
+                    ));
+                }
+                // The live tail is best-effort: a slow subscriber that lags just skips
+                // the dropped lines; a closed channel ends the stream.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    let sse = Sse::new(replay.chain(live)).keep_alive(KeepAlive::default());
+    Ok(sse.into_response())
 }
 
 /// Request body for `POST /v1/approvals/{id}/respond` (`PLAN.md` §10).

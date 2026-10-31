@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Markdown from 'react-markdown'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -10,7 +10,7 @@ import Loading from '@/components/Loading'
 import ErrorState from '@/components/ErrorState'
 import Card from '@/components/Card'
 import { formatDate, formatDuration, formatTokens } from '@/lib/format'
-import type { Approval, Review, ReviewVerdict, RunDiff } from '@/types/domain'
+import type { Approval, Review, ReviewVerdict, RunDiff, RunLogLine, RunLogStream } from '@/types/domain'
 
 function orDash(value: string | null | undefined): string {
   return value && value.length > 0 ? value : '—'
@@ -70,6 +70,81 @@ function DiffPanel({ diff }: { diff: RunDiff }) {
             )}
           </div>
         ))}
+      </div>
+    </Card>
+  )
+}
+
+/** Per-stream color for a live log line's label. */
+function logStreamClass(stream: RunLogStream): string {
+  switch (stream) {
+    case 'llm':
+      return 'text-violet-700'
+    case 'tool':
+      return 'text-amber-700'
+    case 'stderr':
+      return 'text-red-700'
+    case 'stdout':
+      return 'text-emerald-700'
+    default:
+      return 'text-slate-500'
+  }
+}
+
+function formatLogTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(undefined, { hour12: false })
+}
+
+/** Live run logs (`GET /v1/runs/{id}/logs`): tails the SSE stream and renders
+ * timestamped, stream-colored lines with auto-scroll-to-bottom. */
+function LogsPanel({ runId }: { runId: number }) {
+  const [lines, setLines] = useState<RunLogLine[]>([])
+  const [follow, setFollow] = useState(true)
+  const bottomRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setLines([])
+    const stop = api.followRunLogs(runId, (line) =>
+      setLines((prev) => [...prev, line].slice(-2000)),
+    )
+    return stop
+  }, [runId])
+
+  useEffect(() => {
+    if (follow) bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [lines, follow])
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-900">Logs</h2>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            <input
+              type="checkbox"
+              checked={follow}
+              onChange={(e) => setFollow(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
+        </div>
+      </div>
+      <div className="mt-3 max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs leading-relaxed">
+        {lines.length === 0 ? (
+          <div className="italic text-slate-500">No logs yet.</div>
+        ) : (
+          lines.map((l, i) => (
+            <div key={i} className="flex gap-2 whitespace-pre-wrap break-words">
+              <span className="shrink-0 text-slate-600">{formatLogTime(l.occurredAt)}</span>
+              <span className={`shrink-0 uppercase ${logStreamClass(l.stream)}`}>{l.stream}</span>
+              <span className="text-slate-200">{l.line}</span>
+            </div>
+          ))
+        )}
+        <div ref={bottomRef} />
       </div>
     </Card>
   )
@@ -255,6 +330,8 @@ export default function RunDetailPage() {
               </div>
             </Card>
           )}
+
+          <LogsPanel runId={run.id} />
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Card>

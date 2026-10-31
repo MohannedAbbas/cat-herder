@@ -171,6 +171,11 @@ impl HarnessControl for HarnessControlService {
                     Some(Msg::Interrupt(interrupt)) => {
                         ingest_interrupt(&ingest_state, run_id, interrupt).await;
                     }
+                    // Live run logs (`NEXT_STEPS #18`): spool (stamped with arrival
+                    // time) and fan out to any SSE live-tail subscribers.
+                    Some(Msg::Log(log)) => {
+                        ingest_state.run_logs.push(run_id, log.stream, log.line);
+                    }
                     // The stuck-run watchdog (a later step) consumes heartbeats; here we
                     // just keep the channel alive and acknowledge implicitly.
                     Some(Msg::Heartbeat(_)) => {}
@@ -471,5 +476,34 @@ mod tests {
         });
         assert_eq!(proto.checkpoint_id, "c");
         assert_eq!(proto.payload, b"p");
+    }
+
+    #[tokio::test]
+    async fn log_message_is_spooled_and_broadcast() {
+        // A proto Log arriving on the control channel is spooled (arrival-stamped)
+        // and fanned out to live subscribers — the gRPC <-> RunLogs contract.
+        let state = AppState::default();
+        let mut rx = state.run_logs.subscribe(RunId(5));
+
+        let log = control::v1::Log {
+            stream: "tool".into(),
+            line: "shell: ls -la".into(),
+        };
+        // Route through the same path the connect loop uses.
+        let msg = HarnessMessage {
+            msg: Some(Msg::Log(log)),
+        };
+        match msg.msg {
+            Some(Msg::Log(log)) => state.run_logs.push(RunId(5), log.stream, log.line),
+            _ => panic!("expected a Log message"),
+        }
+
+        let live = rx.recv().await.expect("broadcast");
+        assert_eq!(live.stream, "tool");
+        assert_eq!(live.line, "shell: ls -la");
+
+        let buffered = state.run_logs.buffered(RunId(5));
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered[0].line, "shell: ls -la");
     }
 }

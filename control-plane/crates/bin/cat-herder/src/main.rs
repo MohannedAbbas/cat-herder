@@ -760,6 +760,7 @@ async fn main() {
         mock_oauth,
         runtime,
         control_links: Arc::new(ControlLinks::default()),
+        run_logs: cat_herder_api_http::RunLogs::new(),
         cipher,
         key_store: Some(key_store),
         pr_client: Arc::new(PrClient::from_env()),

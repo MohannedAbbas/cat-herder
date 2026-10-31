@@ -283,6 +283,131 @@ async fn stream_run_events_without_nats_returns_501() {
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }
 
+// --- run logs (NEXT_STEPS #18) -------------------------------------------
+
+/// Seed a minimal queued run so the log endpoint can resolve it.
+async fn seed_run(state: &AppState, id: u64) {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::SystemTime;
+
+    let run = Run {
+        id: RunId(id),
+        kind: RunKind::Agent,
+        state: RunState::Running,
+        task_spec: "seed".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        workflow_ref: None,
+        runtime_tier: Default::default(),
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+}
+
+#[tokio::test]
+async fn get_run_logs_unknown_run_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/logs").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_run_logs_without_follow_replays_buffer_as_json() {
+    let state = AppState::default();
+    seed_run(&state, 7).await;
+    state.run_logs.push(
+        cat_herder_domain::RunId(7),
+        "llm",
+        "thinking… token ghp_0123456789abcdefXYZ leaked",
+    );
+    state
+        .run_logs
+        .push(cat_herder_domain::RunId(7), "stdout", "cloned repo");
+
+    let (status, body) = send(router(state), "/v1/runs/7/logs?follow=false").await;
+    assert_eq!(status, StatusCode::OK);
+    let lines: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["stream"], "llm");
+    // Defense-in-depth: the token is scrubbed again on write.
+    assert!(!lines[0]["line"].as_str().unwrap().contains("ghp_"));
+    assert!(lines[0]["line"].as_str().unwrap().contains("[REDACTED]"));
+    assert!(lines[0]["occurredAt"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(lines[1]["stream"], "stdout");
+    assert_eq!(lines[1]["line"], "cloned repo");
+}
+
+#[tokio::test]
+async fn get_run_logs_follow_streams_sse() {
+    use cat_herder_domain::RunId;
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    let state = AppState::default();
+    seed_run(&state, 8).await;
+    // One buffered line, then a live line published after we start reading.
+    state.run_logs.push(RunId(8), "tool", "ls -la");
+
+    let res = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/runs/8/logs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("content-type").unwrap().to_str().unwrap(),
+        "text/event-stream"
+    );
+
+    // A reader task collects the raw SSE bytes into a channel we can poll.
+    let mut body = res.into_body().into_data_stream();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(16);
+    tokio::spawn(async move {
+        while let Some(Ok(chunk)) = body.next().await {
+            let _ = tx.send(String::from_utf8_lossy(&chunk).to_string()).await;
+        }
+    });
+
+    // The buffered line is replayed first.
+    let first = recv_event(&mut rx, Duration::from_secs(2)).await;
+    assert!(first.contains("ls -la"), "replay: {first}");
+
+    // A live line pushed after subscribe shows up on the same stream.
+    state.run_logs.push(RunId(8), "llm", "live line");
+    let second = recv_event(&mut rx, Duration::from_secs(2)).await;
+    assert!(second.contains("live line"), "live: {second}");
+    assert!(second.contains("\"stream\":\"llm\""), "live: {second}");
+}
+
+/// Collect SSE chunks until one contains a `data:` line; return that chunk text.
+async fn recv_event(rx: &mut tokio::sync::mpsc::Receiver<String>, timeout: std::time::Duration) -> String {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(chunk)) if chunk.contains("data:") => return chunk,
+            Ok(Some(_)) => continue, // keep-alive comment / partial
+            Ok(None) => panic!("SSE stream closed early"),
+            Err(_) => panic!("timed out waiting for an SSE event"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn respond_approval_unknown_id_returns_404() {
     let state = AppState::default();

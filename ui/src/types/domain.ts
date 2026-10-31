@@ -164,6 +164,17 @@ export interface RunDiff {
   changes: FileChange[]
 }
 
+/** Source of a live run log line (`GET /v1/runs/{id}/logs`). */
+export type RunLogStream = 'llm' | 'tool' | 'stdout' | 'stderr' | 'system'
+
+/** One live run log line from the harness (streamed over the control channel). */
+export interface RunLogLine {
+  stream: RunLogStream
+  line: string
+  /** RFC-3339 arrival timestamp, stamped by the control plane. */
+  occurredAt: string
+}
+
 export type ReviewVerdict = 'approved' | 'rejected' | 'changes_requested'
 
 /** A pending result review (`GET /v1/runs/{id}/review`). */
