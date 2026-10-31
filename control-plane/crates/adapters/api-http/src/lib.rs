@@ -427,12 +427,15 @@ async fn resolve_image(
     agent_id: Option<&str>,
 ) -> Result<Option<String>, (StatusCode, String)> {
     match agent_id {
-        Some(id) => state
-            .agents
-            .get(id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-            .map(|a| a.and_then(|a| a.image).filter(|i| !i.is_empty())),
+        Some(id) => {
+            let agent = state
+                .agents
+                .get(id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .ok_or((StatusCode::NOT_FOUND, format!("agent '{id}' not found")))?;
+            Ok(Some(agent.image).filter(|i| !i.is_empty()))
+        }
         None => Ok(None),
     }
 }
