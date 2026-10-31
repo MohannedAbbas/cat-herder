@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
-    BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, EventBusImpl,
-    EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo,
-    OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
-    ToolRepo, TransitionRepo, grpc_serve, router,
+    BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, DedupRepo,
+    EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
+    KeySecretStore, ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, RunRepo,
+    SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
@@ -27,9 +27,10 @@ use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
     InMemoryBudgetCounter, InMemoryBudgetRepository, InMemoryCheckpointRepository,
-    InMemoryCredentialGrantRepository, InMemoryEventRepository, InMemoryLeaseManager,
-    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
-    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryCredentialGrantRepository, InMemoryDedupRepository, InMemoryEventRepository,
+    InMemoryLeaseManager, InMemoryModelRepository, InMemoryProviderRepository,
+    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
+    InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::{NatsEventBus, NatsLeaseManager};
 use cat_herder_store_postgres::{
@@ -39,7 +40,7 @@ use cat_herder_store_postgres::{
     PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
     PostgresSettingRepository, PostgresStore, PostgresToolRepository, PostgresTransitionRepository,
 };
-use cat_herder_store_redis::RedisBudgetCounter;
+use cat_herder_store_redis::{RedisBudgetCounter, RedisDedupRepository};
 use tokio::sync::RwLock;
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -423,6 +424,25 @@ async fn main() {
         None => BudgetCounterImpl::InMemory(InMemoryBudgetCounter::default()),
     };
 
+    // Trigger dedup/replay cache (§11.5). Redis when CAT_HERDER_REDIS_URL is set,
+    // otherwise the in-memory fallback.
+    let dedup: DedupRepo = match std::env::var("CAT_HERDER_REDIS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(url) => match RedisDedupRepository::connect(&url).await {
+            Ok(d) => {
+                eprintln!("Redis dedup cache connected");
+                DedupRepo::Redis(Box::new(d))
+            }
+            Err(e) => {
+                eprintln!("warning: Redis dedup cache unavailable ({e}); using in-memory");
+                DedupRepo::InMemory(InMemoryDedupRepository::default())
+            }
+        },
+        None => DedupRepo::InMemory(InMemoryDedupRepository::default()),
+    };
+
     // Shard leases for the sharded reconciler (PLAN.md §6). NATS JetStream KV when
     // NATS is configured; otherwise the in-memory fallback (single-replica dev, where
     // the one process leases every shard). The TTL is the crash-recovery bound: a
@@ -656,6 +676,7 @@ async fn main() {
         broker,
         budgets: repos.budgets,
         budget_counter,
+        dedup,
         policy,
         bus,
         agents: repos.agents,

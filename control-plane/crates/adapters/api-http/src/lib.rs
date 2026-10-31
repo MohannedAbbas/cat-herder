@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::sse::{Event as SseEvent, KeepAlive, Sse},
@@ -26,9 +27,9 @@ use cat_herder_domain::entities::{ApprovalStatus, Run, RunId, RunState, Usage};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
 use cat_herder_domain::ports::{
-    AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, EventBus, EventRepository,
-    GitRepoRepository, MintedCredential, RunRepository, RunRequest, SessionRepository,
-    SettingRepository,
+    AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, DedupRepository, EventBus,
+    EventRepository, GitRepoRepository, MintedCredential, RunRepository, RunRequest,
+    SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -48,6 +49,11 @@ pub use repo::{
     GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
     TransitionRepo,
 };
+pub use trigger::{
+    DedupRepo, github_delivery_id, normalize_cron, normalize_github, normalize_gitlab,
+    normalize_slack, verify_github_signature, verify_gitlab_token, verify_slack_signature,
+    verify_webhook_secret,
+};
 
 mod admin;
 mod auth;
@@ -60,6 +66,7 @@ mod mcp;
 mod oauth;
 mod pr;
 mod repo;
+mod trigger;
 mod webhook;
 
 /// Settings key for the shared webhook secret.
@@ -139,6 +146,8 @@ pub struct AppState {
     pub budgets: BudgetRepo,
     /// The atomic, real-time budget counter (Redis in production, in-memory otherwise).
     pub budget_counter: BudgetCounterImpl,
+    /// Trigger dedup/replay cache (§11.5).
+    pub dedup: DedupRepo,
     /// The authorization policy (§11.8): RBAC minimum roles + ABAC rules.
     pub policy: Policy,
     pub bus: EventBusImpl,
@@ -201,6 +210,7 @@ impl Default for AppState {
             broker,
             budgets: BudgetRepo::InMemory(Default::default()),
             budget_counter: BudgetCounterImpl::InMemory(Default::default()),
+            dedup: DedupRepo::InMemory(Default::default()),
             policy: Policy::default(),
             bus,
             audit: AuditRepo::InMemory(Default::default()),
@@ -234,6 +244,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/{id}/events/stream", get(stream_run_events))
         .route("/v1/approvals/{id}/respond", post(respond_approval_handler))
         .route("/v1/webhooks/generic", post(webhook_generic))
+        .route("/v1/webhooks/github", post(webhook_github))
+        .route("/v1/webhooks/gitlab", post(webhook_gitlab))
+        .route("/v1/webhooks/slack", post(webhook_slack))
         .route("/mcp", post(mcp_handler))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
@@ -886,6 +899,73 @@ fn pr_title(task_spec: &str) -> String {
     }
 }
 
+/// Parse a `u32` env var, falling back to `default` when unset/blank/invalid.
+fn env_u32_or(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+/// Admission control for triggers (`PLAN.md` §11.5): dedup/replay cache, per-source
+/// cooldown, and a global concurrency cap. Returns a denial or `Ok(())` to admit.
+async fn admit_trigger(
+    state: &AppState,
+    source: &str,
+    dedup_key: &str,
+) -> Result<(), (StatusCode, String)> {
+    use cat_herder_domain::state::is_terminal;
+
+    // Dedup/replay: a replayed event maps to the one already-accepted run.
+    if !dedup_key.is_empty() {
+        let window =
+            std::time::Duration::from_secs(env_u32_or("CAT_HERDER_DEDUP_WINDOW_SECS", 3600) as u64);
+        let duplicate = state
+            .dedup
+            .check_and_record(&format!("dedup:{dedup_key}"), window)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if duplicate {
+            return Err((StatusCode::CONFLICT, "duplicate event".into()));
+        }
+    }
+
+    // Per-source cooldown.
+    let cooldown = env_u32_or("CAT_HERDER_SOURCE_COOLDOWN_SECS", 0);
+    if cooldown > 0 {
+        let cooling = state
+            .dedup
+            .check_and_record(
+                &format!("cooldown:{source}"),
+                std::time::Duration::from_secs(cooldown as u64),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if cooling {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "source cooling down".into()));
+        }
+    }
+
+    // Global concurrency cap on spawned runs.
+    let cap = env_u32_or("CAT_HERDER_MAX_CONCURRENT_RUNS", 0);
+    if cap > 0 {
+        let runs = state
+            .repo
+            .list_all()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let active = runs.iter().filter(|r| !is_terminal(r.state)).count();
+        if active >= cap as usize {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "concurrency cap reached".into(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Accept an external webhook, normalize it, and trigger a run. Requires the
 /// configured webhook secret in the `X-Webhook-Secret` header.
 async fn webhook_generic(
@@ -913,13 +993,19 @@ async fn webhook_generic(
         return Err((StatusCode::UNAUTHORIZED, "invalid webhook secret".into()));
     }
 
+    let agent_id = payload.agent_id.clone();
+    let mut req = webhook::normalize(payload);
+
+    // Admission control (§11.5): dedup/replay, per-source cooldown, concurrency cap.
+    // Checked before the runtime pre-flight so a replayed event is rejected even when
+    // the system is mid-deploy.
+    admit_trigger(&state, "webhook", &req.dedup_key).await?;
+
     let runtime = state.runtime.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "execution runtime not configured".into(),
     ))?;
 
-    let agent_id = payload.agent_id.clone();
-    let mut req = webhook::normalize(payload);
     // Models are agent-specific: resolve from agent_id or the payload's explicit model.
     let model = resolve_model(&state, req.model.take(), agent_id)
         .await?
@@ -947,6 +1033,181 @@ async fn webhook_generic(
     }
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
+}
+
+/// Query params for source-specific webhooks: an explicit `model` (or `agent_id`)
+/// selects the run's model, since source payloads don't carry one.
+#[derive(Debug, serde::Deserialize)]
+struct SourceQuery {
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    agent_id: Option<String>,
+}
+
+/// A required secret from the environment (or `503` when unset).
+fn require_env_secret(name: &str) -> Result<String, (StatusCode, String)> {
+    let value = std::env::var(name).ok().filter(|s| !s.trim().is_empty());
+    value.ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        format!("{name} not configured"),
+    ))
+}
+
+/// Common source-webhook tail: resolve the model, admit (dedup/cooldown/cap), and run.
+async fn execute_source_run(
+    state: &AppState,
+    source: &str,
+    dedup_key: &str,
+    mut req: RunRequest,
+    query: SourceQuery,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let model = resolve_model(state, query.model, query.agent_id)
+        .await?
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "model or agent_id is required".to_string(),
+        ))?;
+    req.model = Some(model);
+
+    admit_trigger(state, source, dedup_key).await?;
+
+    let runtime = state.runtime.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "execution runtime not configured".into(),
+    ))?;
+    let budget = req.budget;
+    let run = start_run(
+        req,
+        runtime,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+        &state.broker,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Err(e) = issue_budget(&state.budgets, &state.budget_counter, run.id, budget).await {
+        eprintln!("budget lease failed for run {}: {e}", run.id.0);
+    }
+
+    Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
+}
+
+/// GitHub App webhook: verify `X-Hub-Signature-256`, normalize, dedup by delivery id.
+async fn webhook_github(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SourceQuery>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let secret = require_env_secret("CAT_HERDER_GITHUB_WEBHOOK_SECRET")?;
+    let sig = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !verify_github_signature(&secret, &body, sig) {
+        return Err((StatusCode::UNAUTHORIZED, "invalid signature".into()));
+    }
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut req = normalize_github(event, &payload);
+    req.dedup_key = github_delivery_id(
+        headers
+            .get("x-github-delivery")
+            .and_then(|v| v.to_str().ok()),
+    );
+    execute_source_run(&state, "github", &req.dedup_key.clone(), req, query).await
+}
+
+/// GitLab webhook: verify `X-Gitlab-Token`, normalize.
+async fn webhook_gitlab(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SourceQuery>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let secret = require_env_secret("CAT_HERDER_GITLAB_WEBHOOK_TOKEN")?;
+    let token = headers
+        .get("x-gitlab-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !verify_gitlab_token(&secret, token) {
+        return Err((StatusCode::UNAUTHORIZED, "invalid token".into()));
+    }
+    let payload: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut req = normalize_gitlab(&payload);
+    req.dedup_key = headers
+        .get("x-gitlab-event-uuid")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    execute_source_run(&state, "gitlab", &req.dedup_key.clone(), req, query).await
+}
+
+/// Slack slash command: verify `X-Slack-Signature`, normalize the free-text command.
+async fn webhook_slack(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SourceQuery>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    let secret = require_env_secret("CAT_HERDER_SLACK_SIGNING_SECRET")?;
+    let timestamp = headers
+        .get("x-slack-request-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let signature = headers
+        .get("x-slack-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !verify_slack_signature(&secret, &body, timestamp, signature) {
+        return Err((StatusCode::UNAUTHORIZED, "invalid signature".into()));
+    }
+    // Slack form-encoded: `text=...`
+    let text = String::from_utf8_lossy(&body);
+    let command = form_field(&text, "text").unwrap_or_default();
+    let mut req = normalize_slack(&command);
+    req.dedup_key = format!("slack:{timestamp}");
+    execute_source_run(&state, "slack", &req.dedup_key.clone(), req, query).await
+}
+
+/// Extract a form field (`key=value` pairs, `application/x-www-form-urlencoded`).
+fn form_field(body: &str, key: &str) -> Option<String> {
+    for pair in body.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == key {
+            return Some(url_decode(v).unwrap_or_else(|| v.to_string()));
+        }
+    }
+    None
+}
+
+/// Minimal `application/x-www-form-urlencoded` percent-decoding (`+` → space).
+fn url_decode(s: &str) -> Option<String> {
+    let bytes = s.replace('+', " ");
+    let mut out = Vec::with_capacity(bytes.len());
+    let chars: Vec<char> = bytes.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            let hex = chars[i + 1..i + 3].iter().collect::<String>();
+            let b = u8::from_str_radix(&hex, 16).ok()?;
+            out.push(b);
+            i += 3;
+        } else {
+            out.push(chars[i] as u8);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Constant-time byte comparison (avoids timing side channels on the secret).

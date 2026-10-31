@@ -292,3 +292,13 @@ pub trait BudgetCounter {
     /// Zero the run's counter (fresh run seed, or preemptive revocation mid-run).
     async fn reset(&self, run_id: RunId) -> DomainResult<()>;
 }
+
+/// Idempotency / dedup / replay cache for triggers (`PLAN.md` §11.5). The trigger's
+/// `dedup_key` (and a per-source cooldown key) are recorded here with a TTL window; a
+/// replayed event maps to the one already-accepted run instead of fanning out.
+pub trait DedupRepository {
+    /// Atomically record `key` for `ttl`. Returns `true` when `key` was already
+    /// present (a duplicate/replay), `false` when newly recorded. `ttl` is the window
+    /// the key is remembered for.
+    async fn check_and_record(&self, key: &str, ttl: std::time::Duration) -> DomainResult<bool>;
+}

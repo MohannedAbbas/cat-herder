@@ -122,6 +122,16 @@ mounted at `/repo`, so file edits survive pod recreation and a resumed agent see
 own changes. Requires a RWX-capable StorageClass; MinIO snapshots are a documented
 follow-on.
 
+### Triggers (§5/§11.5)
+
+Source-specific webhooks (`/v1/webhooks/{github,gitlab,slack}`) normalize their payloads
+into a run and verify their own signature; every trigger is gated by a dedup/replay
+cache, a per-source cooldown, and a global concurrency cap (see
+`docs/design/triggers.md`). Tunables: `CAT_HERDER_DEDUP_WINDOW_SECS`,
+`CAT_HERDER_SOURCE_COOLDOWN_SECS`, `CAT_HERDER_MAX_CONCURRENT_RUNS`, and the per-source
+signing secrets (`CAT_HERDER_GITHUB_WEBHOOK_SECRET`, `CAT_HERDER_SLACK_SIGNING_SECRET`,
+`CAT_HERDER_GITLAB_WEBHOOK_TOKEN`).
+
 ### GitHub OAuth SSO
 
 When all of `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and

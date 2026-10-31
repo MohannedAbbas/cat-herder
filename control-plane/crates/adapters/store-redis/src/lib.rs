@@ -7,7 +7,7 @@
 //! calls it before each model call and rejects the call on `Exceeded`.
 
 use cat_herder_domain::entities::RunId;
-use cat_herder_domain::ports::{BudgetCounter, ConsumeOutcome, DomainResult};
+use cat_herder_domain::ports::{BudgetCounter, ConsumeOutcome, DedupRepository, DomainResult};
 use redis::Script;
 use redis::aio::ConnectionManager;
 
@@ -80,6 +80,40 @@ impl BudgetCounter for RedisBudgetCounter {
         let mut conn = self.conn.clone();
         let _: i64 = redis::cmd("DEL").arg(&key).query_async(&mut conn).await?;
         Ok(())
+    }
+}
+
+/// Redis-backed dedup/replay cache (`PLAN.md` §11.5): `SET key NX PX ttl` is atomic, so
+/// `check_and_record` is a single-command check-and-set (no TOCTOU race).
+#[derive(Clone)]
+pub struct RedisDedupRepository {
+    conn: ConnectionManager,
+}
+
+impl RedisDedupRepository {
+    /// Connect to Redis and validate the connection.
+    pub async fn connect(url: &str) -> DomainResult<Self> {
+        let client = redis::Client::open(url)?;
+        let conn = ConnectionManager::new(client).await?;
+        Ok(Self { conn })
+    }
+}
+
+impl DedupRepository for RedisDedupRepository {
+    async fn check_and_record(&self, key: &str, ttl: std::time::Duration) -> DomainResult<bool> {
+        let mut conn = self.conn.clone();
+        let millis = ttl.as_millis().max(1) as u64;
+        // NX: set only if absent. `Option<String>` is `None` when the key already
+        // existed (nil reply) -> duplicate.
+        let set: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg("1")
+            .arg("NX")
+            .arg("PX")
+            .arg(millis)
+            .query_async(&mut conn)
+            .await?;
+        Ok(set.is_none())
     }
 }
 

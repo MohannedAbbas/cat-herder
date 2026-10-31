@@ -16,9 +16,9 @@ use cat_herder_domain::entities::{
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, ApprovalRepository, AuditRepository, BudgetCounter, BudgetRepository,
-    CheckpointRepository, ConsumeOutcome, CredentialGrantRepository, DomainResult, EventRepository,
-    GitRepoRepository, LeaseManager, ModelRepository, ProviderRepository, RunRepository,
-    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
+    CheckpointRepository, ConsumeOutcome, CredentialGrantRepository, DedupRepository, DomainResult,
+    EventRepository, GitRepoRepository, LeaseManager, ModelRepository, ProviderRepository,
+    RunRepository, SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -736,6 +736,25 @@ impl BudgetCounter for InMemoryBudgetCounter {
     }
 }
 
+/// In-memory dedup/replay cache (`PLAN.md` §11.5) — the single-replica dev fallback.
+/// Records a key with an expiry; `check_and_record` reports duplicates atomically.
+#[derive(Clone, Default)]
+pub struct InMemoryDedupRepository {
+    inner: Arc<RwLock<HashMap<String, tokio::time::Instant>>>,
+}
+
+impl DedupRepository for InMemoryDedupRepository {
+    async fn check_and_record(&self, key: &str, ttl: std::time::Duration) -> DomainResult<bool> {
+        let mut map = self.inner.write().await;
+        let now = tokio::time::Instant::now();
+        let duplicate = map.get(key).is_some_and(|expiry| *expiry > now);
+        if !duplicate {
+            map.insert(key.to_string(), now + ttl);
+        }
+        Ok(duplicate)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,5 +966,19 @@ mod tests {
         repo.save(&budget).await.unwrap();
         assert_eq!(repo.get(RunId(7)).await.unwrap().unwrap().cap, 500);
         assert!(repo.get(RunId(8)).await.unwrap().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dedup_check_and_record_reports_duplicates() {
+        let dedup = InMemoryDedupRepository::default();
+        let ttl = std::time::Duration::from_secs(10);
+        // First is a new record; second (same key) is a duplicate.
+        assert!(!dedup.check_and_record("k1", ttl).await.unwrap());
+        assert!(dedup.check_and_record("k1", ttl).await.unwrap());
+        // A different key is new.
+        assert!(!dedup.check_and_record("k2", ttl).await.unwrap());
+        // After the TTL lapses the key is new again.
+        tokio::time::advance(std::time::Duration::from_secs(11)).await;
+        assert!(!dedup.check_and_record("k1", ttl).await.unwrap());
     }
 }

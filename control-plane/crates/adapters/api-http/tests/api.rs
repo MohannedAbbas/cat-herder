@@ -376,6 +376,57 @@ async fn webhook_without_runtime_returns_503() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// POST to the generic webhook with the shared secret header.
+async fn post_webhook(app: Router, body: &str, secret: &str) -> (StatusCode, Vec<u8>) {
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/webhooks/generic")
+                .header("content-type", "application/json")
+                .header("x-webhook-secret", secret)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, body)
+}
+
+#[tokio::test]
+async fn webhook_dedup_rejects_replayed_delivery() {
+    use cat_herder_api_http::WEBHOOK_SECRET_KEY;
+    use cat_herder_domain::ports::SettingRepository;
+
+    let state = AppState::default();
+    state
+        .settings
+        .set(WEBHOOK_SECRET_KEY, "s3cret")
+        .await
+        .unwrap();
+    let app = router(state);
+
+    // First delivery: passes signature + admission, then fails on the missing runtime.
+    let (s1, _) = post_webhook(
+        app.clone(),
+        r#"{"task_spec":"hello","dedup_key":"delivery-1","model":"openai/gpt-4"}"#,
+        "s3cret",
+    )
+    .await;
+    assert_eq!(s1, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Replayed delivery (same dedup key): rejected as a duplicate before any run.
+    let (s2, _) = post_webhook(
+        app,
+        r#"{"task_spec":"hello","dedup_key":"delivery-1","model":"openai/gpt-4"}"#,
+        "s3cret",
+    )
+    .await;
+    assert_eq!(s2, StatusCode::CONFLICT);
+}
+
 // --- mcp ------------------------------------------------------------------
 
 #[tokio::test]

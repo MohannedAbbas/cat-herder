@@ -217,11 +217,22 @@ Brokered credentials and a real budget hard-stop; both are called out as
 
 ## Tier 3 — triggers & the product surface
 
-- [ ] **10. Trigger adapters + hardening (§5, §11.5).**
+- [x] **10. Trigger adapters + hardening (§5, §11.5).**
   Only the generic webhook exists; `dedup_key` is carried but never checked.
   *Done when:* GitHub App, GitLab, Slack, and cron adapters normalize to `RunRequest`;
   signature verification per source; dedup/replay cache, per-source cooldown, and
   global concurrency caps are actually enforced (not just declared).
+  *Status:* ✅ landed — ✅ `DedupRepository` port (atomic `check_and_record`) +
+  `InMemoryDedupRepository` (tokio clock) + `RedisDedupRepository` (`SET NX PX`); ✅
+  `admit_trigger` admission control (dedup → 409, per-source cooldown → 429, global
+  concurrency cap → 503) wired into `webhook_generic` *before* the runtime pre-flight;
+  ✅ per-source signature verification (`api-http/src/trigger.rs`): webhook HMAC, GitHub
+  `X-Hub-Signature-256`, Slack `X-Slack-Signature` (5-min skew), GitLab `X-Gitlab-Token`;
+  ✅ source adapters — `normalize_github` (`issue_comment`/`pull_request`),
+  `normalize_gitlab`, `normalize_slack`, `normalize_cron` → `RunRequest`; ✅ routes
+  `/v1/webhooks/{github,gitlab,slack}` (verify + normalize + admit + run). See
+  `docs/design/triggers.md`. ⬜ Deferred: task templates (§5, with #13), cron scheduler,
+  per-source secret vaulting, service-to-service mTLS.
 
 - [ ] **11. Result-review loop (§10).**
   `AwaitingReview`/`Reviewed`/`Rejected` exist but nothing enters or leaves them.
