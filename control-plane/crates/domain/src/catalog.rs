@@ -7,13 +7,14 @@ use std::collections::HashMap;
 use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun, Tool};
 use crate::entities::{RunKind, RunState, WorkflowDefinition, WorkflowStep};
 
-/// Built-in catalog defaults that operators may override via the environment:
-/// the harness image used by every seeded agent, and each agent's
-/// `max_concurrency`. Unset/blank values fall back to the constants below, so a
-/// bare deployment still gets the historical defaults.
+/// Built-in catalog defaults that operators may override via the environment.
+/// Default agents carry an *empty* `image` (the runtime uses its fresh global
+/// harness image, never a frozen seed-time tag); only the Rust agent pins a
+/// concrete image. `max_concurrency` caps each agent.
 #[derive(Debug, Clone)]
 pub struct CatalogDefaults {
-    /// Harness image reference seeded into every agent template.
+    /// Default harness image (fallback reference; the runtime's global image is
+    /// read separately and is authoritative for empty-image agents).
     pub harness_image: String,
     /// Rust-capable harness image reference seeded into the Rust agent template.
     pub harness_rust_image: String,
@@ -97,7 +98,7 @@ pub fn default_agents_with(
             id: "agent-codeact".into(),
             name: "CodeAct coding agent".into(),
             description: "General-purpose coding agent: plans, edits, tests, and opens PRs.".into(),
-            image: defaults.harness_image.clone(),
+            image: String::new(),
             runtime_tier: RuntimeTier::Default,
             model: model("agent-codeact", "anthropic:claude-sonnet-4-6"),
             tools: vec![
@@ -113,7 +114,7 @@ pub fn default_agents_with(
             id: "agent-reviewer".into(),
             name: "Code review agent".into(),
             description: "Reviews diffs for correctness, security, and style.".into(),
-            image: defaults.harness_image.clone(),
+            image: String::new(),
             runtime_tier: RuntimeTier::Gvisor,
             model: model("agent-reviewer", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "git".into(), "github".into()],
@@ -123,7 +124,7 @@ pub fn default_agents_with(
             id: "agent-docs".into(),
             name: "Documentation agent".into(),
             description: "Generates changelogs and API docs from the codebase.".into(),
-            image: defaults.harness_image.clone(),
+            image: String::new(),
             runtime_tier: RuntimeTier::Default,
             model: model("agent-docs", "openai:gpt-5.5"),
             tools: vec!["filesystem".into(), "web_search".into()],
@@ -209,9 +210,10 @@ mod tests {
         assert_eq!(rust.model, "deepseek:deepseek-chat");
         assert_eq!(rust.max_concurrency, 4);
         assert!(rust.tools.contains(&"execute".to_string()));
-        // Existing agents keep the Python harness image.
+        // Default agents carry an empty image: the runtime uses its fresh global
+        // harness image (never a frozen seed-time tag).
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
-        assert_eq!(codeact.image, DEFAULT_HARNESS_IMAGE);
+        assert_eq!(codeact.image, "");
     }
 
     #[test]
@@ -249,17 +251,16 @@ mod tests {
     }
 
     #[test]
-    fn default_agents_with_applies_harness_image_and_concurrency() {
+    fn default_agents_use_empty_image_and_concurrency_override() {
         let mut d = CatalogDefaults::default();
-        d.harness_image = "ghcr.io/acme/harness:9.9.9".into();
         d.max_concurrency.insert("agent-codeact".into(), 16);
         let agents = default_agents_with(&d, &HashMap::new());
-        assert!(
-            agents
-                .iter()
-                .filter(|a| a.id != "agent-rust")
-                .all(|a| a.image == "ghcr.io/acme/harness:9.9.9")
-        );
+        // Default agents carry an empty image (the runtime uses its fresh global
+        // harness image); only agent-rust pins a concrete image.
+        assert!(agents
+            .iter()
+            .filter(|a| a.id != "agent-rust")
+            .all(|a| a.image.is_empty()));
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
         assert_eq!(codeact.max_concurrency, 16);
     }
