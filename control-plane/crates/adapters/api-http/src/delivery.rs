@@ -11,6 +11,7 @@
 //! redactor before being sent.
 
 use cat_herder_domain::entities::{Run, RunState};
+use cat_herder_domain::ports::SettingRepository;
 use cat_herder_domain::redact::redact;
 use ring::hmac;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
