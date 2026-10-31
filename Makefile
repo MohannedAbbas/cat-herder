@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt lint run chart tilt harness-image sandbox-image
+.PHONY: build test coverage fmt lint run chart tilt prune harness-image sandbox-image
 
 # The Rust workspace lives in control-plane/ (see control-plane/Cargo.toml).
 WORKSPACE := control-plane
@@ -30,6 +30,13 @@ chart:
 
 tilt:
 	tilt up
+
+# Reclaim disk from local builds: clears the Rust target/ (regenerable) and the
+# dangling container layers that every Tilt rebuild leaves behind. Tilt's Rust-image
+# builds are disk-hungry (each leaves a ~1 GB layer), so run this when the disk fills.
+prune:
+	cd $(WORKSPACE) && cargo clean
+	podman image prune -f
 
 harness-image:
 	podman build -t cat-herder-agent-harness:dev -f agent-harness/Containerfile agent-harness

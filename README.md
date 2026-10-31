@@ -59,6 +59,14 @@ make tilt   # == tilt up
 Podman's insecure-registry allowlist for `127.0.0.1:5000` lives in
 `~/.config/containers/registries.conf` (already configured).
 
+The Rust image builds are disk-hungry — every rebuild leaves a ~1 GB dangling layer
+and the in-container `cargo build --release` is heavy. If the disk fills and the build
+fails with `no space left on device`, reclaim space with:
+
+```sh
+make prune   # cargo clean + podman image prune -f
+```
+
 ## Configuration
 
 The control plane is configured via environment variables:
