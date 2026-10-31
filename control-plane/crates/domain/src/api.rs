@@ -163,6 +163,9 @@ pub struct CreateRunRequest {
     /// Token budget cap for the run (§12). `None`/`0` = unbounded.
     #[serde(default)]
     pub budget: Option<u64>,
+    /// Optional https URL to POST the terminal result to (reply channel).
+    #[serde(default)]
+    pub callback_url: Option<String>,
 }
 
 fn default_max_concurrency() -> u32 {
@@ -198,6 +201,8 @@ pub struct RunResponse {
     pub output_tokens: u64,
     /// Token budget cap for the run (§12). `None`/`0` = unbounded.
     pub budget: Option<u64>,
+    /// Optional URL the control plane POSTs the terminal result to (reply channel).
+    pub callback_url: Option<String>,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -223,6 +228,7 @@ impl From<&crate::entities::Run> for RunResponse {
             input_tokens: run.input_tokens,
             output_tokens: run.output_tokens,
             budget: None,
+            callback_url: run.callback_url.clone(),
         }
     }
 }
@@ -452,6 +458,45 @@ mod tests {
     use super::{
         default_git_hosts, is_safe_repo_url, is_valid_host, repo_identity, repo_identity_from_url,
     };
+
+    #[test]
+    fn run_response_maps_callback_url() {
+        use crate::entities::{
+            Run, RunId, RunKind, RunState, RuntimeTier,
+        };
+        let run = Run {
+            id: RunId(7),
+            kind: RunKind::Agent,
+            state: RunState::Succeeded,
+            task_spec: "t".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: std::time::SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            repo: None,
+            language: None,
+            workflow_ref: None,
+            runtime_tier: RuntimeTier::default(),
+            started_at: None,
+            finished_at: None,
+            pr_url: None,
+            report: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            callback_url: Some("https://example.com/cb".into()),
+        };
+        let resp = super::RunResponse::from(&run);
+        assert_eq!(resp.callback_url.as_deref(), Some("https://example.com/cb"));
+
+        let no_cb = Run {
+            callback_url: None,
+            ..run
+        };
+        let resp = super::RunResponse::from(&no_cb);
+        assert!(resp.callback_url.is_none());
+    }
 
     #[test]
     fn repo_url_scheme_validation() {

@@ -626,6 +626,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         }
     }
 

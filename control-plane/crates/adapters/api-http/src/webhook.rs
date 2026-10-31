@@ -32,6 +32,9 @@ pub struct WebhookPayload {
     /// Token budget cap for the run (§12). `None`/`0` = unbounded.
     #[serde(default)]
     pub budget: Option<u64>,
+    /// Optional URL the control plane POSTs the terminal result to (reply channel).
+    #[serde(default)]
+    pub callback_url: Option<String>,
 }
 
 fn default_kind() -> RunKind {
@@ -57,6 +60,7 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
         workflow_ref: None,
         runtime_tier: Default::default(),
         budget: payload.budget,
+        callback_url: payload.callback_url,
     }
 }
 
@@ -76,6 +80,7 @@ mod tests {
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
             budget: Some(10_000),
+            callback_url: Some("https://example.com/callback".into()),
         }
     }
 
@@ -91,5 +96,15 @@ mod tests {
         assert_eq!(req.model.as_deref(), Some("openai/gpt-5.5"));
         assert_eq!(req.repo.as_deref(), Some("org/repo"));
         assert_eq!(req.language.as_deref(), Some("rust"));
+        assert_eq!(req.callback_url.as_deref(), Some("https://example.com/callback"));
+    }
+
+    #[test]
+    fn normalize_maps_callback_url_absent_by_default() {
+        let json = serde_json::json!({ "task_spec": "do it" });
+        let payload: WebhookPayload = serde_json::from_value(json).expect("deserialize");
+        assert!(payload.callback_url.is_none());
+        let req = normalize(payload);
+        assert!(req.callback_url.is_none());
     }
 }

@@ -217,6 +217,7 @@ async fn get_run_events_replays_the_log() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -275,6 +276,7 @@ async fn stream_run_events_without_nats_returns_501() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
 
@@ -312,6 +314,7 @@ async fn seed_run(state: &AppState, id: u64) {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
 }
@@ -483,6 +486,7 @@ async fn respond_approval_approves_and_resumes_run() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -607,6 +611,7 @@ async fn respond_review_approves_and_reviews_run() {
         report: Some("# Done".into()),
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -674,6 +679,7 @@ async fn list_reviews_returns_pending_queue_with_run_context() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -745,6 +751,7 @@ async fn get_run_diff_returns_decoded_changes() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -809,6 +816,7 @@ async fn get_run_approval_returns_pending_approval() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -869,6 +877,7 @@ async fn get_run_review_returns_pending_review() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -1050,6 +1059,7 @@ async fn delete_run_purges_all_run_data() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&run).await.unwrap();
     state
@@ -1181,6 +1191,7 @@ async fn retention_sweep_purges_expired_terminal_runs() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     // A recent terminal run that must survive.
     let recent = Run {
@@ -1204,6 +1215,7 @@ async fn retention_sweep_purges_expired_terminal_runs() {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
     state.repo.save(&old).await.unwrap();
     state.repo.save(&recent).await.unwrap();
@@ -1388,6 +1400,7 @@ async fn post_finished_event_marks_run_succeeded() {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         })
         .await
         .unwrap();
@@ -1436,6 +1449,7 @@ async fn post_finished_event_failed_marks_run_failed() {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         })
         .await
         .unwrap();
@@ -1482,6 +1496,7 @@ async fn post_stuck_event_marks_run_stuck() {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         })
         .await
         .unwrap();
@@ -1540,6 +1555,7 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         })
         .await
         .unwrap();

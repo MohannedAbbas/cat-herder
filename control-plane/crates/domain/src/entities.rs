@@ -107,6 +107,8 @@ pub struct Run {
     /// LLM token usage reported by the harness (0 until the `finished` event).
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Optional URL the control plane POSTs the terminal result to (reply channel).
+    pub callback_url: Option<String>,
 }
 
 /// A LangGraph checkpoint flushed by the harness and persisted opaquely by the control

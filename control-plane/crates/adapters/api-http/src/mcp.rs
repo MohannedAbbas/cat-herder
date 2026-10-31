@@ -90,7 +90,8 @@ fn tools() -> Vec<Value> {
                     "model": { "type": "string", "description": "Agent model" },
                     "agent_id": { "type": "string", "description": "Agent template to use (its model applies)" },
                     "repo": { "type": "string", "description": "Repository" },
-                    "language": { "type": "string", "description": "Primary coding language" }
+                    "language": { "type": "string", "description": "Primary coding language" },
+                    "callback_url": { "type": "string", "description": "Optional https URL to POST the terminal result to" }
                 },
                 "required": ["task_spec"],
             },
@@ -151,6 +152,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 workflow_ref: None,
                 runtime_tier: Default::default(),
                 budget: args["budget"].as_u64(),
+                callback_url: opt("callback_url"),
             };
 
             let budget = req.budget;
