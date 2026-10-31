@@ -36,6 +36,7 @@ async fn main() -> DomainResult<()> {
         trigger: "api".into(),
         actor: None,
         model: None,
+        image: None,
         repo: None,
         language: None,
         workflow_ref: None,

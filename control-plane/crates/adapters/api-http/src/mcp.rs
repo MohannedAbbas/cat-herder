@@ -139,6 +139,13 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 Err((_, msg)) => return (msg, true),
             };
 
+            // The per-agent harness image (falls back to the global image when absent).
+            let agent_id = opt("agent_id");
+            let image = match super::resolve_image(state, agent_id.as_deref()).await {
+                Ok(img) => img,
+                Err((_, msg)) => return (msg, true),
+            };
+
             let req = RunRequest {
                 kind,
                 task_spec,
@@ -147,6 +154,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 trigger: "mcp".into(),
                 actor: opt("actor"),
                 model: Some(model),
+                image,
                 repo: opt("repo"),
                 language: opt("language"),
                 workflow_ref: None,

@@ -419,6 +419,24 @@ pub async fn resolve_tier(
     }
 }
 
+/// Resolve the harness image for a run from its selected agent template's `image`.
+/// Returns `None` when no agent is selected (falls back to the global harness image)
+/// or the agent carries no explicit image.
+async fn resolve_image(
+    state: &AppState,
+    agent_id: Option<&str>,
+) -> Result<Option<String>, (StatusCode, String)> {
+    match agent_id {
+        Some(id) => state
+            .agents
+            .get(id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            .map(|a| a.and_then(|a| a.image).filter(|i| !i.is_empty())),
+        None => Ok(None),
+    }
+}
+
 /// Accept a task, orchestrate it through the lifecycle, and spawn a Sandbox.
 async fn create_run(
     State(state): State<AppState>,
@@ -450,6 +468,10 @@ async fn create_run(
     // The isolation tier (§13) comes from the selected agent template; a workflow run
     // (one sandbox running all steps) and a model-only run default to the default tier.
     let runtime_tier = resolve_tier(&state, req.kind, req.agent_id.as_deref()).await?;
+
+    // The per-agent harness image comes from the selected agent template; absent an
+    // agent (or an explicit image) the run falls back to the global harness image.
+    let image = resolve_image(&state, req.agent_id.as_deref()).await?;
 
     // Models are agent-specific; a run needs a resolvable model. A workflow run's
     // per-step models come from its definition (resolved at spawn), so a single
@@ -488,6 +510,7 @@ async fn create_run(
         trigger: "api".into(),
         actor: req.actor,
         model,
+        image,
         repo: req.repo,
         language: req.language,
         workflow_ref: req.workflow_ref,
@@ -1003,6 +1026,7 @@ async fn spawn_review_followup(state: &AppState, review: &Review) {
         trigger: "review".into(),
         actor: parent.actor.clone(),
         model: parent.model.clone(),
+        image: parent.image.clone(),
         repo: parent.repo.clone(),
         language: parent.language.clone(),
         workflow_ref: None,
@@ -1698,6 +1722,10 @@ async fn execute_source_run(
     mut req: RunRequest,
     query: SourceQuery,
 ) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    // The per-agent harness image (falls back to the global image when absent).
+    let image = resolve_image(state, query.agent_id.as_deref()).await?;
+    req.image = image;
+
     let model = resolve_model(state, query.model, query.agent_id)
         .await?
         .ok_or((
@@ -1941,3 +1969,61 @@ fn aggregate_status(runs: &[SessionRun]) -> RunState {
         .find(|s| runs.iter().any(|r| r.state == *s))
         .unwrap_or(RunState::Succeeded)
 }
+
+#[cfg(test)]
+mod resolve_image_tests {
+    use super::*;
+    use cat_herder_domain::api::{AgentTemplate, RuntimeTier};
+    use cat_herder_domain::ports::AgentRepository;
+
+    fn template(id: &str, image: &str) -> AgentTemplate {
+        AgentTemplate {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            image: image.into(),
+            runtime_tier: RuntimeTier::Default,
+            model: "deepseek:deepseek-chat".into(),
+            tools: vec![],
+            max_concurrency: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_image_reads_agent_image() {
+        let state = AppState::default();
+        state
+            .agents
+            .save(&template("agent-rust", "rust-image:1.0"))
+            .await
+            .unwrap();
+
+        let img = resolve_image(&state, Some("agent-rust")).await.unwrap();
+        assert_eq!(img.as_deref(), Some("rust-image:1.0"));
+    }
+
+    #[tokio::test]
+    async fn resolve_image_none_without_agent() {
+        let state = AppState::default();
+        assert_eq!(resolve_image(&state, None).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_image_none_for_blank_agent_image() {
+        let state = AppState::default();
+        state
+            .agents
+            .save(&template("agent-blank", ""))
+            .await
+            .unwrap();
+        assert_eq!(resolve_image(&state, Some("agent-blank")).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_image_not_found_errors() {
+        let state = AppState::default();
+        let err = resolve_image(&state, Some("missing")).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+}
+

@@ -27,6 +27,8 @@ pub struct RunRequest {
     /// Optional identity of the requester (until SSO is wired).
     pub actor: Option<String>,
     pub model: Option<String>,
+    /// Harness image to run this execution on (per-agent). `None` = global default.
+    pub image: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
     /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).

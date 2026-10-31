@@ -115,6 +115,16 @@ pub fn runtime_class_name(tier: RuntimeTier) -> Option<&'static str> {
     }
 }
 
+/// The harness image a run executes on: the run's per-agent `image` when set (and
+/// non-blank), else the runtime's global `default_image`. Backward compatible: a run
+/// with no image behaves exactly as before (global harness image).
+pub(crate) fn effective_image<'a>(run: &'a Run, default_image: &'a str) -> &'a str {
+    match run.image.as_deref() {
+        Some(img) if !img.trim().is_empty() => img,
+        _ => default_image,
+    }
+}
+
 /// Creates and manages agent-sandbox `Sandbox` resources.
 #[derive(Clone)]
 pub struct SandboxRuntime {
@@ -263,6 +273,9 @@ impl SandboxRuntime {
         git_token: Option<&str>,
         workflow_steps: Option<&[(String, String)]>,
     ) -> DynamicObject {
+        // Per-agent harness image: run on the image the run was created with (e.g. the
+        // Rust image with cargo/rustc), falling back to the global harness image.
+        let image = effective_image(run, &self.harness_image);
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
             serde_json::json!({ "name": "TASK_SPEC", "value": run.task_spec }),
@@ -380,7 +393,7 @@ impl SandboxRuntime {
                 }
                 vec![serde_json::json!({
                     "name": "workspace-materialize",
-                    "image": self.harness_image,
+                    "image": image,
                     "command": ["sh", "-c", WORKSPACE_MATERIALIZE_SCRIPT],
                     "env": ictx_env,
                     "volumeMounts": [{
@@ -436,7 +449,7 @@ impl SandboxRuntime {
                         "initContainers": init_containers,
                         "containers": [{
                             "name": "harness",
-                            "image": self.harness_image,
+                            "image": image,
                             "env": env,
                             "ports": [{ "containerPort": self.pod.container_port }],
                             "volumeMounts": [{
@@ -489,14 +502,19 @@ impl AgentRuntime for SandboxRuntime {
     async fn spawn(&self, run: &Run, git_token: Option<&str>) -> DomainResult<()> {
         // Version-compatibility matrix (§9): refuse to launch a harness image whose
         // parsed version falls outside the control plane's supported range. A tagless
-        // (digest-pinned) image is unverifiable and allowed through.
-        if is_incompatible(self.harness_version, &self.harness_range) {
+        // (digest-pinned) image is unverifiable and allowed through. Check the image
+        // that will actually be used for this run (per-agent override, else global).
+        let (image, version) = match run.image.as_deref() {
+            Some(img) => (img, version::harness_version(img)),
+            None => (self.harness_image.as_str(), self.harness_version),
+        };
+        if is_incompatible(version, &self.harness_range) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "refusing to launch incompatible harness image '{}': version {:?} \
                      is outside the supported range {:?}",
-                    self.harness_image, self.harness_version, self.harness_range
+                    image, version, self.harness_range
                 ),
             )
             .into());
@@ -623,5 +641,54 @@ mod tests {
         assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("git clone"));
         assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("/repo/.git"));
         assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("GIT_ASKPASS"));
+    }
+
+    fn test_run(image: Option<&str>) -> Run {
+        Run {
+            id: RunId(1),
+            kind: cat_herder_domain::entities::RunKind::Agent,
+            state: RunState::Queued,
+            task_spec: "t".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: std::time::SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            image: image.map(str::to_string),
+            repo: None,
+            language: None,
+            workflow_ref: None,
+            runtime_tier: RuntimeTier::Default,
+            started_at: None,
+            finished_at: None,
+            pr_url: None,
+            report: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            callback_url: None,
+        }
+    }
+
+    #[test]
+    fn effective_image_uses_run_image_then_falls_back() {
+        // A per-run image (e.g. the Rust harness image) wins over the global default.
+        let with_image = test_run(Some("cat-herder-agent-harness-rust:0.1.0"));
+        assert_eq!(
+            effective_image(&with_image, "cat-herder-agent-harness:0.1.0"),
+            "cat-herder-agent-harness-rust:0.1.0"
+        );
+        // No image -> global harness image exactly as before (backward compatible).
+        let no_image = test_run(None);
+        assert_eq!(
+            effective_image(&no_image, "cat-herder-agent-harness:0.1.0"),
+            "cat-herder-agent-harness:0.1.0"
+        );
+        // Blank image is treated as absent.
+        let blank = test_run(Some("  "));
+        assert_eq!(
+            effective_image(&blank, "cat-herder-agent-harness:0.1.0"),
+            "cat-herder-agent-harness:0.1.0"
+        );
     }
 }
