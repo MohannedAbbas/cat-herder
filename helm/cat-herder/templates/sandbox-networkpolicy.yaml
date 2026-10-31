@@ -68,8 +68,9 @@ spec:
         - protocol: TCP
           port: {{ .Values.agentSandbox.networkPolicy.dns.port }}
 ---
-# Allow the in-cluster control plane service (cat-herder-api) so the harness can
-# report run events back.
+# Allow the in-cluster control plane service (cat-herder-api) over BOTH the HTTP
+# events port (8080) and the gRPC control-channel port (grpcPort), so the harness
+# can report events AND stream heartbeats/checkpoints back (§6/§9).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -93,6 +94,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.agentSandbox.networkPolicy.controlPlane.port }}
+        - protocol: TCP
+          port: {{ .Values.controlPlane.grpcPort }}
 ---
 {{- if .Values.broker.enabled }}
 # Allow the JIT credential broker (cat-herder-broker) so the harness's `credential`
