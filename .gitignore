@@ -25,3 +25,4 @@ dev-values.yaml
 .idea/
 .vscode/
 .DS_Store
+.obsidian/
