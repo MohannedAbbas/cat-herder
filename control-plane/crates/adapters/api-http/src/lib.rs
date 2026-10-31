@@ -32,9 +32,10 @@ use cat_herder_domain::entities::{
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
 use cat_herder_domain::ports::{
-    AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, DedupRepository, EventBus,
-    EventRepository, GitRepoRepository, MintedCredential, ReviewRepository, RunRepository,
-    RunRequest, SessionRepository, SettingRepository, WorkflowRepository,
+    AgentRepository, AgentRuntime, ApprovalRepository, BudgetRepository, CheckpointRepository,
+    CredentialBroker, CredentialGrantRepository, DedupRepository, EventBus, EventRepository,
+    GitRepoRepository, MintedCredential, ReviewRepository, RunRepository, RunRequest,
+    SessionRepository, SettingRepository, WorkflowRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -146,6 +147,9 @@ pub struct AppState {
     pub reviews: ReviewRepo,
     /// The configurable workflow catalog (`PLAN.md` §7).
     pub workflows: WorkflowRepo,
+    /// Minted credential-grant metadata (§11.3) — held separately from the broker so
+    /// retention/deletion can purge a run's grants (§11.7).
+    pub grants: CredentialGrantRepo,
     /// The JIT credential broker (`PLAN.md` §11.3). Remote (gRPC) when a broker endpoint
     /// is configured; otherwise the in-process service with an empty issuer map (whose
     /// `mint` fails gracefully and the runtime falls back to a registered repo token or
@@ -200,7 +204,7 @@ impl Default for AppState {
         // and `mint` fails gracefully.
         let broker = BrokerImpl::Local(CredentialBrokerService::new(
             Default::default(),
-            grants,
+            grants.clone(),
             EventRepo::InMemory(events.clone()),
             bus.clone(),
         ));
@@ -218,6 +222,7 @@ impl Default for AppState {
             approvals: ApprovalRepo::InMemory(Default::default()),
             reviews: ReviewRepo::InMemory(Default::default()),
             workflows: WorkflowRepo::InMemory(Default::default()),
+            grants,
             broker,
             budgets: BudgetRepo::InMemory(Default::default()),
             budget_counter: BudgetCounterImpl::InMemory(Default::default()),
@@ -246,7 +251,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/runs", get(list_runs).post(create_run))
-        .route("/v1/runs/{id}", get(get_run))
+        .route("/v1/runs/{id}", get(get_run).delete(admin::delete_run))
         .route("/v1/runs/{id}/budget", post(raise_budget_handler))
         .route(
             "/v1/runs/{id}/events",
@@ -1271,6 +1276,96 @@ async fn request_review_for_run(state: &AppState, run: &Run) {
     {
         eprintln!("review request failed for run {}: {e}", run.id.0);
     }
+}
+
+/// Hard-delete a run and all its data (§11.7): revoke still-active credentials, then
+/// purge the run's events, checkpoints, approvals, reviews, budgets, grants, session
+/// display row, and the run itself. Postgres cascades most of this via the `runs` FK,
+/// but the explicit deletes keep the in-memory store correct too. A failed credential
+/// revocation is logged, not fatal.
+pub(crate) async fn purge_run(state: &AppState, run_id: RunId) -> Result<(), String> {
+    if let Err(e) = state.broker.revoke_run(run_id).await {
+        eprintln!("credential revocation failed for run {}: {e}", run_id.0);
+    }
+
+    state
+        .events
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .checkpoints
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .approvals
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .reviews
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .budgets
+        .delete(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .grants
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .sessions
+        .delete_run(run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    // The run itself, last (the Postgres FK cascade is a backstop).
+    state.repo.delete(run_id).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Retention sweep (§11.7): hard-deletes terminal runs whose `finished_at` (or
+/// `created_at`) is older than `retention_days`. Returns the number purged. A
+/// `retention_days` of `0` disables the sweep.
+pub async fn retention_sweep(state: &AppState, retention_days: u64) -> usize {
+    if retention_days == 0 {
+        return 0;
+    }
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(retention_days.saturating_mul(86_400));
+    let runs = match state.repo.list_all().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("retention sweep: list failed: {e}");
+            return 0;
+        }
+    };
+    let mut purged = 0;
+    for run in runs {
+        // Purge only "done" runs: terminal states, or `Succeeded` (a finished leaf with
+        // no reviewable output). Runs still awaiting input/review are left alone.
+        let done = cat_herder_domain::state::is_terminal(run.state)
+            || run.state == RunState::Succeeded;
+        if !done {
+            continue;
+        }
+        let when = run.finished_at.or(Some(run.created_at));
+        if !when.is_some_and(|t| t < cutoff) {
+            continue;
+        }
+        match purge_run(state, run.id).await {
+            Ok(()) => {
+                purged += 1;
+                eprintln!("retention: purged run {}", run.id.0);
+            }
+            Err(e) => eprintln!("retention: purge of run {} failed: {e}", run.id.0),
+        }
+    }
+    purged
 }
 
 /// Parse a `u32` env var, falling back to `default` when unset/blank/invalid.

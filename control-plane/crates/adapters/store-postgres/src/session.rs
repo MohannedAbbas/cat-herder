@@ -2,7 +2,7 @@
 //! `session_runs` tables.
 
 use cat_herder_domain::api::{Session, SessionRun, now_iso};
-use cat_herder_domain::entities::Run;
+use cat_herder_domain::entities::{Run, RunId};
 use cat_herder_domain::ports::{DomainResult, SessionRepository};
 use sqlx::Row;
 use sqlx::postgres::{PgPool, PgRow};
@@ -115,6 +115,14 @@ impl SessionRepository for PostgresSessionRepository {
         .bind(projected.id.as_str())
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        sqlx::query("DELETE FROM session_runs WHERE id = $1")
+            .bind(format!("run-{}", run_id.0))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }

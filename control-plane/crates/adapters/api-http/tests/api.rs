@@ -861,6 +861,224 @@ async fn delete_workflow_removes_it() {
     assert!(list.iter().all(|w| w["id"] != "tmp"));
 }
 
+// --- retention & deletion --------------------------------------------------
+
+#[tokio::test]
+async fn delete_run_requires_auth() {
+    let state = AppState::default();
+    let res = router(state)
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/runs/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_run_purges_all_run_data() {
+    use cat_herder_domain::entities::{
+        ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant,
+        CredentialGrantStatus, Review, ReviewStatus, Run, RunId, RunKind, RunState,
+    };
+    use cat_herder_domain::events::Event;
+    use cat_herder_domain::ports::{
+        ApprovalRepository, BudgetRepository, CheckpointRepository, CredentialGrantRepository,
+        EventRepository, ReviewRepository, RunRepository,
+    };
+    use std::time::{Duration, SystemTime};
+
+    let state = AppState::default();
+    let run_id = RunId(99);
+
+    // Seed a run and one of every run-scoped record.
+    let run = Run {
+        id: run_id,
+        kind: RunKind::Agent,
+        state: RunState::Succeeded,
+        task_spec: "purge me".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        workflow_ref: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .events
+        .append(run_id, &Event::new(run_id, "run.queued", None, serde_json::json!({})))
+        .await
+        .unwrap();
+    state
+        .checkpoints
+        .append(
+            run_id,
+            &Checkpoint {
+                run_id,
+                seq: 0,
+                thread_id: "1".into(),
+                checkpoint_ns: String::new(),
+                checkpoint_id: "c1".into(),
+                serde_type: "json".into(),
+                payload: vec![],
+                occurred_at: SystemTime::now(),
+            },
+        )
+        .await
+        .unwrap();
+    state
+        .approvals
+        .create(&ApprovalRequest {
+            id: "a1".into(),
+            run_id,
+            resume_token: "t".into(),
+            payload: serde_json::json!({}),
+            status: ApprovalStatus::Pending,
+            response: None,
+            created_at: SystemTime::now(),
+            responded_at: None,
+        })
+        .await
+        .unwrap();
+    state
+        .reviews
+        .create(&Review {
+            id: "r1".into(),
+            run_id,
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+    state
+        .budgets
+        .save(&Budget {
+            run_id,
+            cap: 100,
+            updated_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+    state
+        .grants
+        .create(&CredentialGrant {
+            id: "g1".into(),
+            run_id,
+            target: "github.com/org/repo".into(),
+            action: "clone".into(),
+            scope: "read".into(),
+            status: CredentialGrantStatus::Active,
+            expires_at: SystemTime::now() + Duration::from_secs(3600),
+            created_at: SystemTime::now(),
+            revoked_at: None,
+            token_id: None,
+        })
+        .await
+        .unwrap();
+
+    let token = login_token(&state).await;
+    let res = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/runs/99")
+                .header("cookie", format!("session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Everything is gone.
+    assert!(state.repo.get(run_id).await.unwrap().is_none());
+    assert!(state.events.list(run_id, 0, 100).await.unwrap().is_empty());
+    assert!(state.checkpoints.latest(run_id).await.unwrap().is_none());
+    assert!(state.approvals.get("a1").await.unwrap().is_none());
+    assert!(state.reviews.get("r1").await.unwrap().is_none());
+    assert!(state.budgets.get(run_id).await.unwrap().is_none());
+    assert!(state.grants.list_active(run_id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn retention_sweep_purges_expired_terminal_runs() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::RunRepository;
+    use std::time::{Duration, SystemTime};
+
+    let state = AppState::default();
+    let old = Run {
+        id: RunId(7),
+        kind: RunKind::Agent,
+        state: RunState::Succeeded,
+        task_spec: "old".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now() - Duration::from_secs(3 * 86_400),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        workflow_ref: None,
+        started_at: None,
+        finished_at: Some(SystemTime::now() - Duration::from_secs(2 * 86_400)),
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    // A recent terminal run that must survive.
+    let recent = Run {
+        id: RunId(8),
+        kind: RunKind::Agent,
+        state: RunState::Succeeded,
+        task_spec: "recent".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        workflow_ref: None,
+        started_at: None,
+        finished_at: Some(SystemTime::now()),
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&old).await.unwrap();
+    state.repo.save(&recent).await.unwrap();
+
+    // A 1-day retention purges the 2-day-old run, keeps the fresh one.
+    let purged = cat_herder_api_http::retention_sweep(&state, 1).await;
+    assert_eq!(purged, 1);
+    assert!(state.repo.get(RunId(7)).await.unwrap().is_none());
+    assert!(state.repo.get(RunId(8)).await.unwrap().is_some());
+}
+
 #[tokio::test]
 async fn webhook_without_runtime_returns_503() {
     let (status, _) = post_json(

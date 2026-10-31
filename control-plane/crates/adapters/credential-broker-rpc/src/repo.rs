@@ -55,6 +55,12 @@ impl CredentialGrantRepository for GrantRepo {
             GrantRepo::Postgres(p) => p.revoke(id).await,
         }
     }
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            GrantRepo::InMemory(r) => r.delete_run(run_id).await,
+            GrantRepo::Postgres(p) => p.delete_run(run_id).await,
+        }
+    }
 }
 
 /// Event-log selector (the broker appends the audited `credential.*` events).
@@ -75,6 +81,12 @@ impl EventRepository for EventRepo {
         match self {
             EventRepo::InMemory(r) => r.list(run_id, after_seq, limit).await,
             EventRepo::Postgres(p) => p.list(run_id, after_seq, limit).await,
+        }
+    }
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            EventRepo::InMemory(r) => r.delete_run(run_id).await,
+            EventRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }

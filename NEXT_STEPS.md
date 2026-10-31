@@ -337,8 +337,19 @@ Brokered credentials and a real budget hard-stop; both are called out as
   Rust + Python, run event replay, cost attribution rollups, and a secret-redaction
   layer over events/traces/logs.
 
-- [ ] **18. Retention & deletion (§11.7).** Configurable retention + a deletion API
+- [x] **18. Retention & deletion (§11.7).** Configurable retention + a deletion API
   that hard-deletes a run's events, checkpoints, snapshots, and artifacts.
+  *Status:* ✅ landed — ✅ `DELETE /v1/runs/{id}` (admin-gated, audited `run.delete`)
+  hard-deletes a run and all its data via `purge_run`: revoke still-active credentials,
+  then purge events, checkpoints, approvals, reviews, budgets, credential grants, the
+  session display row, and the run (Postgres `ON DELETE CASCADE` is the backstop; the
+  per-repository `delete_run`/`delete` methods keep in-memory correct and act as
+  defense-in-depth); ✅ **configurable retention** — `CAT_HERDER_RETENTION_DAYS`
+  (`0` = disabled) + a background `retention_sweep` that purges "done" runs (terminal
+  states, or `Succeeded` with no reviewable output) older than the window, leaving
+  `AwaitingInput`/`AwaitingReview` runs alone. See `docs/design/retention.md`. ⬜
+  Deferred: workspace snapshot/artifact deletion (with #5's MinIO slice) and the
+  per-run PVC subpath reclaim, plus an admin-UI retention setting (env-driven for now).
 
 - [ ] **19. Evaluation harness (§17).** Task-completion scoring (SWE-bench-style),
   deterministic replay, broker "secret never reaches model" tests, and a budgeted

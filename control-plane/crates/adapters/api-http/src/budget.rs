@@ -38,6 +38,13 @@ impl BudgetRepository for BudgetRepo {
             BudgetRepo::Postgres(p) => p.get(run_id).await,
         }
     }
+
+    async fn delete(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            BudgetRepo::InMemory(r) => r.delete(run_id).await,
+            BudgetRepo::Postgres(p) => p.delete(run_id).await,
+        }
+    }
 }
 
 /// Atomic budget-counter selector: Redis in production, in-memory otherwise.

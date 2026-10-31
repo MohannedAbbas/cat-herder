@@ -12,7 +12,7 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, GitHost, GitRepo, Model, Provider, Tool, default_git_hosts,
     new_webhook_secret, repo_identity,
 };
-use cat_herder_domain::entities::{GitRepo as GitRepoEntity, WorkflowDefinition};
+use cat_herder_domain::entities::{GitRepo as GitRepoEntity, RunId, WorkflowDefinition};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, GitRepoRepository, ModelRepository, ProviderRepository,
     SettingRepository, ToolRepository, WorkflowRepository,
@@ -331,6 +331,24 @@ pub async fn delete_workflow(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     audit(&state, &actor, "workflow.delete", "workflow", &id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- run deletion ----------------------------------------------------------
+
+/// Hard-delete a run and all its data (`PLAN.md` §11.7): events, checkpoints,
+/// approvals, reviews, budgets, credential grants, the session display row, and the
+/// run itself. Admin-gated — this is destructive and irreversible.
+pub async fn delete_run(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    super::purge_run(&state, RunId(id))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    audit(&state, &actor, "run.delete", "run", &id.to_string()).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

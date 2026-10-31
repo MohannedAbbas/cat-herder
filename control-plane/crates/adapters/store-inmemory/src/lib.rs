@@ -57,6 +57,11 @@ impl RunRepository for InMemoryRunRepository {
         let runs: Vec<Run> = self.inner.read().await.values().cloned().collect();
         Ok(runs)
     }
+
+    async fn delete(&self, id: RunId) -> DomainResult<()> {
+        self.inner.write().await.remove(&id);
+        Ok(())
+    }
 }
 
 /// In-memory event log (per-run `seq`-ordered, append-only). Reference adapter.
@@ -86,6 +91,11 @@ impl EventRepository for InMemoryEventRepository {
             .filter(|e| e.seq > after_seq)
             .take(limit as usize)
             .collect())
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.remove(&run_id);
+        Ok(())
     }
 }
 
@@ -151,6 +161,11 @@ impl CheckpointRepository for InMemoryCheckpointRepository {
             .and_then(|v| v.iter().max_by_key(|c| c.seq))
             .cloned())
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.remove(&run_id);
+        Ok(())
+    }
 }
 
 /// In-memory human-in-the-loop approval store.
@@ -201,6 +216,11 @@ impl ApprovalRepository for InMemoryApprovalRepository {
             .collect();
         approvals.sort_by_key(|a| a.created_at);
         Ok(approvals)
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.retain(|_, a| a.run_id != run_id);
+        Ok(())
     }
 }
 
@@ -256,6 +276,11 @@ impl ReviewRepository for InMemoryReviewRepository {
         review.reviewed_at = Some(std::time::SystemTime::now());
         Ok(review.clone())
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.retain(|_, r| r.run_id != run_id);
+        Ok(())
+    }
 }
 
 /// In-memory credential-grant store (`PLAN.md` §11.3). Holds only grant metadata —
@@ -304,6 +329,11 @@ impl CredentialGrantRepository for InMemoryCredentialGrantRepository {
         grant.status = CredentialGrantStatus::Revoked;
         grant.revoked_at = Some(std::time::SystemTime::now());
         Ok(grant.clone())
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.retain(|_, g| g.run_id != run_id);
+        Ok(())
     }
 }
 
@@ -714,6 +744,15 @@ impl SessionRepository for InMemorySessionRepository {
         }
         Ok(())
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        let id = format!("run-{}", run_id.0);
+        let mut sessions = self.sessions.write().await;
+        for s in sessions.iter_mut() {
+            s.runs.retain(|r| r.id != id);
+        }
+        Ok(())
+    }
 }
 
 /// In-memory [`LeaseManager`] — process-local shard leases with TTL expiry. Reference
@@ -819,6 +858,11 @@ impl BudgetRepository for InMemoryBudgetRepository {
 
     async fn get(&self, run_id: RunId) -> DomainResult<Option<Budget>> {
         Ok(self.inner.read().await.get(&run_id).copied())
+    }
+
+    async fn delete(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.remove(&run_id);
+        Ok(())
     }
 }
 

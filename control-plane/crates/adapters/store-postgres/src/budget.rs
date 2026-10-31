@@ -48,6 +48,14 @@ impl BudgetRepository for PostgresBudgetRepository {
             .transpose()
             .map_err(Into::into)
     }
+
+    async fn delete(&self, run_id: RunId) -> DomainResult<()> {
+        sqlx::query("DELETE FROM budgets WHERE run_id = $1")
+            .bind(run_id.0 as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn budget_from_row(row: &PgRow) -> Result<Budget, sqlx::Error> {

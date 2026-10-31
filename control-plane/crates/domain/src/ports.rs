@@ -60,6 +60,8 @@ pub trait RunRepository {
     async fn get(&self, id: RunId) -> DomainResult<Option<Run>>;
     /// All runs.
     async fn list_all(&self) -> DomainResult<Vec<Run>>;
+    /// Hard-delete a run (Postgres cascades its events/checkpoints/etc. via the FK).
+    async fn delete(&self, id: RunId) -> DomainResult<()>;
 }
 
 /// Read-only catalog of agent templates (reference data, `PLAN.md` §13).
@@ -144,6 +146,9 @@ pub trait SessionRepository {
     /// Update a session's display run (keyed `run-{id}`) to match the lifecycle
     /// run's current state and timing (called by the reconciler as it advances).
     async fn sync_run(&self, run: &Run) -> DomainResult<()>;
+    /// Remove a run's display row (keyed `run-{id}`) from every session
+    /// (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// Durable, append-only event log (`PLAN.md` §9). The control plane is the sole
@@ -153,6 +158,8 @@ pub trait EventRepository {
     async fn append(&self, run_id: RunId, event: &Event) -> DomainResult<Event>;
     /// Replay events for a run strictly after `after_seq`, ascending, capped at `limit`.
     async fn list(&self, run_id: RunId, after_seq: i64, limit: i64) -> DomainResult<Vec<Event>>;
+    /// Hard-delete every event for a run (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// Durable LangGraph checkpoint store (`PLAN.md` §6). The control plane is the sole
@@ -163,6 +170,8 @@ pub trait CheckpointRepository {
     async fn append(&self, run_id: RunId, checkpoint: &Checkpoint) -> DomainResult<Checkpoint>;
     /// The latest checkpoint for a run (highest `seq`), or `None`.
     async fn latest(&self, run_id: RunId) -> DomainResult<Option<Checkpoint>>;
+    /// Hard-delete every checkpoint for a run (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// Durable human-in-the-loop approvals (`PLAN.md` §10). A request is created when the
@@ -180,6 +189,8 @@ pub trait ApprovalRepository {
     ) -> DomainResult<ApprovalRequest>;
     /// Every pending approval, oldest first (the approval queue).
     async fn list_pending(&self) -> DomainResult<Vec<ApprovalRequest>>;
+    /// Hard-delete every approval for a run (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// Durable result reviews (`PLAN.md` §10). A review is created when a run producing
@@ -199,6 +210,8 @@ pub trait ReviewRepository {
         reviewer: Option<String>,
         feedback: Option<String>,
     ) -> DomainResult<Review>;
+    /// Hard-delete every review for a run (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// Fan-out transport for events (`PLAN.md` §9) — e.g. NATS JetStream. Best-effort:
@@ -285,6 +298,8 @@ pub trait CredentialGrantRepository {
     async fn list_active(&self, run_id: RunId) -> DomainResult<Vec<CredentialGrant>>;
     /// Mark a grant `Revoked` (and stamp `revoked_at`). Idempotent.
     async fn revoke(&self, id: &str) -> DomainResult<CredentialGrant>;
+    /// Hard-delete every grant for a run (retention/deletion, §11.7).
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 pub trait Notifier {
@@ -310,6 +325,8 @@ pub trait BudgetRepository {
     async fn save(&self, budget: &Budget) -> DomainResult<Budget>;
     /// The run's budget, or `None` when it has none.
     async fn get(&self, run_id: RunId) -> DomainResult<Option<Budget>>;
+    /// Hard-delete a run's budget (retention/deletion, §11.7).
+    async fn delete(&self, run_id: RunId) -> DomainResult<()>;
 }
 
 /// The atomic, real-time budget counter (`PLAN.md` §12) — the authoritative hard-stop

@@ -60,6 +60,13 @@ impl RunRepository for RunRepo {
             RunRepo::Postgres(p) => p.list_all().await,
         }
     }
+
+    async fn delete(&self, id: RunId) -> DomainResult<()> {
+        match self {
+            RunRepo::InMemory(r) => r.delete(id).await,
+            RunRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -80,6 +87,13 @@ impl EventRepository for EventRepo {
         match self {
             EventRepo::InMemory(r) => r.list(run_id, after_seq, limit).await,
             EventRepo::Postgres(p) => p.list(run_id, after_seq, limit).await,
+        }
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            EventRepo::InMemory(r) => r.delete_run(run_id).await,
+            EventRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }
@@ -117,6 +131,13 @@ impl CheckpointRepository for CheckpointRepo {
         match self {
             CheckpointRepo::InMemory(r) => r.latest(run_id).await,
             CheckpointRepo::Postgres(p) => p.latest(run_id).await,
+        }
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            CheckpointRepo::InMemory(r) => r.delete_run(run_id).await,
+            CheckpointRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }
@@ -158,6 +179,13 @@ impl ApprovalRepository for ApprovalRepo {
         match self {
             ApprovalRepo::InMemory(r) => r.list_pending().await,
             ApprovalRepo::Postgres(p) => p.list_pending().await,
+        }
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            ApprovalRepo::InMemory(r) => r.delete_run(run_id).await,
+            ApprovalRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }
@@ -202,6 +230,13 @@ impl ReviewRepository for ReviewRepo {
             ReviewRepo::Postgres(p) => p.decide(id, verdict, reviewer, feedback).await,
         }
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            ReviewRepo::InMemory(r) => r.delete_run(run_id).await,
+            ReviewRepo::Postgres(p) => p.delete_run(run_id).await,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -236,6 +271,13 @@ impl CredentialGrantRepository for CredentialGrantRepo {
         match self {
             CredentialGrantRepo::InMemory(r) => r.revoke(id).await,
             CredentialGrantRepo::Postgres(p) => p.revoke(id).await,
+        }
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            CredentialGrantRepo::InMemory(r) => r.delete_run(run_id).await,
+            CredentialGrantRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }
@@ -545,6 +587,13 @@ impl SessionRepository for SessionRepo {
         match self {
             SessionRepo::InMemory(r) => r.sync_run(run).await,
             SessionRepo::Postgres(p) => p.sync_run(run).await,
+        }
+    }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        match self {
+            SessionRepo::InMemory(r) => r.delete_run(run_id).await,
+            SessionRepo::Postgres(p) => p.delete_run(run_id).await,
         }
     }
 }

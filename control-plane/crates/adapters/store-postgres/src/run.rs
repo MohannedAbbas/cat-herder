@@ -135,6 +135,14 @@ impl RunRepository for PostgresRunRepository {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    async fn delete(&self, id: RunId) -> DomainResult<()> {
+        sqlx::query("DELETE FROM runs WHERE id = $1")
+            .bind(id.0 as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {

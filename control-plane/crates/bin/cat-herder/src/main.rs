@@ -739,6 +739,7 @@ async fn main() {
         approvals: repos.approvals,
         reviews: repos.reviews,
         workflows: repos.workflows,
+        grants: repos.grants,
         broker,
         budgets: repos.budgets,
         budget_counter,
@@ -765,6 +766,23 @@ async fn main() {
     };
 
     let app = router(state.clone());
+
+    // Retention sweep (§11.7): periodically hard-delete terminal runs older than
+    // CAT_HERDER_RETENTION_DAYS (0 = disabled). Deletion is idempotent, so multiple
+    // replicas sweeping concurrently are safe.
+    let retention_days = parse_env_u32("CAT_HERDER_RETENTION_DAYS", 0) as u64;
+    if retention_days > 0 {
+        let sweep_state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                let n = cat_herder_api_http::retention_sweep(&sweep_state, retention_days).await;
+                if n > 0 {
+                    eprintln!("retention: purged {n} runs");
+                }
+            }
+        });
+    }
 
     // gRPC control channel (harness -> control plane, PLAN.md §6/§9/§14) on a
     // dedicated port — tonic (h2) and axum (h1) can't share a listener.

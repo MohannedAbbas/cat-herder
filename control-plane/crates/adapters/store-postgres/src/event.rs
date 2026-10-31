@@ -75,6 +75,14 @@ impl EventRepository for PostgresEventRepository {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        sqlx::query("DELETE FROM events WHERE run_id = $1")
+            .bind(run_id.0 as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn event_from_row(row: &PgRow) -> Result<Event, sqlx::Error> {

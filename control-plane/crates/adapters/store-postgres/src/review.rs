@@ -131,6 +131,14 @@ impl ReviewRepository for PostgresReviewRepository {
             std::io::Error::new(std::io::ErrorKind::NotFound, "review not found").into()
         })
     }
+
+    async fn delete_run(&self, run_id: RunId) -> DomainResult<()> {
+        sqlx::query("DELETE FROM reviews WHERE run_id = $1")
+            .bind(run_id.0 as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
