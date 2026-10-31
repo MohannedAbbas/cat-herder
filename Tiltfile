@@ -37,30 +37,29 @@ custom_build(
 
 # Agent harness, Python-only base (used by agent-sandbox SandboxTemplate at runtime;
 # the chart's `harness.image` points here by default). Tilt injects the built ref
-# into the chart via `image_keys` below.
+# into the chart via `image_keys` below. Also tagged with a stable `:dev` ref so the
+# Rust-capable variant can FROM it (see below).
 custom_build(
     'cat-herder-agent-harness',
-    'podman build -t $EXPECTED_REF -f agent-harness/Containerfile agent-harness && podman push $EXPECTED_REF',
+    'podman build -t $EXPECTED_REF -t 127.0.0.1:5000/cat-herder-agent-harness:dev '
+    + '-f agent-harness/Containerfile agent-harness '
+    + '&& podman push $EXPECTED_REF && podman push 127.0.0.1:5000/cat-herder-agent-harness:dev',
     ['./agent-harness'],
     skips_local_docker=True,
 )
 
 # Agent harness, Rust-capable variant. Layers the Rust toolchain ON TOP OF the base
-# image above; it is a separate custom_build (source deps don't force ordering), so it
-# also lists the base build as a resource_dep. At build time it reads the base image's
-# exact tag from the dev cluster (Tilt has pushed it and moved the running SandboxTemplate
-# pod onto it) and passes it as --build-arg BASE_IMAGE, so the variant is always built
-# FROM the same base ref that Tilt is serving. Agents opt in per-agent via the template
-# `image` field (exposed to the chart as `harness.rustImage`).
+# image above via a build arg. `image_deps` forces the base build (and its stable
+# `:dev` push) to complete first, so the variant always FROMs the freshest base.
+# Agents opt in per-agent via the template `image` field (exposed to the chart as
+# `harness.rustImage`).
 custom_build(
     'cat-herder-agent-harness-rust',
-    'BASE_REF=$(kubectl -n cat-herder get sandboxtemplate cat-herder-agent '
-    + "-o jsonpath='{.spec.podTemplate.spec.containers[0].image}') && "
-    + 'podman build --build-arg BASE_IMAGE=$BASE_REF '
+    'podman build --build-arg BASE_IMAGE=127.0.0.1:5000/cat-herder-agent-harness:dev '
     + '-t $EXPECTED_REF -f agent-harness/Containerfile.rust agent-harness && podman push $EXPECTED_REF',
     ['./agent-harness/Containerfile.rust'],
     skips_local_docker=True,
-    resource_deps=['cat-herder-agent-harness'],
+    image_deps=['cat-herder-agent-harness'],
 )
 
 # UI (React SPA served by nginx).
