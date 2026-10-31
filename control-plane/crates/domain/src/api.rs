@@ -7,13 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entities::{RunKind, RunState};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RuntimeTier {
-    Default,
-    Gvisor,
-    Kata,
-}
+pub use crate::entities::RuntimeTier;
 
 /// A reusable agent configuration (maps to SandboxTemplate + harness config).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +185,8 @@ pub struct RunResponse {
     pub task_spec: String,
     /// A configurable workflow the run executes (its id), when `kind` is `workflow`.
     pub workflow_ref: Option<String>,
+    /// The isolation tier the run executed under (§13).
+    pub runtime_tier: RuntimeTier,
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -218,6 +214,7 @@ impl From<&crate::entities::Run> for RunResponse {
             session_id: run.session_id.clone(),
             task_spec: run.task_spec.clone(),
             workflow_ref: run.workflow_ref.clone(),
+            runtime_tier: run.runtime_tier,
             created_at: to_iso(run.created_at),
             started_at: run.started_at.map(to_iso),
             finished_at: run.finished_at.map(to_iso),

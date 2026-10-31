@@ -39,6 +39,7 @@ async fn main() -> DomainResult<()> {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,

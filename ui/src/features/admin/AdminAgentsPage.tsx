@@ -151,6 +151,21 @@ export default function AdminAgentsPage() {
                   </select>
                 </Field>
 
+                <Field label="Runtime tier">
+                  <select
+                    value={form.runtimeTier}
+                    onChange={(e) => setForm({ ...form, runtimeTier: e.target.value as RuntimeTier })}
+                    className={inputCls}
+                  >
+                    <option value="default">Default (container runtime)</option>
+                    <option value="gvisor">gVisor (runsc)</option>
+                    <option value="kata">Kata (microVM)</option>
+                  </select>
+                  <span className="mt-1 block text-xs text-slate-400">
+                    Isolation tier (§13): the RuntimeClass the sandbox runs under.
+                  </span>
+                </Field>
+
                 <Field label="Tools">
                   <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-300 p-2">
                     {(tools ?? []).map((t) => (

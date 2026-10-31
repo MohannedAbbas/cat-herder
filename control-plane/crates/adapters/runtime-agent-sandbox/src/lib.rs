@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cat_herder_domain::api::{Provider, repo_identity_from_url};
-use cat_herder_domain::entities::{Run, RunId, RunState};
+use cat_herder_domain::entities::{Run, RunId, RunState, RuntimeTier};
 use cat_herder_domain::ports::{AgentRuntime, DomainResult};
 use cat_herder_domain::reconcile::RuntimeStatus;
 
@@ -100,6 +100,18 @@ impl SandboxPodConfig {
             run_timeout_secs: parse_secs("CAT_HERDER_RUN_TIMEOUT_SECS")
                 .unwrap_or(defaults.run_timeout_secs),
         }
+    }
+}
+
+/// Map an isolation tier to its Kubernetes `RuntimeClass` name (§13). `Default` maps
+/// to `None` (the cluster-default runtime class applies); `Gvisor`/`Kata` map to the
+/// `gvisor`/`kata` RuntimeClasses the chart installs (their handlers are the infra
+/// concern, configured in the chart). The concrete names are kept out of the domain.
+pub fn runtime_class_name(tier: RuntimeTier) -> Option<&'static str> {
+    match tier {
+        RuntimeTier::Default => None,
+        RuntimeTier::Gvisor => Some("gvisor"),
+        RuntimeTier::Kata => Some("kata"),
     }
 }
 
@@ -448,6 +460,11 @@ impl SandboxRuntime {
                 },
             },
         });
+        // Isolation tier (§13): pin the pod to the RuntimeClass for the run's tier
+        // (absent for `Default`, which uses the cluster default).
+        if let Some(rc) = runtime_class_name(run.runtime_tier) {
+            obj.data["spec"]["podTemplate"]["spec"]["runtimeClassName"] = serde_json::json!(rc);
+        }
         obj
     }
 
@@ -573,6 +590,13 @@ impl AgentRuntime for SandboxRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_class_name_maps_tiers() {
+        assert_eq!(runtime_class_name(RuntimeTier::Default), None);
+        assert_eq!(runtime_class_name(RuntimeTier::Gvisor), Some("gvisor"));
+        assert_eq!(runtime_class_name(RuntimeTier::Kata), Some("kata"));
+    }
 
     #[test]
     fn pod_config_defaults_match_historical_values() {

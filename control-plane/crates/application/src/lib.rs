@@ -123,6 +123,7 @@ where
         repo: req.repo.filter(|r| is_safe_repo_url(r)),
         language: req.language,
         workflow_ref: req.workflow_ref.clone(),
+        runtime_tier: req.runtime_tier,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -1021,6 +1022,7 @@ mod tests {
             repo: Some(repo.to_string()),
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             budget: None,
         }
     }
@@ -1037,6 +1039,7 @@ mod tests {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             budget: None,
         }
     }

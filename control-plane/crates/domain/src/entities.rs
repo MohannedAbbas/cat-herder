@@ -22,6 +22,23 @@ pub enum RunKind {
     Workflow,
 }
 
+/// Isolation tier (`PLAN.md` §13): which runtime class the sandbox runs under —
+/// the default container runtime, gVisor, or a Kata microVM. The concrete
+/// `RuntimeClass` name is an infra concern mapped in the runtime adapter, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeTier {
+    Default,
+    Gvisor,
+    Kata,
+}
+
+impl Default for RuntimeTier {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 /// Lifecycle state — the single source of truth (see `PLAN.md` §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,6 +95,8 @@ pub struct Run {
     pub language: Option<String>,
     /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).
     pub workflow_ref: Option<String>,
+    /// The isolation tier the run executes under (§13).
+    pub runtime_tier: RuntimeTier,
     /// Lifecycle timing (set as the run transitions through the state machine).
     pub started_at: Option<SystemTime>,
     pub finished_at: Option<SystemTime>,

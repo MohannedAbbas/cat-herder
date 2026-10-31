@@ -31,6 +31,8 @@ pub struct RunRequest {
     pub language: Option<String>,
     /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).
     pub workflow_ref: Option<String>,
+    /// The isolation tier the run executes under (§13).
+    pub runtime_tier: crate::entities::RuntimeTier,
     /// Token budget cap for the run (`PLAN.md` §12). `None`/`0` = unbounded.
     pub budget: Option<u64>,
 }

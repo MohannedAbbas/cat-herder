@@ -149,6 +149,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 repo: opt("repo"),
                 language: opt("language"),
                 workflow_ref: None,
+                runtime_tier: Default::default(),
                 budget: args["budget"].as_u64(),
             };
 

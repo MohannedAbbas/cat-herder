@@ -191,6 +191,20 @@ agentSandbox:
       cidrs:
         - 151.101.0.0/16     # Fastly CDN: static.crates.io + index.crates.io
 
+  # Isolation tiers (PLAN.md §13): RuntimeClass-backed gVisor / Kata microVMs, selected
+  # per run via the agent's `runtimeTier` (the runtime adapter maps `gvisor`/`kata` to
+  # these RuntimeClass names and sets `spec.podTemplate.spec.runtimeClassName`). Each
+  # requires the matching runtime to be installed on the nodes (e.g. gVisor's `runsc`
+  # or Kata Containers); keep `enabled: false` until it is, and adjust `handler` to
+  # match your runtime's installed handler name.
+  runtimeClasses:
+    gvisor:
+      enabled: false
+      handler: runsc
+    kata:
+      enabled: false
+      handler: kata-qemu
+
 # GitHub OAuth SSO (optional; password login still works when disabled).
 # When enabled the API exposes /v1/auth/github/login and
 # /v1/auth/github/callback. The client id/secret come from the Secret named in

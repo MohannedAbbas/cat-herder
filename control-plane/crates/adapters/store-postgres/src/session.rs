@@ -258,6 +258,7 @@ mod tests {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: Some(SystemTime::now()),
             finished_at: Some(SystemTime::now()),
             pr_url: None,

@@ -7,7 +7,7 @@ use cat_herder_domain::ports::{DomainResult, RunRepository};
 use sqlx::Row;
 use sqlx::postgres::{PgPool, PgRow};
 
-use crate::codec::{decode_kind, decode_state, encode_kind, encode_state};
+use crate::codec::{decode_kind, decode_state, decode_tier, encode_kind, encode_state, encode_tier};
 use crate::schema::PostgresStore;
 
 #[derive(Clone)]
@@ -33,6 +33,7 @@ where
 {
     let kind = encode_kind(run.kind);
     let state = encode_state(run.state);
+    let tier = encode_tier(run.runtime_tier);
     let created_ms = millis(run.created_at);
     let started_ms = run.started_at.map(millis);
     let finished_ms = run.finished_at.map(millis);
@@ -40,9 +41,9 @@ where
     if run.id == RunId(0) {
         sqlx::query_scalar(
             "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
-             trigger, actor, model, repo, language, workflow_ref, started_at, finished_at, \
-             pr_url, report, input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id",
+             trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
+             finished_at, pr_url, report, input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING id",
         )
         .bind(&kind)
         .bind(&state)
@@ -56,6 +57,7 @@ where
         .bind(run.repo.as_deref())
         .bind(run.language.as_deref())
         .bind(run.workflow_ref.as_deref())
+        .bind(&tier)
         .bind(started_ms)
         .bind(finished_ms)
         .bind(run.pr_url.as_deref())
@@ -67,16 +69,16 @@ where
     } else {
         sqlx::query_scalar(
             "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-             trigger, actor, model, repo, language, workflow_ref, started_at, finished_at, \
-             pr_url, report, input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+             trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
+             finished_at, pr_url, report, input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (id) DO UPDATE SET \
                kind = EXCLUDED.kind, state = EXCLUDED.state, \
                task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
                max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
                trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
                repo = EXCLUDED.repo, language = EXCLUDED.language, \
-               workflow_ref = EXCLUDED.workflow_ref, \
+               workflow_ref = EXCLUDED.workflow_ref, runtime_tier = EXCLUDED.runtime_tier, \
                started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
                pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
                input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
@@ -95,6 +97,7 @@ where
         .bind(run.repo.as_deref())
         .bind(run.language.as_deref())
         .bind(run.workflow_ref.as_deref())
+        .bind(&tier)
         .bind(started_ms)
         .bind(finished_ms)
         .bind(run.pr_url.as_deref())
@@ -160,6 +163,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         repo: row.try_get("repo")?,
         language: row.try_get("language")?,
         workflow_ref: row.try_get("workflow_ref")?,
+        runtime_tier: decode_tier(&row.try_get::<String, _>("runtime_tier")?),
         started_at: row
             .try_get::<Option<i64>, _>("started_at")?
             .map(from_millis),
@@ -239,6 +243,7 @@ mod tests {
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,

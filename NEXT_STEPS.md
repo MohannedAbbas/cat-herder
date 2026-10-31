@@ -327,8 +327,20 @@ Brokered credentials and a real budget hard-stop; both are called out as
   control-plane API range it supports (the two-way half of the matrix), and mTLS/SVID
   hardening of the control channel (with §9/§20).
 
-- [ ] **15. Isolation tiers (§13).** RuntimeClass-backed gVisor/Kata/Firecracker via
+- [x] **15. Isolation tiers (§13).** RuntimeClass-backed gVisor/Kata/Firecracker via
   `SandboxTemplate` choice, beyond the current single default template.
+  *Status:* ✅ landed — ✅ `RuntimeTier` moved into the domain (`entities.rs`, `Default`
+  by default) and carried on `Run`/`RunRequest`/`RunResponse` (migration `0030`); ✅ the
+  tier is resolved at run creation from the selected agent (`resolve_tier`; `default`
+  for model-only and workflow runs); ✅ the runtime adapter maps the tier to a
+  RuntimeClass name (`gvisor`/`kata`, `default` → none) and sets
+  `spec.podTemplate.spec.runtimeClassName` on the Sandbox; ✅ the chart installs a
+  `RuntimeClass` per enabled tier (`agentSandbox.runtimeClasses.*`, disabled + handler
+  configurable by default); ✅ the Admin → Agents editor gets a Runtime-tier dropdown.
+  See `docs/design/isolation.md`. ⬜ Deferred: Firecracker/urunc runtimes (the enum +
+  `runtimeClasses` map are the extension point), and per-tier `SandboxTemplate`s (the
+  inline `podTemplate` + `runtimeClassName` is the v1 form of the choice). Not yet
+  exercised end-to-end against a live cluster with the runtimes installed.
 
 - [ ] **16. Kueue + Karpenter (§13).** Compute quotas and on-demand (GPU/spot) node
   provisioning; measure the cold-start p95 against the §23 SLO (< 60s).

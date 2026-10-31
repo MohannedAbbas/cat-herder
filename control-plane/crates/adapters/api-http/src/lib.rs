@@ -26,8 +26,8 @@ use cat_herder_domain::api::{
     SessionRun, SessionSummary, repo_identity_from_url,
 };
 use cat_herder_domain::entities::{
-    ApprovalStatus, Review, ReviewStatus, ReviewVerdict, Run, RunId, RunKind, RunState, Usage,
-    WorkflowDefinition,
+    ApprovalStatus, Review, ReviewStatus, ReviewVerdict, Run, RunId, RunKind, RunState,
+    RuntimeTier, Usage, WorkflowDefinition,
 };
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
@@ -382,6 +382,28 @@ async fn require_role(
     }
 }
 
+/// Resolve the run's isolation tier (§13) from its selected agent template, defaulting
+/// to [`RuntimeTier::Default`] for workflow runs (one sandbox runs all steps) or a
+/// model-only run (no agent to derive a tier from).
+pub async fn resolve_tier(
+    state: &AppState,
+    kind: RunKind,
+    agent_id: Option<&str>,
+) -> Result<RuntimeTier, (StatusCode, String)> {
+    if kind == RunKind::Workflow {
+        return Ok(RuntimeTier::Default);
+    }
+    match agent_id {
+        Some(id) => state
+            .agents
+            .get(id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            .map(|a| a.map(|a| a.runtime_tier).unwrap_or_default()),
+        None => Ok(RuntimeTier::Default),
+    }
+}
+
 /// Accept a task, orchestrate it through the lifecycle, and spawn a Sandbox.
 async fn create_run(
     State(state): State<AppState>,
@@ -409,6 +431,10 @@ async fn create_run(
         StatusCode::SERVICE_UNAVAILABLE,
         "execution runtime not configured".into(),
     ))?;
+
+    // The isolation tier (§13) comes from the selected agent template; a workflow run
+    // (one sandbox running all steps) and a model-only run default to the default tier.
+    let runtime_tier = resolve_tier(&state, req.kind, req.agent_id.as_deref()).await?;
 
     // Models are agent-specific; a run needs a resolvable model. A workflow run's
     // per-step models come from its definition (resolved at spawn), so a single
@@ -450,6 +476,7 @@ async fn create_run(
         repo: req.repo,
         language: req.language,
         workflow_ref: req.workflow_ref,
+        runtime_tier,
         budget: req.budget,
     };
 
@@ -848,6 +875,7 @@ async fn spawn_review_followup(state: &AppState, review: &Review) {
         repo: parent.repo.clone(),
         language: parent.language.clone(),
         workflow_ref: None,
+        runtime_tier: parent.runtime_tier,
         budget: None,
     };
     match start_run(

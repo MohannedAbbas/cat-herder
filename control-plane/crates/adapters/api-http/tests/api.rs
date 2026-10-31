@@ -210,6 +210,7 @@ async fn get_run_events_replays_the_log() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -267,6 +268,7 @@ async fn stream_run_events_without_nats_returns_501() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -349,6 +351,7 @@ async fn respond_approval_approves_and_resumes_run() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -472,6 +475,7 @@ async fn respond_review_approves_and_reviews_run() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: Some("https://github.com/org/repo/pull/1".into()),
@@ -538,6 +542,7 @@ async fn list_reviews_returns_pending_queue_with_run_context() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -608,6 +613,7 @@ async fn get_run_diff_returns_decoded_changes() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -671,6 +677,7 @@ async fn get_run_approval_returns_pending_approval() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -730,6 +737,7 @@ async fn get_run_review_returns_pending_review() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -910,6 +918,7 @@ async fn delete_run_purges_all_run_data() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -1040,6 +1049,7 @@ async fn retention_sweep_purges_expired_terminal_runs() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: Some(SystemTime::now() - Duration::from_secs(2 * 86_400)),
         pr_url: None,
@@ -1062,6 +1072,7 @@ async fn retention_sweep_purges_expired_terminal_runs() {
         repo: None,
         language: None,
         workflow_ref: None,
+        runtime_tier: Default::default(),
         started_at: None,
         finished_at: Some(SystemTime::now()),
         pr_url: None,
@@ -1077,6 +1088,39 @@ async fn retention_sweep_purges_expired_terminal_runs() {
     assert_eq!(purged, 1);
     assert!(state.repo.get(RunId(7)).await.unwrap().is_none());
     assert!(state.repo.get(RunId(8)).await.unwrap().is_some());
+}
+
+// --- isolation tiers -------------------------------------------------------
+
+#[tokio::test]
+async fn resolve_tier_uses_agent_runtime_tier() {
+    use cat_herder_domain::entities::{RunKind, RuntimeTier};
+
+    let state = AppState::default();
+    // The seeded catalog: agent-reviewer is gVisor, agent-codeact/agent-docs default.
+    let reviewer = cat_herder_api_http::resolve_tier(&state, RunKind::Agent, Some("agent-reviewer"))
+        .await
+        .unwrap();
+    assert_eq!(reviewer, RuntimeTier::Gvisor);
+
+    let codeact = cat_herder_api_http::resolve_tier(&state, RunKind::Agent, Some("agent-codeact"))
+        .await
+        .unwrap();
+    assert_eq!(codeact, RuntimeTier::Default);
+
+    // Model-only (no agent) and workflow runs default to the default tier.
+    assert_eq!(
+        cat_herder_api_http::resolve_tier(&state, RunKind::Agent, None)
+            .await
+            .unwrap(),
+        RuntimeTier::Default
+    );
+    assert_eq!(
+        cat_herder_api_http::resolve_tier(&state, RunKind::Workflow, Some("agent-reviewer"))
+            .await
+            .unwrap(),
+        RuntimeTier::Default
+    );
 }
 
 #[tokio::test]
@@ -1212,6 +1256,7 @@ async fn post_finished_event_marks_run_succeeded() {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -1259,6 +1304,7 @@ async fn post_finished_event_failed_marks_run_failed() {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -1304,6 +1350,7 @@ async fn post_stuck_event_marks_run_stuck() {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -1361,6 +1408,7 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             repo: None,
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,

@@ -167,6 +167,7 @@ mod tests {
             repo: Some("https://github.com/org/repo".into()),
             language: None,
             workflow_ref: None,
+            runtime_tier: Default::default(),
             started_at: None,
             finished_at: None,
             pr_url: None,
