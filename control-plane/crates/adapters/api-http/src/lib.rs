@@ -320,6 +320,7 @@ pub fn router(state: AppState) -> Router {
             post(admin::rotate_encryption_key),
         )
         .route("/v1/admin/audit", get(admin::list_audit))
+        .route("/v1/admin/usage", get(admin::usage_rollup))
         .route(
             "/v1/workflows/{id}",
             put(admin::upsert_workflow).delete(admin::delete_workflow),

@@ -356,9 +356,21 @@ Brokered credentials and a real budget hard-stop; both are called out as
   ↔ Kueue `Workload` integration, GPU instance-type selection, and full OTel tracing
   (#17). Not exercised against a live cluster with the controllers installed.
 
-- [ ] **17. Observability & replay (§16).** `run_id`-correlated OTel tracing across
+- [x] **17. Observability & replay (§16).** `run_id`-correlated OTel tracing across
   Rust + Python, run event replay, cost attribution rollups, and a secret-redaction
   layer over events/traces/logs.
+  *Status:* ✅ landed — ✅ **secret redaction** — `domain/src/redact.rs`
+  (`redact`/`redact_value`) scrubs credential prefixes (`ghp_`/`gho_`/`ghs_`/…, `sk-`,
+  `AKIA`/`ASIA`, `xox[bpa]-`, `glpat-`, ≥16-char bodies) + `Bearer` tokens, wired into
+  `Event::new` so no event payload reaches the log unscrubbed, and mirrored in the
+  harness (`redact` on the `finished` report + interrupt payload); ✅ **cost attribution
+  rollup** — `GET /v1/admin/usage` aggregates total input/output tokens across runs
+  (per-run usage is already on `RunResponse`); ✅ **run event replay** — already
+  delivered in #1 (`GET /v1/runs/{id}/events`, `after_seq` paging + SSE live tail). See
+  `docs/design/observability.md`. ⬜ Deferred: the OTel tracing exporter/collector and
+  cross-language `run_id` context propagation (the correlation id is already in the
+  event envelope + pod labels), and pattern/deny-list redaction for arbitrary tool I/O
+  shapes.
 
 - [x] **18. Retention & deletion (§11.7).** Configurable retention + a deletion API
   that hard-deletes a run's events, checkpoints, snapshots, and artifacts.

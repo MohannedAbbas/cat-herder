@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -58,6 +59,25 @@ SECRET_ENV_KEYS = {
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
 }
+
+# --- secret redaction (PLAN.md §16) ----------------------------------------
+# Defense-in-depth: scrub credentials/tokens from anything we report back to the
+# control plane, so a leaked secret never reaches the event log.
+_SECRET_PREFIXES = (
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+    "sk-", "AKIA", "ASIA", "xoxb-", "xoxp-", "glpat-",
+)
+_SECRET_RE = re.compile(
+    r"(?:" + "|".join(re.escape(p) for p in _SECRET_PREFIXES) + r")[A-Za-z0-9_-]{16,}"
+    r"|Bearer[ \t]+[A-Za-z0-9._-]{8,}"
+)
+
+
+def redact(text: str) -> str:
+    """Scrub credential material from a string (PLAN.md §16)."""
+    if not text:
+        return text
+    return _SECRET_RE.sub("[REDACTED]", text)
 
 # --- stuck-run watchdog -----------------------------------------------------
 # The agent runs in this (main) thread while the health server runs in a daemon
@@ -275,6 +295,8 @@ def report_event(
     usage: dict | None = None,
 ) -> None:
     """Report a run event back to the control plane (best-effort, non-fatal)."""
+    if report:
+        report = redact(report)
     if _control_channel is not None:
         try:
             _control_channel.send_event(event_type, status, report, changes, usage)
@@ -887,6 +909,7 @@ def main() -> None:
         tup = saver.get_tuple(config)
         resume_token = tup.config["configurable"]["checkpoint_id"] if tup else ""
         payload = json.dumps(interrupt.value, default=str)
+        payload = redact(payload)
         print(f"interrupt: {payload} (resume_token={resume_token})", flush=True)
         if _control_channel is None:
             return None  # no control channel -> nothing to approve against

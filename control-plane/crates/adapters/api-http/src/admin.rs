@@ -15,7 +15,7 @@ use cat_herder_domain::api::{
 use cat_herder_domain::entities::{GitRepo as GitRepoEntity, RunId, WorkflowDefinition};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, GitRepoRepository, ModelRepository, ProviderRepository,
-    SettingRepository, ToolRepository, WorkflowRepository,
+    RunRepository, SettingRepository, ToolRepository, WorkflowRepository,
 };
 
 use super::AppState;
@@ -335,6 +335,30 @@ pub async fn delete_workflow(
 }
 
 // --- run deletion ----------------------------------------------------------
+
+/// Cost-attribution rollup (§16): total model usage across all runs, for the
+/// "100% of model usage attributed to a run" SLO (§23). Per-run usage is already on
+/// each run's `RunResponse`.
+pub async fn usage_rollup(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&state, &jar).await?;
+    let runs = state
+        .repo
+        .list_all()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (input, output) = runs.iter().fold((0u64, 0u64), |(i, o), r| {
+        (i + r.input_tokens, o + r.output_tokens)
+    });
+    Ok(Json(serde_json::json!({
+        "runCount": runs.len(),
+        "totalInputTokens": input,
+        "totalOutputTokens": output,
+        "totalTokens": input + output,
+    })))
+}
 
 /// Hard-delete a run and all its data (`PLAN.md` §11.7): events, checkpoints,
 /// approvals, reviews, budgets, credential grants, the session display row, and the

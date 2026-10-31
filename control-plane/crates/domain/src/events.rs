@@ -69,13 +69,16 @@ pub struct Event {
 }
 
 impl Event {
-    /// Build a new event (unpersisted, `seq = 0`).
+    /// Build a new event (unpersisted, `seq = 0`). The payload is passed through the
+    /// secret-redaction layer (§16) so credential material never reaches the log.
     pub fn new(
         run_id: RunId,
         event_type: impl Into<String>,
         actor: Option<String>,
         payload: Value,
     ) -> Self {
+        let mut payload = payload;
+        crate::redact::redact_value(&mut payload);
         Event {
             run_id,
             seq: 0,

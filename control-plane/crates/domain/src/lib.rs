@@ -17,6 +17,7 @@ pub mod events;
 pub mod policy;
 pub mod ports;
 pub mod reconcile;
+pub mod redact;
 pub mod shard;
 pub mod state;
 
