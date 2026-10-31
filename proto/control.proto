@@ -22,7 +22,19 @@ message HarnessMessage {
     Heartbeat heartbeat = 3;
     Checkpoint checkpoint = 4;
     Interrupt interrupt = 5;
+    // A single redacted log line from the agent's live run (§16, NEXT_STEPS #18).
+    Log log = 6;
   }
+}
+
+// One redacted log line from the harness — LLM output, a tool call + output, or the
+// harness's own shell stdout/stderr. The control plane stamps arrival time (there is
+// deliberately no timestamp field here).
+message Log {
+  // Source label: "llm" | "tool" | "stdout" | "stderr" | "system".
+  string stream = 1;
+  // One log line (already redacted by the harness; re-redacted on write).
+  string line = 2;
 }
 
 // The first message on the stream: identifies the run this channel belongs to.

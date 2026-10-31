@@ -226,6 +226,18 @@ class ControlChannel:
         msg.interrupt.payload = payload
         self._queue.put(msg)
 
+    def send_log(self, stream: str, line: str) -> None:
+        """Enqueue one log line for the control plane (NEXT_STEPS #18).
+
+        `stream` is a source label ("llm" | "tool" | "stdout" | "stderr" | "system");
+        `line` is the (already redacted) log line. The control plane stamps arrival
+        time, so no timestamp is sent.
+        """
+        msg = control_pb2.HarnessMessage()
+        msg.log.stream = stream
+        msg.log.line = line
+        self._queue.put(msg)
+
     def wait_for_seed(self, timeout: float = 30.0) -> "tuple[str, str, str, str, bytes] | None":
         """Block until the control plane's resume seed arrives (or timeout).
 
@@ -341,6 +353,202 @@ def report_event(
             pass
     except Exception as exc:  # noqa: BLE001 — reporting is best-effort
         print(f"failed to report {event_type} event: {exc}", flush=True)
+
+
+# --- live run logs (NEXT_STEPS #18) ----------------------------------------
+# Stream the agent's live logs (LLM output, tool calls, harness stdout/stderr) to the
+# control plane over the gRPC control channel so an operator can watch a run without
+# `kubectl logs`. Every line is redacted here (PLAN.md §16) before it leaves the pod.
+#
+# `_fallback_stream` is the harness's *original* stdout, captured before `sys.stdout`
+# is replaced by the tee. `emit_log`'s no-control-channel fallback writes here (not via
+# `print`, whose `sys.stdout` is the tee) so a teed line can never recurse back into
+# `emit_log` forever.
+_fallback_stream = None
+
+
+def emit_log(stream: str, line: str) -> None:
+    """Send one redacted log line to the control plane (best-effort).
+
+    `stream` is a source label ("llm" | "tool" | "stdout" | "stderr" | "system").
+    When no control channel is configured (local dev) the line is written to the pod's
+    original stdout instead, so nothing is silently dropped.
+    """
+    if line is None:
+        return
+    line = redact(str(line))
+    if not line:
+        return
+    if _control_channel is not None:
+        try:
+            _control_channel.send_log(stream, line)
+            return
+        except Exception as exc:  # noqa: BLE001 — logging is best-effort
+            _print_raw(f"failed to enqueue {stream} log: {exc}")
+            return
+    # No control channel: fall back to the pod's original stdout (not the tee, so this
+    # never re-enters emit_log).
+    _print_raw(line)
+
+
+def _print_raw(text: str) -> None:
+    """Write a line straight to the harness's original stdout (bypassing the tee)."""
+    target = _fallback_stream
+    try:
+        if target is not None:
+            target.write(text + "\n")
+            target.flush()
+        else:
+            import sys
+
+            sys.__stdout__.write(text + "\n")
+            sys.__stdout__.flush()
+    except Exception:  # noqa: BLE001 — logging is best-effort
+        pass
+
+
+def _emit_tee_line(stream: str, line: str) -> None:
+    """Emit a teed stdout/stderr line to the control plane.
+
+    The tee has already written the line through to the pod's real stdout, so this
+    only needs to send it over the channel — and does nothing when there is no channel
+    (avoids duplicating the line on the pod's stdout).
+    """
+    if _control_channel is None:
+        return
+    try:
+        _control_channel.send_log(stream, redact(line))
+    except Exception:  # noqa: BLE001 — logging is best-effort
+        pass
+
+
+def _message_text(msg: object) -> str:
+    """Extract a plain-text rendering of a LangChain message's `content`."""
+    content = getattr(msg, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                # Anthropic/OpenAI content blocks: {"type": "text", "text": ...}.
+                text = part.get("text")
+                if text is not None:
+                    parts.append(str(text))
+                else:
+                    parts.append(json.dumps(part, default=str))
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(content)
+
+
+_last_logged_key = None
+
+
+def emit_chunk_messages(chunk: object) -> None:
+    """Emit a log line for the newest message in a streamed state snapshot.
+
+    In `stream_mode="values"` each chunk is the FULL state so far, so only the most
+    recent message is genuinely new. We emit it once (tracking its identity/content to
+    avoid re-emitting the same tail on every tick) when it is an AI or tool message.
+    """
+    global _last_logged_key
+    if not isinstance(chunk, dict):
+        return
+    messages = chunk.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+    last = messages[-1]
+
+    # Dedupe key: the message object identity when available, else its content.
+    key = id(last)
+    content = None
+    if isinstance(last, dict):
+        role = last.get("role") or last.get("type")
+        text = last.get("content")
+        if not text or role in ("user", "human", "system"):
+            return
+        key = (role, str(text))
+        content = ("tool" if role == "tool" else "llm", str(text))
+    else:
+        msg_type = getattr(last, "type", None) or getattr(last, "role", None)
+        if msg_type in ("ai", "assistant") or type(last).__name__ == "AIMessage":
+            text = _message_text(last)
+            if text:
+                content = ("llm", text)
+        elif msg_type in ("tool",) or type(last).__name__ == "ToolMessage":
+            name = getattr(last, "name", "") or ""
+            text = _message_text(last)
+            content = ("tool", f"{name}: {text}" if name else text)
+
+    if content is None or key == _last_logged_key:
+        return
+    _last_logged_key = key
+    stream, line = content
+    emit_log(stream, line)
+
+
+# --- stdout/stderr redirection ---------------------------------------------
+# Mirror the harness's own prints (lifecycle: 'cloned repo', 'agent completed',
+# 'agent failed', …) to the control plane as ("stdout"/"stderr", line) while still
+# writing them to the pod's real stdout/stderr.
+class _TeeStream:
+    """A text stream that writes through to the original stream AND emits each
+    complete line to the control plane as a redacted log line."""
+
+    def __init__(self, original, stream_label: str) -> None:
+        self._original = original
+        self._label = stream_label
+        self._buffer = ""
+
+    def write(self, data: str) -> int:
+        try:
+            self._original.write(data)
+        except Exception:  # noqa: BLE001 — never let logging break the harness
+            pass
+        # Split into complete lines; keep any partial trailing line buffered.
+        self._buffer += data
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line:
+                _emit_tee_line(self._label, line)
+        return len(data)
+
+    def flush(self) -> None:
+        try:
+            self._original.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._buffer:
+            _emit_tee_line(self._label, self._buffer)
+            self._buffer = ""
+
+    def __getattr__(self, name: str):
+        # Delegate fileno/encoding/isatty/etc. to the wrapped stream.
+        return getattr(self._original, name)
+
+
+_stdout_redirected = False
+
+
+def redirect_std_streams() -> None:
+    """Tee the harness's stdout/stderr so lifecycle prints also stream as run logs.
+
+    Idempotent: only installs the tee once. Actual pod stdout/stderr output is
+    unchanged (the tee writes through to the originals).
+    """
+    global _stdout_redirected, _fallback_stream
+    if _stdout_redirected:
+        return
+    _stdout_redirected = True
+    import sys
+
+    # Remember the real stdout for emit_log's fallback before we swap it out.
+    if _fallback_stream is None:
+        _fallback_stream = sys.stdout
+    sys.stdout = _TeeStream(sys.stdout, "stdout")
+    sys.stderr = _TeeStream(sys.stderr, "stderr")
 
 
 # --- runtime credential broker (PLAN.md §11.3) -----------------------------
@@ -656,6 +864,7 @@ def run_agent(
         for chunk in agent.stream(initial, config=config, stream_mode="values"):
             mark_activity()
             record_usage(chunk)
+            emit_chunk_messages(chunk)
             result = chunk
         # A stream that paused on an interrupt ends with `__interrupt__` in the state.
         interrupts = result.get("__interrupt__", ()) if isinstance(result, dict) else ()
@@ -767,6 +976,7 @@ def run_workflow(
     initial = None if resume else {"messages": []}
     for chunk in app.stream(initial, config=config, stream_mode="values"):
         mark_activity()
+        emit_chunk_messages(chunk)
         result = chunk
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if messages:
@@ -831,6 +1041,12 @@ def collect_changes() -> list[dict]:
 
 def main() -> None:
     global _control_channel
+
+    # Tee our own stdout/stderr so lifecycle prints ('cloned repo', 'agent completed',
+    # 'agent failed', …) also stream to the run UI as logs (NEXT_STEPS #18). Installed
+    # before the control channel comes up; lines emitted before it exists fall back to
+    # the pod's stdout only.
+    redirect_std_streams()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), HealthHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()

@@ -11,6 +11,7 @@ import type {
   ReviewVerdict,
   Run,
   RunDiff,
+  RunLogLine,
   RunRecord,
   RunState,
   Session,
@@ -469,6 +470,18 @@ function delay<T>(value: T, ms = 250): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms))
 }
 
+/** A small canned set of live run logs so the Logs panel renders in mock mode. */
+function mockRunLogs(now: string): RunLogLine[] {
+  return [
+    { stream: 'system', line: 'harness started', occurredAt: now },
+    { stream: 'llm', line: 'Reading the task spec…', occurredAt: now },
+    { stream: 'tool', line: 'shell: ls -la', occurredAt: now },
+    { stream: 'stdout', line: 'src/  package.json  README.md', occurredAt: now },
+    { stream: 'llm', line: 'Editing src/index.ts', occurredAt: now },
+    { stream: 'stdout', line: 'tests passed', occurredAt: now },
+  ]
+}
+
 export const mockApi: CatHerderApi = {
   listSessions: () => delay(sessions.map(toSummary)),
   getSession: (id) => {
@@ -487,6 +500,13 @@ export const mockApi: CatHerderApi = {
   },
 
   getRunDiff: (id) => delay(diffs[id] ?? { changes: [] }),
+  getRunLogs: () => delay<RunLogLine[]>(mockRunLogs(new Date().toISOString())),
+  followRunLogs: (_id, onLine) => {
+    // Emit a short canned burst of lines so the panel renders in mock mode, then stop.
+    const lines = mockRunLogs(new Date().toISOString())
+    const timer = window.setTimeout(() => lines.forEach(onLine), 200)
+    return () => window.clearTimeout(timer)
+  },
   getRunApproval: (id) => delay(approvals.find((a) => a.run_id === id) ?? null),
   getRunReview: (id) => delay(reviews.find((r) => r.run_id === id) ?? null),
   respondApproval: (id, approve) => {
