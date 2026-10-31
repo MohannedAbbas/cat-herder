@@ -76,6 +76,8 @@ pub struct Run {
     pub model: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
+    /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).
+    pub workflow_ref: Option<String>,
     /// Lifecycle timing (set as the run transitions through the state machine).
     pub started_at: Option<SystemTime>,
     pub finished_at: Option<SystemTime>,
@@ -213,4 +215,28 @@ pub struct CredentialGrant {
     /// Forgejo token id), used to revoke it server-side. `None` when the issuer has no
     /// per-token revocation (GitHub installation tokens lapse via TTL). Never the secret.
     pub token_id: Option<String>,
+}
+
+/// A step in a configurable workflow (`PLAN.md` §7): one agent type (role) in the
+/// ordered pipeline. `agent_type` is an agent-template id (see
+/// [`crate::api::AgentTemplate`]); it must be unique within a workflow (one step = one
+/// role). Ordering is the `Vec` order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStep {
+    pub agent_type: String,
+}
+
+/// A configurable, ordered pipeline of agent steps (`PLAN.md` §7/§15). Authored as a
+/// linear step list in the UI; a `workflow` run compiles the steps into a LangGraph
+/// `StateGraph` at start time. Anything with real topology (branches/loops) is a
+/// code-first graph referenced by `workflow_ref`, not serialized here (§1 "Workflows:
+/// linear in the DB, complex in code").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowDefinition {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    pub steps: Vec<WorkflowStep>,
 }

@@ -22,6 +22,7 @@ mod session;
 mod setting;
 mod tool;
 mod transition;
+mod workflow;
 
 pub use agent::PostgresAgentRepository;
 pub use approval::PostgresApprovalRepository;
@@ -40,3 +41,4 @@ pub use session::PostgresSessionRepository;
 pub use setting::PostgresSettingRepository;
 pub use tool::PostgresToolRepository;
 pub use transition::PostgresTransitionRepository;
+pub use workflow::PostgresWorkflowRepository;

@@ -11,7 +11,7 @@ use cat_herder_domain::api::{
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{
     ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, CredentialGrantStatus,
-    GitRepo, Review, ReviewStatus, ReviewVerdict, Run, RunId,
+    GitRepo, Review, ReviewStatus, ReviewVerdict, Run, RunId, WorkflowDefinition,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
@@ -19,7 +19,7 @@ use cat_herder_domain::ports::{
     CheckpointRepository, ConsumeOutcome, CredentialGrantRepository, DedupRepository, DomainResult,
     EventRepository, GitRepoRepository, LeaseManager, ModelRepository, ProviderRepository,
     ReviewRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
-    TransitionRepository,
+    TransitionRepository, WorkflowRepository,
 };
 use tokio::sync::RwLock;
 
@@ -365,6 +365,58 @@ impl AgentRepository for InMemoryAgentRepository {
 
     async fn delete(&self, id: &str) -> DomainResult<()> {
         self.agents.write().await.retain(|a| a.id != id);
+        Ok(())
+    }
+}
+
+/// In-memory workflow catalog, seeded with the default coding → document → review
+/// pipeline (`PLAN.md` §7).
+#[derive(Clone)]
+pub struct InMemoryWorkflowRepository {
+    workflows: Arc<RwLock<Vec<WorkflowDefinition>>>,
+}
+
+impl InMemoryWorkflowRepository {
+    pub fn new() -> Self {
+        Self {
+            workflows: Arc::new(RwLock::new(vec![catalog::default_workflow()])),
+        }
+    }
+}
+
+impl Default for InMemoryWorkflowRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WorkflowRepository for InMemoryWorkflowRepository {
+    async fn list(&self) -> DomainResult<Vec<WorkflowDefinition>> {
+        Ok(self.workflows.read().await.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<WorkflowDefinition>> {
+        Ok(self
+            .workflows
+            .read()
+            .await
+            .iter()
+            .find(|w| w.id == id)
+            .cloned())
+    }
+
+    async fn save(&self, workflow: &WorkflowDefinition) -> DomainResult<WorkflowDefinition> {
+        let mut workflows = self.workflows.write().await;
+        if let Some(existing) = workflows.iter_mut().find(|w| w.id == workflow.id) {
+            *existing = workflow.clone();
+        } else {
+            workflows.push(workflow.clone());
+        }
+        Ok(workflow.clone())
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        self.workflows.write().await.retain(|w| w.id != id);
         Ok(())
     }
 }
@@ -843,6 +895,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -1082,5 +1135,35 @@ mod tests {
         assert_eq!(decided.reviewer.as_deref(), Some("octocat"));
         assert!(decided.reviewed_at.is_some());
         assert!(repo.list_pending().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_repo_is_seeded_and_roundtrips() {
+        use cat_herder_domain::entities::WorkflowStep;
+
+        let repo = InMemoryWorkflowRepository::default();
+        // Seeded with the default coding → document → review pipeline.
+        let workflows = repo.list().await.unwrap();
+        assert_eq!(workflows.len(), 1);
+        let default = workflows.iter().find(|w| w.is_default).unwrap();
+        assert_eq!(default.id, "default");
+        assert_eq!(default.steps.len(), 3);
+        assert_eq!(default.steps[0].agent_type, "agent-codeact");
+
+        // Save a new workflow and round-trip it.
+        let wf = WorkflowDefinition {
+            id: "custom".into(),
+            name: "Custom".into(),
+            is_default: false,
+            steps: vec![WorkflowStep {
+                agent_type: "agent-reviewer".into(),
+            }],
+        };
+        repo.save(&wf).await.unwrap();
+        assert_eq!(repo.get("custom").await.unwrap().unwrap().name, "Custom");
+        assert_eq!(repo.list().await.unwrap().len(), 2);
+
+        repo.delete("custom").await.unwrap();
+        assert!(repo.get("custom").await.unwrap().is_none());
     }
 }

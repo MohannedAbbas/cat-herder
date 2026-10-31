@@ -40,9 +40,9 @@ where
     if run.id == RunId(0) {
         sqlx::query_scalar(
             "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
-             trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
-             input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id",
+             trigger, actor, model, repo, language, workflow_ref, started_at, finished_at, \
+             pr_url, report, input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id",
         )
         .bind(&kind)
         .bind(&state)
@@ -55,6 +55,7 @@ where
         .bind(run.model.as_deref())
         .bind(run.repo.as_deref())
         .bind(run.language.as_deref())
+        .bind(run.workflow_ref.as_deref())
         .bind(started_ms)
         .bind(finished_ms)
         .bind(run.pr_url.as_deref())
@@ -66,15 +67,16 @@ where
     } else {
         sqlx::query_scalar(
             "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
-             trigger, actor, model, repo, language, started_at, finished_at, pr_url, report, \
-             input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+             trigger, actor, model, repo, language, workflow_ref, started_at, finished_at, \
+             pr_url, report, input_tokens, output_tokens) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
              ON CONFLICT (id) DO UPDATE SET \
                kind = EXCLUDED.kind, state = EXCLUDED.state, \
                task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
                max_concurrency = EXCLUDED.max_concurrency, created_at = EXCLUDED.created_at, \
                trigger = EXCLUDED.trigger, actor = EXCLUDED.actor, model = EXCLUDED.model, \
                repo = EXCLUDED.repo, language = EXCLUDED.language, \
+               workflow_ref = EXCLUDED.workflow_ref, \
                started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
                pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
                input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
@@ -92,6 +94,7 @@ where
         .bind(run.model.as_deref())
         .bind(run.repo.as_deref())
         .bind(run.language.as_deref())
+        .bind(run.workflow_ref.as_deref())
         .bind(started_ms)
         .bind(finished_ms)
         .bind(run.pr_url.as_deref())
@@ -148,6 +151,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         model: row.try_get("model")?,
         repo: row.try_get("repo")?,
         language: row.try_get("language")?,
+        workflow_ref: row.try_get("workflow_ref")?,
         started_at: row
             .try_get::<Option<i64>, _>("started_at")?
             .map(from_millis),
@@ -226,6 +230,7 @@ mod tests {
             model: Some("anthropic/claude-sonnet-4-6".into()),
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,

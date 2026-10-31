@@ -249,6 +249,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: Some(SystemTime::now()),
             finished_at: Some(SystemTime::now()),
             pr_url: None,

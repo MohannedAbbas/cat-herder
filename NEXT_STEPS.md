@@ -279,12 +279,32 @@ Brokered credentials and a real budget hard-stop; both are called out as
   follow-on to collect + report changes on interrupt); dedicated approval/review queue
   pages (the run deep link is the v1 surface).
 
-- [ ] **13. Configurable workflows + LangGraph run kind (§7).**
+- [x] **13. Configurable workflows + LangGraph run kind (§7).**
   `RunKind::Workflow` exists; `agent-harness/workflows/.gitkeep` is empty; no
   `WorkflowDefinition`/`WorkflowStep` store or editor.
   *Done when:* `WorkflowDefinition` (ordered steps, unique agent type) is stored and
   edited in the UI; a `workflow` run compiles steps into a LangGraph `StateGraph`
   (code-first for real topology via `workflow_ref`).
+  *Status:* ✅ landed — ✅ `WorkflowDefinition` (`id`/`name`/`is_default`/`steps`) +
+  `WorkflowStep` (`agent_type`, an agent-template id) entities; ✅ `WorkflowRepository`
+  port (`list`/`get`/`save`/`delete`) with Postgres (migration `0028`, JSONB `steps`) +
+  in-memory (seeded with the default `coding → document → review` pipeline from
+  `catalog::default_workflow`) + `WorkflowRepo` selector; ✅ **API** — `GET /v1/workflows`
+  (public), `PUT`/`DELETE /v1/workflows/{id}` (admin) with server-side validation
+  (≥1 step, agent type at most once); ✅ **UI** — an Admin → Workflows page with a
+  list + a step editor (add/remove/reorder, agent-type dropdown, uniqueness checked
+  live + on save); ✅ **run plumbing** — `workflow_ref` on `RunRequest`/
+  `CreateRunRequest`/`Run`/`RunResponse` (migration `0029`); `POST /v1/runs` with
+  `kind: workflow` requires a valid `workflow_ref` (no single `model`); ✅ **execution**
+  — the control plane resolves each workflow's steps to `(agent_type, model)` and
+  injects `WORKFLOW_STEPS` into the pod (runtime `workflow_steps` map refreshed like
+  providers/tokens); the harness compiles the steps into a linear LangGraph
+  `StateGraph` (one node per step, accumulated output chaining) and checkpoints on
+  `thread_id = run_id`. See `docs/design/workflows.md`. ⬜ Deferred: the **code-first**
+  `workflow_ref` graph path (versioned arbitrary-topology graphs in
+  `agent-harness/workflows/` — §1 "linear in the DB, complex in code"), per-step HITL
+  interrupts inside workflow nodes, and per-step token-usage attribution. Not yet
+  exercised end-to-end against a live cluster/LLM.
 
 ---
 

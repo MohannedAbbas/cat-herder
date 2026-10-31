@@ -7,14 +7,14 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::entities::{
     ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Review, ReviewVerdict,
-    Run, RunId,
+    Run, RunId, WorkflowDefinition,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository,
     CredentialGrantRepository, DomainResult, EventRepository, GitRepoRepository, ModelRepository,
     ProviderRepository, ReviewRepository, RunRepository, SessionRepository, SettingRepository,
-    ToolRepository, TransitionRepository,
+    ToolRepository, TransitionRepository, WorkflowRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
@@ -22,6 +22,7 @@ use cat_herder_store_inmemory::{
     InMemoryGitRepoRepository, InMemoryModelRepository, InMemoryProviderRepository,
     InMemoryReviewRepository, InMemoryRunRepository, InMemorySessionRepository,
     InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryWorkflowRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
@@ -29,6 +30,7 @@ use cat_herder_store_postgres::{
     PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
     PostgresReviewRepository, PostgresRunRepository, PostgresSessionRepository,
     PostgresSettingRepository, PostgresToolRepository, PostgresTransitionRepository,
+    PostgresWorkflowRepository,
 };
 
 #[derive(Clone)]
@@ -270,6 +272,42 @@ impl AgentRepository for AgentRepo {
         match self {
             AgentRepo::InMemory(r) => r.delete(id).await,
             AgentRepo::Postgres(p) => p.delete(id).await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum WorkflowRepo {
+    InMemory(InMemoryWorkflowRepository),
+    Postgres(PostgresWorkflowRepository),
+}
+
+impl WorkflowRepository for WorkflowRepo {
+    async fn list(&self) -> DomainResult<Vec<WorkflowDefinition>> {
+        match self {
+            WorkflowRepo::InMemory(r) => r.list().await,
+            WorkflowRepo::Postgres(p) => p.list().await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<WorkflowDefinition>> {
+        match self {
+            WorkflowRepo::InMemory(r) => r.get(id).await,
+            WorkflowRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn save(&self, workflow: &WorkflowDefinition) -> DomainResult<WorkflowDefinition> {
+        match self {
+            WorkflowRepo::InMemory(r) => r.save(workflow).await,
+            WorkflowRepo::Postgres(p) => p.save(workflow).await,
+        }
+    }
+
+    async fn delete(&self, id: &str) -> DomainResult<()> {
+        match self {
+            WorkflowRepo::InMemory(r) => r.delete(id).await,
+            WorkflowRepo::Postgres(p) => p.delete(id).await,
         }
     }
 }
@@ -531,6 +569,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -641,5 +680,25 @@ mod tests {
             .unwrap();
         assert_eq!(decided.verdict, Some(ReviewVerdict::Approved));
         assert!(repo.list_pending().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inmemory_workflow_repo_delegates() {
+        use cat_herder_domain::entities::{WorkflowDefinition, WorkflowStep};
+
+        let repo = WorkflowRepo::InMemory(InMemoryWorkflowRepository::default());
+        assert_eq!(repo.list().await.unwrap().len(), 1);
+        let wf = WorkflowDefinition {
+            id: "wf".into(),
+            name: "WF".into(),
+            is_default: false,
+            steps: vec![WorkflowStep {
+                agent_type: "agent-codeact".into(),
+            }],
+        };
+        repo.save(&wf).await.unwrap();
+        assert!(repo.get("wf").await.unwrap().is_some());
+        repo.delete("wf").await.unwrap();
+        assert!(repo.get("wf").await.unwrap().is_none());
     }
 }

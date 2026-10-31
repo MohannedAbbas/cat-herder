@@ -126,6 +126,7 @@ pub fn normalize_github(event_type: &str, payload: &serde_json::Value) -> RunReq
         model: None,
         repo: repo.map(str::to_string),
         language: None,
+        workflow_ref: None,
         budget: None,
     }
 }
@@ -149,6 +150,7 @@ pub fn normalize_gitlab(payload: &serde_json::Value) -> RunRequest {
         model: None,
         repo: repo.map(str::to_string),
         language: None,
+        workflow_ref: None,
         budget: None,
     }
 }
@@ -165,6 +167,7 @@ pub fn normalize_slack(text: &str) -> RunRequest {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         budget: None,
     }
 }
@@ -181,6 +184,7 @@ pub fn normalize_cron(task_spec: &str) -> RunRequest {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         budget: None,
     }
 }

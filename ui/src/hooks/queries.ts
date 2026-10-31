@@ -84,3 +84,7 @@ export function useRepos() {
 export function useGitHosts() {
   return useQuery({ queryKey: ['gitHosts'], queryFn: () => api.listGitHosts() })
 }
+
+export function useWorkflows() {
+  return useQuery({ queryKey: ['workflows'], queryFn: () => api.listWorkflows() })
+}

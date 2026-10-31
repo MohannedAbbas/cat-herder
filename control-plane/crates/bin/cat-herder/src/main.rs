@@ -12,7 +12,7 @@ use cat_herder_api_http::{
     BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, DedupRepo,
     EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
     KeySecretStore, ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, ReviewRepo,
-    RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, WorkflowRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
@@ -21,7 +21,8 @@ use cat_herder_credentials_github::{GitHubApp, GitHubAppConfig};
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::policy::Policy;
 use cat_herder_domain::ports::{
-    DomainResult, GitRepoRepository, LeaseManager, ProviderRepository, SettingRepository,
+    AgentRepository, DomainResult, GitRepoRepository, LeaseManager, ProviderRepository,
+    SettingRepository, WorkflowRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -30,7 +31,7 @@ use cat_herder_store_inmemory::{
     InMemoryCredentialGrantRepository, InMemoryDedupRepository, InMemoryEventRepository,
     InMemoryLeaseManager, InMemoryModelRepository, InMemoryProviderRepository,
     InMemoryReviewRepository, InMemoryRunRepository, InMemorySettingRepository,
-    InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryToolRepository, InMemoryTransitionRepository, InMemoryWorkflowRepository,
 };
 use cat_herder_store_nats::{NatsEventBus, NatsLeaseManager};
 use cat_herder_store_postgres::{
@@ -39,7 +40,7 @@ use cat_herder_store_postgres::{
     PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
     PostgresProviderRepository, PostgresReviewRepository, PostgresRunRepository,
     PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
-    PostgresTransitionRepository,
+    PostgresTransitionRepository, PostgresWorkflowRepository,
 };
 use cat_herder_store_redis::{RedisBudgetCounter, RedisDedupRepository};
 use tokio::sync::RwLock;
@@ -129,6 +130,32 @@ async fn refresh_git_tokens(
         }
     }
     runtime.update_git_tokens(map).await;
+    Ok(())
+}
+
+/// Resolve every workflow's steps into `(agent type, model)` pairs and push them to
+/// the runtime, so a `workflow` run's pod gets its `WORKFLOW_STEPS` (§7). Steps whose
+/// agent type isn't in the catalog resolve to an empty model (the harness then skips
+/// them rather than guessing).
+async fn refresh_workflow_steps(
+    runtime: &SandboxRuntime,
+    workflows: &WorkflowRepo,
+    agents: &AgentRepo,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut map = HashMap::new();
+    for wf in workflows.list().await? {
+        let mut steps = Vec::new();
+        for step in &wf.steps {
+            let model = agents
+                .get(&step.agent_type)
+                .await?
+                .map(|a| a.model)
+                .unwrap_or_default();
+            steps.push((step.agent_type.clone(), model));
+        }
+        map.insert(wf.id, steps);
+    }
+    runtime.update_workflow_steps(map).await;
     Ok(())
 }
 
@@ -244,6 +271,7 @@ struct Repos {
     checkpoints: CheckpointRepo,
     approvals: ApprovalRepo,
     reviews: ReviewRepo,
+    workflows: WorkflowRepo,
     grants: CredentialGrantRepo,
     budgets: BudgetRepo,
     agents: AgentRepo,
@@ -270,6 +298,7 @@ impl Repos {
             checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
             approvals: ApprovalRepo::InMemory(InMemoryApprovalRepository::default()),
             reviews: ReviewRepo::InMemory(InMemoryReviewRepository::default()),
+            workflows: WorkflowRepo::InMemory(InMemoryWorkflowRepository::default()),
             grants: CredentialGrantRepo::InMemory(InMemoryCredentialGrantRepository::default()),
             budgets: BudgetRepo::InMemory(InMemoryBudgetRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
@@ -311,6 +340,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     )),
                     approvals: ApprovalRepo::Postgres(PostgresApprovalRepository::new(&store)),
                     reviews: ReviewRepo::Postgres(PostgresReviewRepository::new(&store)),
+                    workflows: WorkflowRepo::Postgres(PostgresWorkflowRepository::new(&store)),
                     grants: CredentialGrantRepo::Postgres(PostgresCredentialGrantRepository::new(
                         &store,
                     )),
@@ -528,6 +558,25 @@ async fn main() {
         });
     }
 
+    // Workflow step resolution (§7): resolve each workflow's steps to (agent type,
+    // model) and push them to the runtime so a `workflow` run's pod gets
+    // `WORKFLOW_STEPS`. Refreshed so edits take effect without a restart.
+    if let Some(rt) = runtime.clone() {
+        let workflows = repos.workflows.clone();
+        let agents = repos.agents.clone();
+        if let Err(e) = refresh_workflow_steps(&rt, &workflows, &agents).await {
+            eprintln!("workflow step refresh error: {e}");
+        }
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                if let Err(e) = refresh_workflow_steps(&rt, &workflows, &agents).await {
+                    eprintln!("workflow step refresh error: {e}");
+                }
+            }
+        });
+    }
+
     // Background reconciler: a sharded, lease-based leader loop (PLAN.md §6). The
     // process leases shards (each a bucket of run_id hashes) and reconciles only the
     // runs those shards own. A shard whose lease lapses is re-acquired by a survivor
@@ -678,6 +727,7 @@ async fn main() {
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
         reviews: repos.reviews,
+        workflows: repos.workflows,
         broker,
         budgets: repos.budgets,
         budget_counter,

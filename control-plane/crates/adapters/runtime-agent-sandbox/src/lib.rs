@@ -113,6 +113,10 @@ pub struct SandboxRuntime {
     /// Repo id (host/path) → decrypted access token — refreshed by the control plane
     /// (per-repo scoping; the token is only injected for a run whose repo matches).
     git_tokens: Arc<RwLock<HashMap<String, String>>>,
+    /// Workflow id → resolved steps (agent type, model) — refreshed by the control
+    /// plane so a `workflow` run's pod gets its `WORKFLOW_STEPS` without the runtime
+    /// resolving the catalog itself (§7).
+    workflow_steps: Arc<RwLock<HashMap<String, Vec<(String, String)>>>>,
 }
 
 impl SandboxRuntime {
@@ -158,6 +162,7 @@ impl SandboxRuntime {
             pod,
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
             git_tokens: Arc::new(RwLock::new(HashMap::new())),
+            workflow_steps: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -179,6 +184,13 @@ impl SandboxRuntime {
     /// plane). Only enabled repos with a token are kept.
     pub async fn update_git_tokens(&self, tokens: HashMap<String, String>) {
         *self.git_tokens.write().await = tokens;
+    }
+
+    /// Refresh the workflow id → resolved steps (agent type, model) mapping (§7). The
+    /// control plane resolves each step's agent template to its model and pushes the
+    /// result here, so `spawn` can inject `WORKFLOW_STEPS` without touching the catalog.
+    pub async fn update_workflow_steps(&self, steps: HashMap<String, Vec<(String, String)>>) {
+        *self.workflow_steps.write().await = steps;
     }
 
     /// Resolve the git token scoped to this run's repo, if one is registered. The
@@ -217,6 +229,7 @@ impl SandboxRuntime {
         run: &Run,
         api_key: Option<&str>,
         git_token: Option<&str>,
+        workflow_steps: Option<&[(String, String)]>,
     ) -> DynamicObject {
         let mut env = vec![
             serde_json::json!({ "name": "RUN_ID", "value": run.id.0.to_string() }),
@@ -227,6 +240,20 @@ impl SandboxRuntime {
             && !model.is_empty()
         {
             env.push(serde_json::json!({ "name": "MODEL", "value": model }));
+        }
+        // A workflow run's steps (agent type + model, resolved by the control plane)
+        // are compiled into a LangGraph StateGraph by the harness (§7).
+        if let Some(steps) = workflow_steps {
+            let steps_json: Vec<serde_json::Value> = steps
+                .iter()
+                .map(|(agent_type, model)| {
+                    serde_json::json!({ "agent_type": agent_type, "model": model })
+                })
+                .collect();
+            env.push(serde_json::json!({
+                "name": "WORKFLOW_STEPS",
+                "value": serde_json::to_string(&steps_json).unwrap_or_else(|_| "[]".into()),
+            }));
         }
         // The repo to clone and work on (from the run's `repo` field). Normalize to a
         // canonical HTTPS URL so the token (which only authenticates over HTTPS)
@@ -421,10 +448,21 @@ impl AgentRuntime for SandboxRuntime {
             Some(t) if !t.is_empty() => Some(t),
             _ => self.resolve_git_token(run).await,
         };
+        // Resolve a workflow run's steps (agent type + model) from the control plane's
+        // refresh, keyed by `workflow_ref` (§7).
+        let workflow_steps = match run.workflow_ref.as_deref() {
+            Some(wref) => self.workflow_steps.read().await.get(wref).cloned(),
+            None => None,
+        };
         self.api
             .create(
                 &PostParams::default(),
-                &self.sandbox_object(run, api_key.as_deref(), git_token.as_deref()),
+                &self.sandbox_object(
+                    run,
+                    api_key.as_deref(),
+                    git_token.as_deref(),
+                    workflow_steps.as_deref(),
+                ),
             )
             .await?;
         Ok(())

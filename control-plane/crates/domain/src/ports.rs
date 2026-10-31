@@ -7,7 +7,7 @@
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use crate::entities::{
     ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, GitRepo, Review,
-    ReviewVerdict, Run, RunId, RunState,
+    ReviewVerdict, Run, RunId, RunState, WorkflowDefinition,
 };
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
@@ -29,6 +29,8 @@ pub struct RunRequest {
     pub model: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
+    /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).
+    pub workflow_ref: Option<String>,
     /// Token budget cap for the run (`PLAN.md` §12). `None`/`0` = unbounded.
     pub budget: Option<u64>,
 }
@@ -67,6 +69,16 @@ pub trait AgentRepository {
     /// Upsert an agent template.
     async fn save(&self, agent: &AgentTemplate) -> DomainResult<AgentTemplate>;
     /// Delete an agent template.
+    async fn delete(&self, id: &str) -> DomainResult<()>;
+}
+
+/// Configurable workflow catalog (`PLAN.md` §7): ordered, user-editable agent
+/// pipelines that a `workflow` run compiles into a LangGraph `StateGraph` at start.
+pub trait WorkflowRepository {
+    async fn list(&self) -> DomainResult<Vec<WorkflowDefinition>>;
+    async fn get(&self, id: &str) -> DomainResult<Option<WorkflowDefinition>>;
+    /// Upsert a workflow definition (validated by the caller: non-empty, unique steps).
+    async fn save(&self, workflow: &WorkflowDefinition) -> DomainResult<WorkflowDefinition>;
     async fn delete(&self, id: &str) -> DomainResult<()>;
 }
 

@@ -189,3 +189,16 @@ export interface Approval {
   payload: unknown
   created_at: number
 }
+
+/** A step in a configurable workflow: one agent type (template id). */
+export interface WorkflowStep {
+  agentType: string
+}
+
+/** A configurable, ordered agent pipeline (`GET`/`PUT` `/v1/workflows`). */
+export interface WorkflowDefinition {
+  id: string
+  name: string
+  isDefault: boolean
+  steps: WorkflowStep[]
+}

@@ -16,6 +16,7 @@ import type {
   Session,
   SessionSummary,
   Tool,
+  WorkflowDefinition,
 } from '@/types/domain'
 import type { CatHerderApi, AuthInfo } from './client'
 
@@ -387,6 +388,20 @@ const reviews: Review[] = [
   },
 ]
 
+// Configurable workflows (§7), seeded with the default coding → document → review.
+let workflows: WorkflowDefinition[] = [
+  {
+    id: 'default',
+    name: 'Default pipeline',
+    isDefault: true,
+    steps: [
+      { agentType: 'agent-codeact' },
+      { agentType: 'agent-docs' },
+      { agentType: 'agent-reviewer' },
+    ],
+  },
+]
+
 // Active → terminal priority for deriving a session's aggregate status.
 const STATUS_PRIORITY: RunState[] = [
   'running',
@@ -489,6 +504,21 @@ export const mockApi: CatHerderApi = {
     r.reviewer = 'admin'
     r.feedback = feedback ?? null
     recordAudit('review.respond', 'review', id)
+    return delay(undefined)
+  },
+
+  listWorkflows: () => delay(workflows),
+  saveWorkflow: (id, workflow) => {
+    const saved = { ...workflow, id }
+    const i = workflows.findIndex((w) => w.id === id)
+    if (i >= 0) workflows[i] = saved
+    else workflows.push(saved)
+    recordAudit('workflow.upsert', 'workflow', id)
+    return delay(saved)
+  },
+  deleteWorkflow: (id) => {
+    workflows = workflows.filter((w) => w.id !== id)
+    recordAudit('workflow.delete', 'workflow', id)
     return delay(undefined)
   },
 

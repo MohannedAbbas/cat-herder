@@ -54,6 +54,7 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
         model: payload.model,
         repo: payload.repo,
         language: payload.language,
+        workflow_ref: None,
         budget: payload.budget,
     }
 }

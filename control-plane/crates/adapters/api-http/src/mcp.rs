@@ -148,6 +148,7 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 model: Some(model),
                 repo: opt("repo"),
                 language: opt("language"),
+                workflow_ref: None,
                 budget: args["budget"].as_u64(),
             };
 

@@ -12,6 +12,7 @@ import type {
   Session,
   SessionSummary,
   Tool,
+  WorkflowDefinition,
 } from '@/types/domain'
 import type { CatHerderApi, AuthInfo } from './client'
 import { config } from '@/config'
@@ -57,6 +58,12 @@ export const httpApi: CatHerderApi = {
   getAgent: (id) => request<AgentTemplate>(`/v1/agents/${id}`),
   listRuns: () => request<RunRecord[]>('/v1/runs'),
   getRun: (id) => request<RunRecord>(`/v1/runs/${id}`),
+
+  listWorkflows: () => request<WorkflowDefinition[]>('/v1/workflows'),
+  saveWorkflow: (id, workflow) =>
+    request<WorkflowDefinition>(`/v1/workflows/${id}`, json('PUT', workflow)),
+  deleteWorkflow: (id) =>
+    request<void>(`/v1/workflows/${id}`, { method: 'DELETE' }),
 
   getRunDiff: (id) => request<RunDiff>(`/v1/runs/${id}/diff`),
   getRunApproval: (id) => requestOptional<Approval>(`/v1/runs/${id}/approval`),

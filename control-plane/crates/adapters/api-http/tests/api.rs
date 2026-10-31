@@ -130,6 +130,30 @@ async fn post_json_authed(
     (status, body)
 }
 
+/// PUT with an authenticated session cookie (workflow catalog edits).
+async fn put_json_authed(
+    app: Router,
+    token: &str,
+    uri: &str,
+    body: &str,
+) -> (StatusCode, Vec<u8>) {
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("cookie", format!("session={token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, body)
+}
+
 #[tokio::test]
 async fn list_runs_starts_empty() {
     let (status, body) = send(app(), "/v1/runs").await;
@@ -185,6 +209,7 @@ async fn get_run_events_replays_the_log() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -241,6 +266,7 @@ async fn stream_run_events_without_nats_returns_501() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -322,6 +348,7 @@ async fn respond_approval_approves_and_resumes_run() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -444,6 +471,7 @@ async fn respond_review_approves_and_reviews_run() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: Some("https://github.com/org/repo/pull/1".into()),
@@ -509,6 +537,7 @@ async fn list_reviews_returns_pending_queue_with_run_context() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -578,6 +607,7 @@ async fn get_run_diff_returns_decoded_changes() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -640,6 +670,7 @@ async fn get_run_approval_returns_pending_approval() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -698,6 +729,7 @@ async fn get_run_review_returns_pending_review() {
         model: None,
         repo: None,
         language: None,
+        workflow_ref: None,
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -735,6 +767,98 @@ async fn get_run_review_returns_pending_review() {
 async fn get_run_review_none_returns_404() {
     let (status, _) = send(app(), "/v1/runs/999/review").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// --- workflows ------------------------------------------------------------
+
+#[tokio::test]
+async fn list_workflows_returns_seeded_default() {
+    let (status, body) = send(app(), "/v1/workflows").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], "default");
+    assert_eq!(list[0]["isDefault"], true);
+    assert_eq!(list[0]["steps"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn upsert_workflow_saves_and_lists() {
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = put_json_authed(
+        router(state.clone()),
+        &token,
+        "/v1/workflows/custom",
+        r#"{"id":"custom","name":"Custom","isDefault":false,"steps":[{"agentType":"agent-reviewer"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(router(state), "/v1/workflows").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list.iter().any(|w| w["id"] == "custom"));
+}
+
+#[tokio::test]
+async fn upsert_workflow_rejects_duplicate_agent_types() {
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = put_json_authed(
+        router(state),
+        &token,
+        "/v1/workflows/dup",
+        r#"{"id":"dup","name":"Dup","isDefault":false,"steps":[{"agentType":"agent-codeact"},{"agentType":"agent-codeact"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn upsert_workflow_rejects_empty_steps() {
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = put_json_authed(
+        router(state),
+        &token,
+        "/v1/workflows/empty",
+        r#"{"id":"empty","name":"Empty","isDefault":false,"steps":[]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn delete_workflow_removes_it() {
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    put_json_authed(
+        router(state.clone()),
+        &token,
+        "/v1/workflows/tmp",
+        r#"{"id":"tmp","name":"Tmp","isDefault":false,"steps":[{"agentType":"agent-docs"}]}"#,
+    )
+    .await;
+
+    let res = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/workflows/tmp")
+                .header("cookie", format!("session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let (status, body) = send(router(state), "/v1/workflows").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(list.iter().all(|w| w["id"] != "tmp"));
 }
 
 #[tokio::test]
@@ -869,6 +993,7 @@ async fn post_finished_event_marks_run_succeeded() {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -915,6 +1040,7 @@ async fn post_finished_event_failed_marks_run_failed() {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -959,6 +1085,7 @@ async fn post_stuck_event_marks_run_stuck() {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,
@@ -1015,6 +1142,7 @@ async fn post_nonterminal_event_is_acknowledged_without_state_change() {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,

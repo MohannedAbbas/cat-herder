@@ -379,6 +379,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::api::{AgentTemplate, Model, Provider, RuntimeTier, Session, SessionRun, Tool};
-use crate::entities::{RunKind, RunState};
+use crate::entities::{RunKind, RunState, WorkflowDefinition, WorkflowStep};
 
 /// Built-in catalog defaults that operators may override via the environment:
 /// the harness image used by every seeded agent, and each agent's
@@ -119,6 +119,27 @@ pub fn default_agents_with(
     ]
 }
 
+/// The global default workflow (§7): the built-in coding → document → review pipeline,
+/// seeded into both the in-memory and Postgres backends on first boot.
+pub fn default_workflow() -> WorkflowDefinition {
+    WorkflowDefinition {
+        id: "default".into(),
+        name: "Default pipeline".into(),
+        is_default: true,
+        steps: vec![
+            WorkflowStep {
+                agent_type: "agent-codeact".into(),
+            },
+            WorkflowStep {
+                agent_type: "agent-docs".into(),
+            },
+            WorkflowStep {
+                agent_type: "agent-reviewer".into(),
+            },
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +190,15 @@ mod tests {
         );
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
         assert_eq!(codeact.max_concurrency, 16);
+    }
+
+    #[test]
+    fn default_workflow_chains_coding_document_review() {
+        let wf = default_workflow();
+        assert_eq!(wf.id, "default");
+        assert!(wf.is_default);
+        let types: Vec<&str> = wf.steps.iter().map(|s| s.agent_type.as_str()).collect();
+        assert_eq!(types, ["agent-codeact", "agent-docs", "agent-reviewer"]);
     }
 }
 

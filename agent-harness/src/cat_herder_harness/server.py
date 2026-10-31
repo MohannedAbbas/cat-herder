@@ -639,6 +639,106 @@ def run_agent(
     return str(result)
 
 
+def parse_workflow_steps() -> list[dict]:
+    """Read the resolved workflow steps from `WORKFLOW_STEPS` (JSON
+    `[{"agent_type": ..., "model": ...}]`), injected by the control plane (§7)."""
+    raw = os.environ.get("WORKFLOW_STEPS", "").strip()
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, list) else []
+    except json.JSONDecodeError:
+        print(f"invalid WORKFLOW_STEPS: {raw}", flush=True)
+        return []
+
+
+def run_workflow(
+    steps: list[dict],
+    checkpointer=None,
+    resume: bool = False,
+    tools=None,
+) -> str:
+    """Compile the workflow's ordered steps into a linear LangGraph `StateGraph` (§7).
+
+    One node per step; each node runs a Deep Agents agent bound to that step's model
+    (role prompt) over the task + the accumulated prior output, and the accumulated
+    messages feed the next node. The graph checkpoints on `thread_id = RUN_ID`, so a
+    workflow pauses/resumes like a single-agent run (§6).
+    """
+    from typing_extensions import TypedDict
+
+    from deepagents import create_deep_agent
+    from deepagents.backends import LocalShellBackend
+    from langgraph.graph import END, START, StateGraph
+
+    shell_env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV_KEYS}
+    backend = LocalShellBackend(root_dir=REPO_DIR, virtual_mode=False, env=shell_env)
+
+    class WorkflowState(TypedDict):
+        messages: list
+
+    def step_node(step: dict):
+        def node(state: WorkflowState) -> dict:
+            model = (step.get("model") or "").strip()
+            role = (step.get("agent_type") or "agent").strip()
+            prior = state.get("messages", [])
+            if not model:
+                # An unknown agent type resolves to no model; skip the step rather
+                # than guess a model.
+                return {"messages": prior}
+
+            set_provider_key(model)
+            set_provider_base_url(model)
+            agent = create_deep_agent(
+                model=model,
+                system_prompt=(
+                    f"You are the '{role}' step of a workflow. Complete this step and "
+                    "report a concise result for the next step."
+                ),
+                backend=backend,
+                tools=tools,
+            )
+            task = os.environ.get("TASK_SPEC", "")
+            if prior:
+                context = "\n\n".join(
+                    f"[{m.get('role', 'step')}] {m.get('content', '')}"
+                    for m in prior
+                    if isinstance(m, dict) and m.get("content")
+                )
+                user = f"{task}\n\nPrior steps:\n{context}" if task else context
+            else:
+                user = task
+            out = agent.invoke({"messages": [{"role": "user", "content": user}]})
+            msgs = out.get("messages", [])
+            last = str(getattr(msgs[-1], "content", msgs[-1])) if msgs else ""
+            return {"messages": prior + [{"role": role, "content": last}]}
+
+        return node
+
+    graph = StateGraph(WorkflowState)
+    for i, step in enumerate(steps):
+        graph.add_node(f"step_{i}", step_node(step))
+    graph.add_edge(START, "step_0")
+    for i in range(len(steps) - 1):
+        graph.add_edge(f"step_{i}", f"step_{i + 1}")
+    graph.add_edge(f"step_{len(steps) - 1}", END)
+    app = graph.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": RUN_ID}}
+
+    mark_activity()
+    result: dict = {}
+    initial = None if resume else {"messages": []}
+    for chunk in app.stream(initial, config=config, stream_mode="values"):
+        mark_activity()
+        result = chunk
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    if messages:
+        last = messages[-1]
+        return str(last.get("content", last) if isinstance(last, dict) else last)
+    return ""
+
+
 def _file_change(path: str) -> dict:
     """Build a change entry for an added/modified file (content read from REPO_DIR)."""
     full = os.path.join(REPO_DIR, path)
@@ -731,23 +831,28 @@ def main() -> None:
 
     task_spec = os.environ.get("TASK_SPEC", "").strip()
     model = os.environ.get("MODEL", "").strip()
+    # A `workflow` run has per-step models (injected via WORKFLOW_STEPS), not a single
+    # MODEL (§7).
+    workflow_steps = parse_workflow_steps()
 
     if not task_spec:
         print("no TASK_SPEC configured; idling (health only)", flush=True)
         threading.Event().wait()
         return
 
-    if not model:
-        # A run with no agent/model selected — fail cleanly instead of hanging.
-        print("no MODEL configured for this run; reporting failure", flush=True)
+    if not model and not workflow_steps:
+        # A run with no agent/model (and no workflow steps) — fail cleanly instead of
+        # hanging.
+        print("no MODEL or WORKFLOW_STEPS configured; reporting failure", flush=True)
         report_event("finished", status="failed")
         threading.Event().wait()
         return
 
-    set_provider_key(model)
-    # Route model traffic through the LiteLLM metering proxy (PLAN.md §12) so every
-    # call is metered against the run's budget before reaching the provider.
-    set_provider_base_url(model)
+    if not workflow_steps:
+        set_provider_key(model)
+        # Route model traffic through the LiteLLM metering proxy (PLAN.md §12) so every
+        # call is metered against the run's budget before reaching the provider.
+        set_provider_base_url(model)
 
     # Clone the target repo (if any) so the agent can read and modify it.
     if REPO_URL:
@@ -794,15 +899,23 @@ def main() -> None:
     report_event("started")
     set_agent_running(True)
     try:
-        result = run_agent(
-            task_spec,
-            model,
-            checkpointer=saver,
-            resume=resume,
-            interrupt_on=interrupt_on,
-            on_interrupt=on_interrupt,
-            tools=[credential_tool] if credential_tool is not None else None,
-        )
+        if workflow_steps:
+            result = run_workflow(
+                workflow_steps,
+                checkpointer=saver,
+                resume=resume,
+                tools=[credential_tool] if credential_tool is not None else None,
+            )
+        else:
+            result = run_agent(
+                task_spec,
+                model,
+                checkpointer=saver,
+                resume=resume,
+                interrupt_on=interrupt_on,
+                on_interrupt=on_interrupt,
+                tools=[credential_tool] if credential_tool is not None else None,
+            )
         print(f"agent completed: {result}", flush=True)
         changes = collect_changes()
         usage = {"input_tokens": _usage_input, "output_tokens": _usage_output}

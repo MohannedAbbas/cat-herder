@@ -26,14 +26,15 @@ use cat_herder_domain::api::{
     SessionRun, SessionSummary, repo_identity_from_url,
 };
 use cat_herder_domain::entities::{
-    ApprovalStatus, Review, ReviewStatus, ReviewVerdict, Run, RunId, RunState, Usage,
+    ApprovalStatus, Review, ReviewStatus, ReviewVerdict, Run, RunId, RunKind, RunState, Usage,
+    WorkflowDefinition,
 };
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, DedupRepository, EventBus,
     EventRepository, GitRepoRepository, MintedCredential, ReviewRepository, RunRepository,
-    RunRequest, SessionRepository, SettingRepository,
+    RunRequest, SessionRepository, SettingRepository, WorkflowRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -51,7 +52,7 @@ pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
     AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, CredentialGrantRepo, EventRepo,
     GitRepoRepo, ModelRepo, ProviderRepo, ReviewRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
-    TransitionRepo,
+    TransitionRepo, WorkflowRepo,
 };
 pub use trigger::{
     DedupRepo, github_delivery_id, normalize_cron, normalize_github, normalize_gitlab,
@@ -143,6 +144,8 @@ pub struct AppState {
     pub approvals: ApprovalRepo,
     /// Durable result reviews (`PLAN.md` §10).
     pub reviews: ReviewRepo,
+    /// The configurable workflow catalog (`PLAN.md` §7).
+    pub workflows: WorkflowRepo,
     /// The JIT credential broker (`PLAN.md` §11.3). Remote (gRPC) when a broker endpoint
     /// is configured; otherwise the in-process service with an empty issuer map (whose
     /// `mint` fails gracefully and the runtime falls back to a registered repo token or
@@ -214,6 +217,7 @@ impl Default for AppState {
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
             reviews: ReviewRepo::InMemory(Default::default()),
+            workflows: WorkflowRepo::InMemory(Default::default()),
             broker,
             budgets: BudgetRepo::InMemory(Default::default()),
             budget_counter: BudgetCounterImpl::InMemory(Default::default()),
@@ -264,6 +268,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
         .route("/v1/agents/{id}", get(get_agent))
+        .route("/v1/workflows", get(list_workflows))
         // auth
         .route("/v1/auth/login", post(admin::login))
         .route("/v1/auth/logout", post(admin::logout))
@@ -309,6 +314,10 @@ pub fn router(state: AppState) -> Router {
             post(admin::rotate_encryption_key),
         )
         .route("/v1/admin/audit", get(admin::list_audit))
+        .route(
+            "/v1/workflows/{id}",
+            put(admin::upsert_workflow).delete(admin::delete_workflow),
+        )
         .with_state(state)
 }
 
@@ -396,13 +405,34 @@ async fn create_run(
         "execution runtime not configured".into(),
     ))?;
 
-    // Models are agent-specific; a run needs a resolvable model.
-    let model = resolve_model(&state, req.model, req.agent_id)
-        .await?
-        .ok_or((
+    // Models are agent-specific; a run needs a resolvable model. A workflow run's
+    // per-step models come from its definition (resolved at spawn), so a single
+    // `model` is not required — but the referenced workflow must exist.
+    let model = if req.kind == RunKind::Workflow {
+        let wref = req.workflow_ref.as_deref().ok_or((
             StatusCode::BAD_REQUEST,
-            "agent_id or model is required".to_string(),
+            "workflow_ref is required for a workflow run".to_string(),
         ))?;
+        state
+            .workflows
+            .get(wref)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                format!("workflow '{wref}' not found"),
+            ))?;
+        None
+    } else {
+        Some(
+            resolve_model(&state, req.model, req.agent_id)
+                .await?
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "agent_id or model is required".to_string(),
+                ))?,
+        )
+    };
 
     let run_req = RunRequest {
         kind: req.kind,
@@ -411,9 +441,10 @@ async fn create_run(
         max_concurrency: req.max_concurrency,
         trigger: "api".into(),
         actor: req.actor,
-        model: Some(model),
+        model,
         repo: req.repo,
         language: req.language,
+        workflow_ref: req.workflow_ref,
         budget: req.budget,
     };
 
@@ -811,6 +842,7 @@ async fn spawn_review_followup(state: &AppState, review: &Review) {
         model: parent.model.clone(),
         repo: parent.repo.clone(),
         language: parent.language.clone(),
+        workflow_ref: None,
         budget: None,
     };
     match start_run(
@@ -1601,6 +1633,14 @@ async fn get_agent(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// The configurable workflow catalog (`PLAN.md` §7) — public read, like the agent
+/// catalog. Write paths (`PUT`/`DELETE`) are admin-gated in `admin.rs`.
+async fn list_workflows(
+    State(state): State<AppState>,
+) -> Json<Vec<WorkflowDefinition>> {
+    Json(state.workflows.list().await.unwrap_or_default())
 }
 
 // --- Helpers --------------------------------------------------------------

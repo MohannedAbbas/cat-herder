@@ -24,7 +24,7 @@ center of the [hexagon](/architecture/crates.md); every other crate depends on i
 
 | File | Contents |
 |---|---|
-| `entities.rs` | `RunId`, `RunKind`, `RunState`, `ReviewVerdict`, `ReviewStatus`, `Run`, `Review`, `ApprovalRequest`, `Checkpoint`, `Budget`, `CredentialGrant`, `GitRepo`. Infrastructure-free. See [Run](/concepts/run.md) & [GitRepo](/concepts/git-repo.md). |
+| `entities.rs` | `RunId`, `RunKind`, `RunState`, `ReviewVerdict`, `ReviewStatus`, `Run`, `Review`, `ApprovalRequest`, `Checkpoint`, `Budget`, `CredentialGrant`, `WorkflowDefinition`, `WorkflowStep`, `GitRepo`. Infrastructure-free. See [Run](/concepts/run.md) & [GitRepo](/concepts/git-repo.md). |
 | `state.rs` | `can_transition`, `is_terminal`, `Run::transition`. See [Run lifecycle](/concepts/run-lifecycle.md). |
 | `reconcile.rs` | `RuntimeStatus { Pending, Ready, Succeeded, Failed, Expired }` and `reconcile_run(state, status)` → the (possibly multi-step) transition sequence. |
 | `ports.rs` | Port traits + `RunRequest` + `DomainResult`. |
@@ -38,9 +38,9 @@ Driving: `TriggerSource`. Driven: `AgentRuntime` (spawn/status/signal/terminate)
 `RunRepository`, `AgentRepository`, `ProviderRepository`, `ModelRepository`,
 `AuditRepository`, `ToolRepository`, `GitRepoRepository`, `SettingRepository`,
 `SessionRepository`, `EventRepository`, `CheckpointRepository`, `TransitionRepository`,
-`ApprovalRepository`, `ReviewRepository`, `BudgetRepository`, `BudgetCounter`,
-`CredentialBroker`, `CredentialGrantRepository`, `LeaseManager`, `DedupRepository`,
-`EventBus`, `ModelProvider`, `IdentityProvider`, `Notifier`.
+`ApprovalRepository`, `ReviewRepository`, `WorkflowRepository`, `BudgetRepository`,
+`BudgetCounter`, `CredentialBroker`, `CredentialGrantRepository`, `LeaseManager`,
+`DedupRepository`, `EventBus`, `ModelProvider`, `IdentityProvider`, `Notifier`.
 
 `RunRequest` is the normalized trigger input (`kind, task_spec, dedup_key,
 max_concurrency, trigger, actor, model, repo, language`); every trigger source maps to it.

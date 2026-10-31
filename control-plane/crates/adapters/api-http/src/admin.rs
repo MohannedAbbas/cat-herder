@@ -12,10 +12,10 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, GitHost, GitRepo, Model, Provider, Tool, default_git_hosts,
     new_webhook_secret, repo_identity,
 };
-use cat_herder_domain::entities::GitRepo as GitRepoEntity;
+use cat_herder_domain::entities::{GitRepo as GitRepoEntity, WorkflowDefinition};
 use cat_herder_domain::ports::{
     AgentRepository, AuditRepository, GitRepoRepository, ModelRepository, ProviderRepository,
-    SettingRepository, ToolRepository,
+    SettingRepository, ToolRepository, WorkflowRepository,
 };
 
 use super::AppState;
@@ -275,6 +275,62 @@ pub async fn delete_agent(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     audit(&state, &actor, "agent.delete", "agent", &id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- workflows -------------------------------------------------------------
+
+/// Enforce the workflow invariants (§7): at least one step, and an agent type in at
+/// most one step (one step = one role).
+fn validate_workflow(wf: &WorkflowDefinition) -> Result<(), String> {
+    if wf.steps.is_empty() {
+        return Err("a workflow needs at least one step".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for step in &wf.steps {
+        if step.agent_type.trim().is_empty() {
+            return Err("a step needs an agent type".into());
+        }
+        if !seen.insert(step.agent_type.clone()) {
+            return Err(format!(
+                "agent type '{}' appears more than once",
+                step.agent_type
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub async fn upsert_workflow(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+    Json(mut wf): Json<WorkflowDefinition>,
+) -> Result<Json<WorkflowDefinition>, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    wf.id = id;
+    validate_workflow(&wf).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let saved = state
+        .workflows
+        .save(&wf)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "workflow.upsert", "workflow", &saved.id).await;
+    Ok(Json(saved))
+}
+
+pub async fn delete_workflow(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let actor = require_admin(&state, &jar).await?;
+    state
+        .workflows
+        .delete(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit(&state, &actor, "workflow.delete", "workflow", &id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

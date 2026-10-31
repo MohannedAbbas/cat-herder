@@ -163,6 +163,9 @@ pub struct CreateRunRequest {
     pub repo: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    /// A configurable workflow to run (its id), used when `kind` is `workflow` (§7).
+    #[serde(default)]
+    pub workflow_ref: Option<String>,
     /// Token budget cap for the run (§12). `None`/`0` = unbounded.
     #[serde(default)]
     pub budget: Option<u64>,
@@ -186,6 +189,8 @@ pub struct RunResponse {
     pub language: Option<String>,
     pub session_id: Option<String>,
     pub task_spec: String,
+    /// A configurable workflow the run executes (its id), when `kind` is `workflow`.
+    pub workflow_ref: Option<String>,
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -212,6 +217,7 @@ impl From<&crate::entities::Run> for RunResponse {
             language: run.language.clone(),
             session_id: run.session_id.clone(),
             task_spec: run.task_spec.clone(),
+            workflow_ref: run.workflow_ref.clone(),
             created_at: to_iso(run.created_at),
             started_at: run.started_at.map(to_iso),
             finished_at: run.finished_at.map(to_iso),

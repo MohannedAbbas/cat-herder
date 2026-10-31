@@ -122,6 +122,7 @@ where
         model: req.model,
         repo: req.repo.filter(|r| is_safe_repo_url(r)),
         language: req.language,
+        workflow_ref: req.workflow_ref.clone(),
         started_at: None,
         finished_at: None,
         pr_url: None,
@@ -1019,6 +1020,7 @@ mod tests {
             model: None,
             repo: Some(repo.to_string()),
             language: None,
+            workflow_ref: None,
             budget: None,
         }
     }
@@ -1034,6 +1036,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            workflow_ref: None,
             budget: None,
         }
     }

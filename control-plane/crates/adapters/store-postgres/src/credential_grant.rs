@@ -158,6 +158,7 @@ mod tests {
             model: None,
             repo: Some("https://github.com/org/repo".into()),
             language: None,
+            workflow_ref: None,
             started_at: None,
             finished_at: None,
             pr_url: None,

@@ -14,6 +14,7 @@ import type {
   Session,
   SessionSummary,
   Tool,
+  WorkflowDefinition,
 } from '@/types/domain'
 import { config } from '@/config'
 import { mockApi } from './mock'
@@ -32,6 +33,11 @@ export interface CatHerderApi {
   getAgent(id: string): Promise<AgentTemplate>
   listRuns(): Promise<RunRecord[]>
   getRun(id: number): Promise<RunRecord>
+
+  // workflows (§7)
+  listWorkflows(): Promise<WorkflowDefinition[]>
+  saveWorkflow(id: string, workflow: WorkflowDefinition): Promise<WorkflowDefinition>
+  deleteWorkflow(id: string): Promise<void>
 
   // run deep-link views (§10, §20) — de-blind approvals and reviews
   getRunDiff(id: number): Promise<RunDiff>
