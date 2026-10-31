@@ -386,9 +386,20 @@ Brokered credentials and a real budget hard-stop; both are called out as
   Deferred: workspace snapshot/artifact deletion (with #5's MinIO slice) and the
   per-run PVC subpath reclaim, plus an admin-UI retention setting (env-driven for now).
 
-- [ ] **19. Evaluation harness (§17).** Task-completion scoring (SWE-bench-style),
+- [x] **19. Evaluation harness (§17).** Task-completion scoring (SWE-bench-style),
   deterministic replay, broker "secret never reaches model" tests, and a budgeted
   canary run per deploy.
+  *Status:* ✅ landed — ✅ **SWE-bench-style scoring** — `domain/src/eval.rs`
+  (`Eval { fail_to_pass, pass_to_pass }` with `resolved()` + `pass_rate()`) is the pure
+  scoring core; ✅ **broker "secret never reaches model"** — a wiremock test asserts the
+  materialized secret appears nowhere in the persisted grant or the `credential.*`
+  events (the model only ever sees the opaque `cred://<id>` handle); ✅ **deterministic
+  replay / golden events** — the event log is replayable (#1) and the application tests
+  assert the exact lifecycle event sequences; ✅ **budgeted canary** — `scripts/canary.sh`
+  (+ `make canary`) creates a budgeted canary run and fails the deploy unless it
+  succeeds. See `docs/design/evaluation.md`. ⬜ Deferred: the SWE-bench test *runner*
+  (apply patch → run held-out tests → feed `Eval`), the deterministic LLM-stub replay
+  (Python test infra), and proptest for the pure core.
 
 - [ ] **20. HA/DR, chaos, compliance (§20 Phase 5).** Load + chaos testing,
   cold-start optimization, codebase indexing/LSP (deferred follow-on), SOC2/GDPR

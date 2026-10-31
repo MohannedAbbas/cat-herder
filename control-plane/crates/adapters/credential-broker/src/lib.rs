@@ -311,6 +311,69 @@ mod tests {
         }
     }
 
+    /// The "secret never reaches the model" invariant (§11.3, §17): the materialized
+    /// secret is returned to the trusted caller only, and appears nowhere in the grant
+    /// (metadata-only) or the audited events — so the model can only ever see the opaque
+    /// `cred://<id>` handle.
+    #[tokio::test]
+    async fn minted_secret_never_reaches_grant_or_events() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/installation"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 123 })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/installations/123/access_tokens"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "token": "ghs_super_secret_install_token",
+                "expires_at": "2030-01-01T00:00:00Z",
+            })))
+            .mount(&server)
+            .await;
+
+        let broker = broker(&server.uri()).await;
+        let minted = broker
+            .mint(RunId(7), "github.com/org/repo", "clone", "read")
+            .await
+            .expect("mint ok");
+
+        let secret = minted.secret.clone();
+        assert_eq!(secret, "ghs_super_secret_install_token");
+
+        // The model-visible handle (the grant id) never embeds the secret.
+        assert!(!minted.grant.id.contains(&secret));
+
+        // The persisted grant is metadata-only; no field carries the secret.
+        let grant = broker.grants.get(&minted.grant.id).await.unwrap().unwrap();
+        for field in [
+            grant.id.as_str(),
+            grant.target.as_str(),
+            grant.action.as_str(),
+            grant.scope.as_str(),
+            grant.token_id.as_deref().unwrap_or(""),
+        ] {
+            assert!(!field.contains(&secret), "secret leaked into a grant field");
+        }
+
+        // The audited events carry only the grant id + scope; the secret is absent.
+        let events = broker.events.list(RunId(7), 0, 10).await.unwrap();
+        assert!(!events.is_empty());
+        for event in &events {
+            let payload = serde_json::to_string(&event.payload).unwrap_or_default();
+            assert!(
+                !payload.contains(&secret),
+                "secret leaked into event {}",
+                event.event_type
+            );
+        }
+    }
+
     #[tokio::test]
     async fn revoke_marks_grant_and_emits_event() {
         use wiremock::matchers::{method, path};

@@ -13,6 +13,7 @@
 pub mod api;
 pub mod catalog;
 pub mod entities;
+pub mod eval;
 pub mod events;
 pub mod policy;
 pub mod ports;

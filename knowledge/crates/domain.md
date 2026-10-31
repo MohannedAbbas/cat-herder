@@ -28,6 +28,7 @@ center of the [hexagon](/architecture/crates.md); every other crate depends on i
 | `state.rs` | `can_transition`, `is_terminal`, `Run::transition`. See [Run lifecycle](/concepts/run-lifecycle.md). |
 | `reconcile.rs` | `RuntimeStatus { Pending, Ready, Succeeded, Failed, Expired }` and `reconcile_run(state, status)` → the (possibly multi-step) transition sequence. |
 | `redact.rs` | Secret redaction (`PLAN.md` §16): `redact`/`redact_value` scrub credential prefixes + `Bearer` tokens from event payloads/logs before write. |
+| `eval.rs` | SWE-bench-style task scoring (`PLAN.md` §17): `Eval { fail_to_pass, pass_to_pass }` with `resolved()` + `pass_rate()`. |
 | `ports.rs` | Port traits + `RunRequest` + `DomainResult`. |
 | `api.rs` | API read models (JSON contract): `AgentTemplate`, `Session`/`SessionRun`/`SessionSummary`, `Provider`, `Model`, `Tool`, `GitRepo`, `AuditEntry`, `RuntimeTier`, `CreateRunRequest`, `RunResponse`; identity helpers `RepoIdentity`, `repo_identity`, `repo_identity_from_url`, `is_safe_repo_url`, `is_valid_host`; `default_git_hosts`; id/time helpers. |
 | `catalog.rs` | Seed data: `default_agents(model_overrides)`, `default_providers`, `default_models`, `default_tools`, `default_sessions`. See [catalog](/concepts/catalog.md). |

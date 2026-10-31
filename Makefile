@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt lint run chart tilt prune harness-image sandbox-image
+.PHONY: build test coverage fmt lint run chart tilt prune harness-image sandbox-image canary
 
 # The Rust workspace lives in control-plane/ (see control-plane/Cargo.toml).
 WORKSPACE := control-plane
@@ -24,6 +24,10 @@ lint:
 
 run:
 	cd $(WORKSPACE) && cargo run -p cat-herder
+
+# Budgeted canary run against a live control plane (PLAN.md §17/§19).
+canary:
+	./scripts/canary.sh
 
 chart:
 	helm lint helm/cat-herder
