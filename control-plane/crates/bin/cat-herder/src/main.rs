@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, Broker, CheckpointRepo,
+    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl, CheckpointRepo,
     ControlLinks, CredentialGrantRepo, EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth,
     GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo,
     RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
+use cat_herder_credential_broker_rpc::{RemoteCredentialBroker, tls as broker_tls};
 use cat_herder_credentials_github::{GitHubApp, GitHubAppConfig};
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::ports::{
@@ -159,10 +160,15 @@ fn github_app_config() -> Option<GitHubAppConfig> {
     })
 }
 
-/// Build the JIT credential broker (`PLAN.md` §11.3). With a GitHub App configured it
-/// mints short-lived installation tokens on demand; otherwise its issuer map is empty
-/// and `mint` fails gracefully (the runtime falls back to a registered repo token).
-fn build_broker(grants: CredentialGrantRepo, events: EventRepo, bus: EventBusImpl) -> Broker {
+/// Build the in-process (local) JIT credential broker (`PLAN.md` §11.3) — the fallback
+/// when no remote broker endpoint is configured. With a GitHub App configured it mints
+/// short-lived installation tokens on demand; otherwise its issuer map is empty and
+/// `mint` fails gracefully (the runtime falls back to a registered repo token).
+fn build_local_broker(
+    grants: CredentialGrantRepo,
+    events: EventRepo,
+    bus: EventBusImpl,
+) -> BrokerImpl {
     let mut issuers = std::collections::HashMap::new();
     match github_app_config() {
         Some(cfg) => match GitHubApp::new(cfg) {
@@ -178,7 +184,51 @@ fn build_broker(grants: CredentialGrantRepo, events: EventRepo, bus: EventBusImp
             eprintln!("JIT credential broker disabled (CAT_HERDER_GITHUB_APP_ID/PRIVATE_KEY unset)")
         }
     }
-    CredentialBrokerService::new(issuers, grants, events, bus)
+    BrokerImpl::Local(CredentialBrokerService::new(issuers, grants, events, bus))
+}
+
+/// Build the remote JIT credential broker client (`PLAN.md` §11.3). Returns `None` when
+/// no broker endpoint is configured (the control plane then runs the broker in-process).
+/// TLS is applied when a CA (and, for mTLS, a client cert+key) is configured.
+async fn build_remote_broker() -> Option<BrokerImpl> {
+    let endpoint = std::env::var("CAT_HERDER_BROKER_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+
+    let ca_pem = std::env::var("CAT_HERDER_BROKER_CA")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let client_cert_pem = std::env::var("CAT_HERDER_BROKER_CLIENT_CERT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let client_key_pem = std::env::var("CAT_HERDER_BROKER_CLIENT_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
+    let tls = match broker_tls::client_tls(
+        ca_pem.as_deref().map(str::as_bytes),
+        client_cert_pem.as_deref().map(str::as_bytes),
+        client_key_pem.as_deref().map(str::as_bytes),
+    ) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("warning: broker TLS config invalid ({e}); connecting plain");
+            None
+        }
+    };
+
+    match RemoteCredentialBroker::connect(&endpoint, tls).await {
+        Ok(client) => {
+            eprintln!("JIT credential broker connected at {endpoint}");
+            Some(BrokerImpl::Remote(client))
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: broker at {endpoint} unreachable ({e}); falling back to in-process"
+            );
+            None
+        }
+    }
 }
 
 /// The repositories (run/agent/session/provider/model), all in-memory or all Postgres.
@@ -327,9 +377,13 @@ async fn main() {
         None => EventBusImpl::Noop,
     };
 
-    // JIT credential broker (PLAN.md §11.3). Mints short-lived GitHub App installation
+    // JIT credential broker (PLAN.md §11.3). Remote (gRPC) when CAT_HERDER_BROKER_URL is
+    // set; otherwise the in-process service. Mints short-lived GitHub App installation
     // tokens on demand when a GitHub App is configured; otherwise a no-op issuer map.
-    let broker: Broker = build_broker(repos.grants.clone(), repos.events.clone(), bus.clone());
+    let broker: BrokerImpl = match build_remote_broker().await {
+        Some(remote) => remote,
+        None => build_local_broker(repos.grants.clone(), repos.events.clone(), bus.clone()),
+    };
 
     // Shard leases for the sharded reconciler (PLAN.md §6). NATS JetStream KV when
     // NATS is configured; otherwise the in-memory fallback (single-replica dev, where
@@ -561,7 +615,6 @@ async fn main() {
         transitions: repos.transitions,
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
-        grants: repos.grants,
         broker,
         bus,
         agents: repos.agents,

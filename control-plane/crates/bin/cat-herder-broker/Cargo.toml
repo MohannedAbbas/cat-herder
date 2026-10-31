@@ -1,0 +1,16 @@
+[package]
+name = "cat-herder-broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-herder-domain = { path = "../../domain" }
+cat-herder-credential-broker = { path = "../../adapters/credential-broker" }
+cat-herder-credential-broker-rpc = { path = "../../adapters/credential-broker-rpc" }
+cat-herder-credentials-github = { path = "../../adapters/credentials-github" }
+cat-herder-store-inmemory = { path = "../../adapters/store-inmemory" }
+cat-herder-store-postgres = { path = "../../adapters/store-postgres" }
+cat-herder-store-nats = { path = "../../adapters/store-nats" }
+tokio.workspace = true
+tonic = { workspace = true, features = ["tls"] }

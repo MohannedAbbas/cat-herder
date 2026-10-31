@@ -26,6 +26,15 @@ custom_build(
     skips_local_docker=True,
 )
 
+# Credential broker (separate service, PLAN.md §11.3). Build context is the repo root,
+# like the control plane, so the gRPC contract at `proto/` is available to the build.
+custom_build(
+    'cat-herder-broker',
+    'podman build -t $EXPECTED_REF -f control-plane/crates/bin/cat-herder-broker/Dockerfile . && podman push $EXPECTED_REF',
+    ['./control-plane/crates', 'control-plane/Cargo.toml', 'control-plane/Cargo.lock', './proto', '.dockerignore'],
+    skips_local_docker=True,
+)
+
 # Agent harness (used by agent-sandbox SandboxTemplate at runtime; not yet wired
 # into the chart's templates, but built here so it's available in the registry).
 custom_build(
@@ -54,8 +63,8 @@ helm_resource(
     flags=['--create-namespace'],
     deps=['helm/cat-herder'],
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
-    image_keys=['controlPlane.image', 'harness.image', 'ui.image'],
-    image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui'],
+    image_keys=['controlPlane.image', 'harness.image', 'ui.image', 'broker.image'],
+    image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui', 'cat-herder-broker'],
 )
 
 # Expose the API and UI with explicit Service-targeted port-forwards. Tilt's

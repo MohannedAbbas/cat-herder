@@ -15,7 +15,7 @@ Kubernetes-native **control plane and governance layer** for AI coding agents.
 | `knowledge/` | OKF knowledge base (skills/commands), seed |
 | `ui/` | React dashboard (sessions, agents, status) — SPA served by nginx |
 | `helm/cat-herder/` | Umbrella Helm chart (control plane + dependencies + agent-sandbox) |
-| `proto/` | Harness ↔ control plane gRPC contract |
+| `proto/` | Harness ↔ control plane gRPC contract (`control.proto`) + credential broker (`credential.proto`) |
 | `Tiltfile` | Local dev: builds images and installs the chart with [Tilt](https://tilt.dev) |
 
 ## Quickstart
@@ -74,8 +74,23 @@ The control plane is configured via environment variables:
 | `GITLAB_OAUTH_ALLOWED_USERS` | Comma-separated GitLab usernames allowed to become admin. |
 | `CAT_HERDER_OAUTH_MOCK` | Dev-only: when truthy (`true`/`1`/`yes`/`on`), pretend both SSO providers are configured and skip the provider redirect (see below). Default false. **Never enable in production.** |
 | `CAT_HERDER_OAUTH_MOCK_USERNAME` | Mock SSO username issued in mock mode (default `dev-user`). |
-| `CAT_HERDER_GITHUB_APP_ID` / `CAT_HERDER_GITHUB_APP_PRIVATE_KEY` | GitHub App credentials for the JIT credential broker (§11.3). When both are set, the control plane mints short-lived installation tokens for a run's repo instead of injecting a long-lived PAT. |
+| `CAT_HERDER_GITHUB_APP_ID` / `CAT_HERDER_GITHUB_APP_PRIVATE_KEY` | GitHub App credentials for the JIT credential broker (§11.3). When both are set, the control plane mints short-lived installation tokens for a run's repo instead of injecting a long-lived PAT. (Used by the in-process broker; the separate `cat-herder-broker` service reads these from its own env when deployed.) |
 | `CAT_HERDER_GITHUB_API_BASE` | Optional API base for the broker (default `https://api.github.com`; override for GitHub Enterprise). |
+| `CAT_HERDER_BROKER_URL` | gRPC endpoint (`host:port`) of a separate credential-broker service. When set, the control plane talks to the remote broker instead of running one in-process. |
+| `CAT_HERDER_BROKER_CA` / `CAT_HERDER_BROKER_CLIENT_CERT` / `CAT_HERDER_BROKER_CLIENT_KEY` | Optional TLS material for the control plane → broker gRPC client (PEM). The broker is verified against `_CA`; the client cert/key present the control plane's mTLS identity. |
+
+### Credential broker service (separate deployment)
+
+The JIT credential broker can run as its own hardened service (`crates/bin/cat-herder-broker`)
+instead of in-process. It serves `proto/credential.proto` over gRPC with optional mTLS:
+
+| Variable | Purpose |
+|---|---|
+| `CAT_HERDER_BROKER_GRPC_PORT` | Broker gRPC listen port (default `50052`). |
+| `CAT_HERDER_BROKER_TLS_CERT` / `CAT_HERDER_BROKER_TLS_KEY` | Broker server certificate + key (PEM). When both are set the broker serves TLS. |
+| `CAT_HERDER_BROKER_CLIENT_CA` | Client CA for mTLS (PEM). When set, callers must present a client cert signed by this CA. |
+| `CAT_HERDER_BROKER_ALLOWED_SPIFFE_IDS` | Comma-separated allowlist of SPIFFE-style URI SANs a caller's client cert must carry (checked when set). |
+| `CAT_HERDER_DATABASE_URL` / `CAT_HERDER_NATS_URL` | Shared Postgres/NATS, matching the control plane, so grants/events land in the same tables. |
 
 ### GitHub OAuth SSO
 

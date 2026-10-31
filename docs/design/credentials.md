@@ -69,8 +69,10 @@ server-side revoke by `token_id`) flips the grant + emits `credential.revoked`.
 - **Clone/materialization** — the control plane mints a read-only credential for the
   run's declared repo at run start and injects it into the pod (`GIT_TOKEN` env →
   harness `git askpass`), revoking it on terminal. The model never sees the env var.
-- **Runtime on-demand** — the harness's `credential` tool returns an opaque handle; a
-  sidecar/credential-helper materializes the token into the git client. (Follow-on.)
+- **Runtime on-demand** — the harness's `credential(target, action, scope)` tool mints
+  a credential via the broker and returns an opaque `cred://<id>` handle; the
+  materialized secret is cached in-process and delivered out-of-band by a pod-local
+  `/credential/<id>` endpoint + a git askpass helper, never into model context.
 
 Revocation is defense-in-depth: installation tokens are already ~1h-TTL, so the
 authoritative signal is the `CredentialGrant.status` flip + the audited event.
@@ -93,15 +95,27 @@ so a forged `run_id` mints nothing.
 - `adapters/credentials-github/` — `GitHubApp` (JWT + dynamic installation resolution).
 - `adapters/credential-broker/` — `CredentialBrokerService` + `Issuer` (host dispatch;
   mint/revoke/**revoke_run** + grant + audit).
+- `adapters/credential-broker-rpc/` — the gRPC transport: `proto/credential.proto`
+  types, `RemoteCredentialBroker` (client), `CredentialBrokerGrpc` (server, concrete
+  `BrokerService`), `tls` (mTLS helpers + SPIFFE SAN verification), and the concrete
+  `GrantRepo`/`EventRepo`/`Bus` composition.
+- `bin/cat-herder-broker/` — the standalone broker binary: serves `CredentialBrokerGrpc`
+  over gRPC with optional mTLS; Postgres/in-memory grants + events, NATS/noop bus.
 - `adapters/store-postgres/` — migration `0025` + `PostgresCredentialGrantRepository`.
 - `adapters/store-inmemory/` — `InMemoryCredentialGrantRepository`.
 - `adapters/api-http/src/repo.rs` — `CredentialGrantRepo` enum; `AppState` gains
-  `grants` **and `broker`**; `bin/cat-herder` wires it (Postgres/in-memory).
+  `broker` (now a `BrokerImpl` remote/local enum); `bin/cat-herder` wires it.
+- `adapters/runtime-agent-sandbox/` — injects `CAT_HERDER_BROKER_URL` into the pod when
+  the control plane is configured with a broker.
 - `application/src/lib.rs` — `mint_clone_token`/`spawn_run`/`revoke_run_credentials`
   helpers; `start_run`/`reconcile_*`/`complete_run`/`respond_approval` mint on spawn and
   revoke on terminal.
-- `bin/cat-herder` — `build_broker` reads `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/
-  `_API_BASE` and constructs the broker (empty issuer map when unset).
+- `bin/cat-herder` — builds `BrokerImpl`: the remote gRPC client when
+  `CAT_HERDER_BROKER_URL` is set (with optional TLS), else the in-process broker from
+  `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/`_API_BASE` (empty issuer map when unset).
+- `agent-harness/` — `credential_pb2.py`/`credential_pb2_grpc.py` stubs; `BrokerClient`
+  (mint + out-of-band secret cache), the `credential` LangChain tool (returns an opaque
+  handle), the `/credential/<id>` sidecar endpoint, and a git askpass helper.
 
 ## 7. Remaining slices (in build order)
 
@@ -110,12 +124,21 @@ so a forged `run_id` mints nothing.
    the pod (replacing whole-token injection; the runtime still falls back to a registered
    repo token when no broker is configured), and `revoke_run` tears it down on terminal
    (reconcile terminal path, `complete_run`, approval reject).
-2. **Separate broker service** — extract the broker behind a gRPC interface with
-   mTLS/SVID caller auth (tonic + rustls; SPIFFE IDs in cert SANs).
-3. **Harness sidecar + credential tool** — `credential(target, action, scope)` returns
-   an opaque handle; a sidecar/`GIT_ASKPASS` helper materializes the token out-of-band.
+2. ~~**Separate broker service**~~ — ✅ landed: `bin/cat-herder-broker` serves the broker
+   over gRPC (`proto/credential.proto`) with optional mTLS (tonic + rustls); the caller's
+   CA-signed client cert is verified and its SPIFFE-style URI SAN checked against an
+   allowlist (`CAT_HERDER_BROKER_ALLOWED_SPIFFE_IDS`). The control plane is a gRPC client
+   (`RemoteCredentialBroker`) when `CAT_HERDER_BROKER_URL` is set, else falls back to the
+   in-process broker.
+3. ~~**Harness sidecar + credential tool**~~ — ✅ landed: the harness exposes a
+   `credential(target, action, scope)` tool that returns an opaque `cred://<id>` handle;
+   the secret is cached in-process and materialized out-of-band by the pod-local
+   `/credential/<id>` endpoint + a git askpass helper. (Full git-credential-helper
+   auto-configuration per URL is a follow-on.)
 
-**Not planned (extension points):** other VCS hosts (GitLab/Codeberg/…) via new `Issuer`
+**Follow-on / not planned (extension points):** SPIRE-issued SVID rotation (the mTLS
+allowlist is CA-cert-based today), a control-plane-signed run token binding `run_id` to
+the verified caller identity, other VCS hosts (GitLab/Codeberg/…) via new `Issuer`
 variants, and non-git backends (Vault/STS) behind the same `CredentialBroker` port.
 
 ## 8. Testing

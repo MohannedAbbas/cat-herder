@@ -22,8 +22,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import grpc
 
-import control_pb2
-import control_pb2_grpc
+from . import control_pb2
+from . import control_pb2_grpc
+from . import credential_pb2
+from . import credential_pb2_grpc
 
 RUN_ID = os.environ.get("RUN_ID", "unknown")
 PORT = int(os.environ.get("PORT", "8080"))
@@ -32,6 +34,11 @@ CONTROL_URL = os.environ.get("CAT_HERDER_CONTROL_URL", "").rstrip("/")
 # Control-plane gRPC endpoint (host:port) for the control channel (PLAN.md §6/§9).
 # When set, events + heartbeats stream over gRPC instead of the HTTP POST.
 GRPC_URL = os.environ.get("CAT_HERDER_GRPC_URL", "").strip()
+# JIT credential broker gRPC endpoint (host:port) for runtime on-demand credentials
+# (PLAN.md §11.3). When set, the harness exposes a `credential` tool that mints a
+# scoped short-lived credential and returns an opaque `cred://<id>` handle; the
+# materialized secret is cached in-process and delivered out-of-band (never to the model).
+BROKER_URL = os.environ.get("CAT_HERDER_BROKER_URL", "").strip()
 # The repository to clone and work on (injected from the run's `repo` field).
 REPO_URL = os.environ.get("REPO_URL", "").strip()
 # Working directory the repo is cloned into and the agent is rooted at. Overridable
@@ -300,6 +307,89 @@ def report_event(
         print(f"failed to report {event_type} event: {exc}", flush=True)
 
 
+# --- runtime credential broker (PLAN.md §11.3) -----------------------------
+# The `credential` tool mints a scoped, short-lived credential via the broker and
+# returns an opaque `cred://<id>` handle. The materialized secret is cached in-process
+# (keyed by grant id) and delivered out-of-band — through the pod-local `/credential/<id>`
+# endpoint and a git askpass helper — never into the agent's context, checkpoints, or
+# the event log.
+
+_credential_secrets: dict[str, str] = {}
+_credential_lock = threading.Lock()
+
+
+class BrokerClient:
+    """Mints credentials via the broker gRPC and caches the secret out-of-band."""
+
+    def __init__(self, broker_url: str, run_id: int) -> None:
+        self._run_id = run_id
+        self._channel = grpc.insecure_channel(broker_url)
+        self._stub = credential_pb2_grpc.CredentialBrokerStub(self._channel)
+
+    def mint(self, target: str, action: str, scope: str) -> str:
+        """Mint a scoped credential, cache its secret, and return the opaque handle."""
+        req = credential_pb2.MintRequest(
+            run_id=self._run_id, target=target, action=action, scope=scope
+        )
+        resp = self._stub.Mint(req)
+        with _credential_lock:
+            _credential_secrets[resp.grant.id] = resp.secret
+        return f"cred://{resp.grant.id}"
+
+    def revoke(self, grant_id: str) -> None:
+        req = credential_pb2.RevokeRequest(run_id=self._run_id, grant_id=grant_id)
+        self._stub.Revoke(req)
+
+
+def credential_secret(handle: str) -> str | None:
+    """Materialize a cached secret by `cred://<id>` handle (out-of-band)."""
+    with _credential_lock:
+        return _credential_secrets.get(handle)
+
+
+def make_credential_tool(broker: BrokerClient):
+    """Build the `credential` LangChain tool: mints a scoped credential and returns an
+    opaque `cred://<id>` handle (the secret is delivered out-of-band, never here)."""
+    from langchain_core.tools import tool
+
+    @tool
+    def credential(target: str, action: str, scope: str) -> str:
+        """Mint a short-lived, scoped credential for a git target.
+
+        `target` is a git host identity (e.g. "github.com/org/repo"), `action` the
+        operation ("clone", "push", ...), and `scope` "read" or "write". Returns an
+        opaque `cred://<id>` handle; the secret is materialized out-of-band by the git
+        credential helper, never returned here.
+        """
+        try:
+            return broker.mint(target, action, scope)
+        except Exception as exc:  # noqa: BLE001 — surface the error to the agent
+            return f"credential mint failed: {exc}"
+
+    return credential
+
+
+def write_cred_askpass(handle: str) -> str:
+    """Write a git askpass helper that materializes the cached secret for `handle`
+    (a `cred://<id>` handle) out-of-band via the pod-local `/credential/<id>` endpoint.
+    Returns the helper's path. The secret never appears in the agent's context; git
+    receives it directly on its credential prompt.
+    """
+    grant_id = handle.removeprefix("cred://")
+    askpass_dir = tempfile.mkdtemp(prefix=f"cat-herder-cred-{RUN_ID}-")
+    path = os.path.join(askpass_dir, "cat-herder-cred-askpass.py")
+    script = (
+        "#!/usr/bin/env python3\n"
+        "import urllib.request\n"
+        f'print(urllib.request.urlopen("http://127.0.0.1:{PORT}/credential/{grant_id}",'
+        ' timeout=10).read().decode())\n'
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(script)
+    os.chmod(path, 0o700)
+    return path
+
+
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -312,6 +402,16 @@ class HealthHandler(BaseHTTPRequestHandler):
                 self._respond(503, b"stuck\n")
             else:
                 self._respond(200, b"ok\n")
+        elif self.path.startswith("/credential/"):
+            # Pod-local sidecar endpoint that materializes a cached credential secret
+            # out-of-band for the git askpass helper (PLAN.md §11.3). Bound to the
+            # pod's own loopback, so the secret is never returned to the model.
+            grant_id = self.path[len("/credential/"):]
+            secret = credential_secret(f"cred://{grant_id}")
+            if secret is None:
+                self._respond(404, b"not found\n")
+            else:
+                self._respond(200, secret.encode("utf-8"))
         else:
             self._respond(404, b"not found\n")
 
@@ -434,6 +534,7 @@ def run_agent(
     resume: bool = False,
     interrupt_on: dict | None = None,
     on_interrupt=None,
+    tools=None,
 ) -> str:
     """Run a Deep Agents agent on the task and return its final message.
 
@@ -444,6 +545,9 @@ def run_agent(
     `interrupt_on` (and `on_interrupt`) wire human-in-the-loop (§10): when the agent
     pauses on an interrupt, `on_interrupt(interrupt, config)` is called; it returns the
     LangGraph resume decision dict (or `None` to cancel).
+
+    `tools` are extra tools appended to the agent's built-in shell/filesystem tools
+    (e.g. the runtime `credential` tool, §11.3).
     """
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
@@ -469,6 +573,7 @@ def run_agent(
         backend=backend,
         checkpointer=checkpointer,
         interrupt_on=interrupt_on,
+        tools=tools,
     )
     config = {"configurable": {"thread_id": RUN_ID}}
     # Stream so we can heartbeat progress; the stuck watchdog's `/livez` reads the
@@ -575,6 +680,22 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 — fall back to HTTP
             print(f"failed to start gRPC control channel: {exc}", flush=True)
 
+    # Runtime credential broker (PLAN.md §11.3): expose the `credential` tool when a
+    # broker endpoint is configured. The tool returns opaque handles; the secret is
+    # materialized out-of-band by the git askpass helper.
+    credential_tool = None
+    if BROKER_URL:
+        run_id_int = int(RUN_ID) if RUN_ID.isdigit() else 0
+        try:
+            broker_client = BrokerClient(BROKER_URL, run_id_int)
+            credential_tool = make_credential_tool(broker_client)
+            print(
+                f"credential broker connected to {BROKER_URL} (run_id={RUN_ID})",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — the run still completes without it
+            print(f"failed to start credential broker client: {exc}", flush=True)
+
     task_spec = os.environ.get("TASK_SPEC", "").strip()
     model = os.environ.get("MODEL", "").strip()
 
@@ -644,6 +765,7 @@ def main() -> None:
             resume=resume,
             interrupt_on=interrupt_on,
             on_interrupt=on_interrupt,
+            tools=[credential_tool] if credential_tool is not None else None,
         )
         print(f"agent completed: {result}", flush=True)
         changes = collect_changes()

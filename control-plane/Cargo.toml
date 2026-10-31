@@ -10,7 +10,9 @@ members = [
     "crates/adapters/store-nats",
     "crates/adapters/credentials-github",
     "crates/adapters/credential-broker",
+    "crates/adapters/credential-broker-rpc",
     "crates/bin/cat-herder",
+    "crates/bin/cat-herder-broker",
 ]
 
 [workspace.package]

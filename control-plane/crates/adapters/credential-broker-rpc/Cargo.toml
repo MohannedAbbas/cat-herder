@@ -1,0 +1,29 @@
+[package]
+name = "cat-herder-credential-broker-rpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-herder-domain = { path = "../../domain" }
+cat-herder-credential-broker = { path = "../credential-broker" }
+cat-herder-store-inmemory = { path = "../store-inmemory" }
+cat-herder-store-postgres = { path = "../store-postgres" }
+cat-herder-store-nats = { path = "../store-nats" }
+tonic = { workspace = true, features = ["tls"] }
+prost.workspace = true
+tokio.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+x509-parser = "0.16"
+
+[build-dependencies]
+tonic-build.workspace = true
+protoc-bin-vendored.workspace = true
+
+[dev-dependencies]
+cat-herder-credentials-github = { path = "../credentials-github" }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream = "0.1"
+rcgen = "0.13"
+wiremock = "0.6"

@@ -251,6 +251,16 @@ impl SandboxRuntime {
         });
         env.push(serde_json::json!({ "name": "CAT_HERDER_GRPC_URL", "value": grpc_url }));
 
+        // The JIT credential broker endpoint (host:port) for the harness's runtime
+        // `credential` tool (PLAN.md §11.3). Injected only when the control plane is
+        // itself configured with a broker — the chart sets CAT_HERDER_BROKER_URL when
+        // `broker.enabled`, so a harness never points at a non-existent broker.
+        if let Ok(broker_url) = std::env::var("CAT_HERDER_BROKER_URL")
+            && !broker_url.trim().is_empty()
+        {
+            env.push(serde_json::json!({ "name": "CAT_HERDER_BROKER_URL", "value": broker_url }));
+        }
+
         // The inactivity threshold the harness's own stuck watchdog uses (kept in lock
         // step with the pod liveness probe below via `self.pod`).
         env.push(serde_json::json!({

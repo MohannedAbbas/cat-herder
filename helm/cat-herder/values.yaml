@@ -196,13 +196,16 @@ oauth:
     enabled: true
     username: dev-user
 
-# JIT credential broker (PLAN.md §11.3). When a GitHub App is configured the control
-# plane mints short-lived (~1h), App-scoped installation tokens on demand for a run's
-# repo (clone/push) instead of injecting a long-lived user PAT. The App's private key
-# lives only in the control-plane trust boundary (never in a sandbox); it is read from
-# the Secret named in `secret` (key `private-key`). When disabled, runs fall back to a
-# registered repo token (or public repos), and no broker credentials are minted.
+# JIT credential broker (PLAN.md §11.3). The broker is its own hardened service that
+# holds the git-host App private keys and mints scoped, short-lived credentials over a
+# gRPC interface with mTLS caller auth. When `enabled`, the chart deploys the broker
+# and the control plane talks to it over gRPC (`CAT_HERDER_BROKER_URL`); when disabled,
+# the control plane runs the broker in-process (single-replica dev).
 broker:
+  enabled: false
+  image: ghcr.io/your-org/cat-herder-broker:0.1.0
+  replicas: 1
+  grpcPort: 50052
   github:
     enabled: false
     # The GitHub App's numeric id and its private key Secret (PEM, key `private-key`).
@@ -210,6 +213,18 @@ broker:
     secret: cat-herder-github-app
     # API base (defaults to the public GitHub API; override for GHE).
     apiBase: ""
+  # mTLS (optional; plaintext when unset). Name of a Secret holding the broker's
+  # server cert/key, the client CA for mTLS, and the caller-auth allowlist. Keys:
+  #   tls.crt          -> broker server certificate (CAT_HERDER_BROKER_TLS_CERT)
+  #   tls.key          -> broker server key       (CAT_HERDER_BROKER_TLS_KEY)
+  #   client-ca.crt    -> client CA for mTLS      (CAT_HERDER_BROKER_CLIENT_CA)
+  #   allowed-spiffe-ids -> comma-separated allowlist of SPIFFE URI SANs
+  #                        (CAT_HERDER_BROKER_ALLOWED_SPIFFE_IDS)
+  #   ca.crt           -> CA the control plane uses to verify the broker
+  #                        (CAT_HERDER_BROKER_CA)
+  #   client.crt / client.key -> control plane's client cert/key for mTLS
+  #                        (CAT_HERDER_BROKER_CLIENT_CERT / _KEY)
+  tlsSecret: ""
 
 ingress:
   enabled: false

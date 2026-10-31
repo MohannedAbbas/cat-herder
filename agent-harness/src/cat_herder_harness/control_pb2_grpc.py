@@ -7,7 +7,7 @@
 
 import grpc
 
-import control_pb2 as control__pb2
+from . import control_pb2 as control__pb2
 
 
 class HarnessControlStub(object):

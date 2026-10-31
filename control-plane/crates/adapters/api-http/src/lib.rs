@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 
 use cat_herder_application::{Completion, Outcome, complete_run, respond_approval, start_run};
 use cat_herder_credential_broker::CredentialBrokerService;
+use cat_herder_credential_broker_rpc::RemoteCredentialBroker;
 use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, EventListResponse, EventResponse, RunResponse, Session,
     SessionRun, SessionSummary, repo_identity_from_url,
@@ -21,8 +22,9 @@ use cat_herder_domain::api::{
 use cat_herder_domain::entities::{ApprovalStatus, Run, RunId, RunState, Usage};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRepository, AgentRuntime, ApprovalRepository, EventBus, EventRepository,
-    GitRepoRepository, RunRepository, RunRequest, SessionRepository, SettingRepository,
+    AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, EventBus, EventRepository,
+    GitRepoRepository, MintedCredential, RunRepository, RunRequest, SessionRepository,
+    SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -60,9 +62,48 @@ pub const WEBHOOK_SECRET_KEY: &str = "webhook_secret";
 /// Settings key for the supported git hosts (a JSON array of `{host,label}`).
 pub const GIT_HOSTS_SETTING: &str = "git_hosts";
 
-/// The concrete credential broker wired into the application: the [`CredentialBroker`]
-/// service over the in-memory/Postgres grant + event repositories and the fan-out bus.
-pub type Broker = CredentialBrokerService<CredentialGrantRepo, EventRepo, EventBusImpl>;
+/// The concrete credential broker wired into the application (`PLAN.md` §11.3): either
+/// the remote broker service over gRPC ([`RemoteCredentialBroker`]), or — when no broker
+/// endpoint is configured — the in-process [`CredentialBrokerService`] over the local
+/// grant/event repositories and the fan-out bus (single-node/dev).
+#[derive(Clone)]
+pub enum BrokerImpl {
+    Remote(RemoteCredentialBroker),
+    Local(CredentialBrokerService<CredentialGrantRepo, EventRepo, EventBusImpl>),
+}
+
+impl CredentialBroker for BrokerImpl {
+    async fn mint(
+        &self,
+        run: RunId,
+        target: &str,
+        action: &str,
+        scope: &str,
+    ) -> Result<MintedCredential, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            BrokerImpl::Remote(b) => b.mint(run, target, action, scope).await,
+            BrokerImpl::Local(b) => b.mint(run, target, action, scope).await,
+        }
+    }
+
+    async fn revoke(
+        &self,
+        run: RunId,
+        grant_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            BrokerImpl::Remote(b) => b.revoke(run, grant_id).await,
+            BrokerImpl::Local(b) => b.revoke(run, grant_id).await,
+        }
+    }
+
+    async fn revoke_run(&self, run: RunId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            BrokerImpl::Remote(b) => b.revoke_run(run).await,
+            BrokerImpl::Local(b) => b.revoke_run(run).await,
+        }
+    }
+}
 
 /// Application state: the data the handlers serve. Runs, agents, sessions,
 /// providers, and models are backed by their repositories (Postgres in production,
@@ -80,11 +121,11 @@ pub struct AppState {
     pub transitions: TransitionRepo,
     pub checkpoints: CheckpointRepo,
     pub approvals: ApprovalRepo,
-    pub grants: CredentialGrantRepo,
-    /// The JIT credential broker (`PLAN.md` §11.3). When no GitHub App is configured,
-    /// its issuer map is empty and `mint` fails gracefully (the runtime falls back to a
-    /// registered repo token or none).
-    pub broker: Broker,
+    /// The JIT credential broker (`PLAN.md` §11.3). Remote (gRPC) when a broker endpoint
+    /// is configured; otherwise the in-process service with an empty issuer map (whose
+    /// `mint` fails gracefully and the runtime falls back to a registered repo token or
+    /// none).
+    pub broker: BrokerImpl,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -124,12 +165,12 @@ impl Default for AppState {
         let bus = EventBusImpl::Noop;
         // No GitHub App configured by default, so the broker has an empty issuer map
         // and `mint` fails gracefully.
-        let broker = CredentialBrokerService::new(
+        let broker = BrokerImpl::Local(CredentialBrokerService::new(
             Default::default(),
-            grants.clone(),
+            grants,
             EventRepo::InMemory(events.clone()),
             bus.clone(),
-        );
+        ));
         Self {
             agents: AgentRepo::InMemory(Default::default()),
             providers: ProviderRepo::InMemory(Default::default()),
@@ -142,7 +183,6 @@ impl Default for AppState {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
-            grants,
             broker,
             bus,
             audit: AuditRepo::InMemory(Default::default()),

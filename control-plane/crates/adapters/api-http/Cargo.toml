@@ -9,6 +9,7 @@ cat-herder-domain = { path = "../../domain" }
 cat-herder-application = { path = "../../application" }
 cat-herder-runtime-agent-sandbox = { path = "../runtime-agent-sandbox" }
 cat-herder-credential-broker = { path = "../credential-broker" }
+cat-herder-credential-broker-rpc = { path = "../credential-broker-rpc" }
 cat-herder-store-inmemory = { path = "../store-inmemory" }
 cat-herder-store-postgres = { path = "../store-postgres" }
 cat-herder-store-nats = { path = "../store-nats" }

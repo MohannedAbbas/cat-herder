@@ -123,7 +123,7 @@ pod death and pause/resume at an interrupt.
 Brokered credentials and a real budget hard-stop; both are called out as
 "disqualifying if absent" in the review.
 
-- [ ] **7. JIT credential broker (§11.3).**
+- [x] **7. JIT credential broker (§11.3).**
   Today git tokens are AES-GCM-encrypted at rest and injected whole (read token into
   the pod; write token used control-plane-side for PRs). No `request → authorize →
   mint → revoke` broker, no Vault/GitHub-App/STS, no scoped short-lived credentials,
@@ -133,7 +133,7 @@ Brokered credentials and a real budget hard-stop; both are called out as
   are extension points); the secret is delivered out-of-band (credential helper /
   sidecar), never to the model; every mint/revoke is an audited event. Broker runs as
   its own hardened service (mTLS/SVID caller auth, no ambient cloud creds).
-  *Status:* 🟡 foundation landed (GitHub-only, extensible) — ✅ `CredentialGrant` +
+  *Status:* ✅ landed (GitHub-only, extensible) — ✅ `CredentialGrant` +
   `CredentialGrantStatus` + `CredentialBroker` port (`mint`→`MintedCredential{grant,
   secret}` / `revoke`) + `CredentialGrantRepository` port; ✅
   `credential.minted`/`credential.revoked` events; ✅ `adapters/credentials-github`
@@ -146,9 +146,17 @@ Brokered credentials and a real budget hard-stop; both are called out as
   runtime still falls back to a registered repo token when no App is configured), and
   `revoke_run` tears it down on terminal (reconcile terminal path, `complete_run`,
   approval reject); wired via `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/`_API_BASE`
-  (+ Helm values). GitLab/Codeberg issuers intentionally deferred (extension point via
-  the `Issuer` enum). See `docs/design/credentials.md`. ⬜ Remaining: separate broker
-  service (gRPC + mTLS/SVID), harness sidecar `credential` tool + opaque handles.
+  (+ Helm values); ✅ **separate broker service** — `bin/cat-herder-broker` serves the
+  broker over gRPC (`proto/credential.proto`) with optional mTLS (tonic + rustls): the
+  caller's CA-signed cert is verified and its SPIFFE-style URI SAN checked against an
+  allowlist; the control plane is a gRPC client (`RemoteCredentialBroker`) when
+  `CAT_HERDER_BROKER_URL` is set, else falls back to in-process; ✅ **harness sidecar +
+  credential tool** — the harness's `credential(target, action, scope)` tool returns an
+  opaque `cred://<id>` handle, and the secret is materialized out-of-band (pod-local
+  `/credential/<id>` endpoint + git askpass), never into model context. GitLab/Codeberg
+  issuers intentionally deferred (extension point via the `Issuer` enum). See
+  `docs/design/credentials.md`. ⬜ Follow-on: SPIRE-issued SVID rotation, a
+  control-plane-signed run token binding `run_id` to the verified caller.
 
 - [ ] **8. Budget engine with a hard stop (§12).**
   Only post-hoc token counting exists (harness `record_usage` + `input/output_tokens`).

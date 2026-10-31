@@ -110,19 +110,32 @@ spec:
             - name: GITLAB_OAUTH_ALLOWED_USERS
               value: {{ join "," .Values.oauth.gitlab.allowedUsers | quote }}
             {{- end }}
-            {{- if and .Values.broker.github.enabled }}
-            # JIT credential broker (PLAN.md §11.3): mints short-lived GitHub App
-            # installation tokens for clone/push. Disabled (empty issuer map) when not
-            # configured — runs fall back to a registered repo token or public repos.
-            - name: CAT_HERDER_GITHUB_APP_ID
-              value: {{ .Values.broker.github.appId | quote }}
-            - name: CAT_HERDER_GITHUB_APP_PRIVATE_KEY
+            {{- if .Values.broker.enabled }}
+            # JIT credential broker (PLAN.md §11.3): the control plane is a gRPC client
+            # to the separate broker service. The GitHub App private key lives only in
+            # the broker; the control plane holds no git-host credentials.
+            - name: CAT_HERDER_BROKER_URL
+              value: "http://cat-herder-broker:{{ .Values.broker.grpcPort }}"
+            {{- end }}
+            {{- if and .Values.broker.enabled .Values.broker.tlsSecret }}
+            - name: CAT_HERDER_BROKER_CA
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.broker.github.secret }}
-                  key: private-key
-            - name: CAT_HERDER_GITHUB_API_BASE
-              value: {{ .Values.broker.github.apiBase | default "https://api.github.com" | quote }}
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: ca.crt
+                  optional: true
+            - name: CAT_HERDER_BROKER_CLIENT_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: client.crt
+                  optional: true
+            - name: CAT_HERDER_BROKER_CLIENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: client.key
+                  optional: true
             {{- end }}
             {{- if .Values.oauth.mock.enabled }}
             # DEV-ONLY mock OAuth: bypasses real SSO and mints an admin session

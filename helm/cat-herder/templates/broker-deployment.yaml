@@ -1,0 +1,81 @@
+{{- if .Values.broker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cat-herder-broker
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-broker
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  replicas: {{ .Values.broker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cat-herder-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cat-herder-broker
+    spec:
+      serviceAccountName: cat-herder-broker
+      containers:
+        - name: broker
+          image: "{{ .Values.broker.image }}"
+          env:
+            - name: CAT_HERDER_BROKER_GRPC_PORT
+              value: {{ .Values.broker.grpcPort | quote }}
+            {{- if and .Values.broker.github.enabled }}
+            # The git-host App private key lives only in the broker trust boundary
+            # (PLAN.md §11.3), never in the sandbox or the control plane.
+            - name: CAT_HERDER_GITHUB_APP_ID
+              value: {{ .Values.broker.github.appId | quote }}
+            - name: CAT_HERDER_GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.github.secret }}
+                  key: private-key
+            - name: CAT_HERDER_GITHUB_API_BASE
+              value: {{ .Values.broker.github.apiBase | default "https://api.github.com" | quote }}
+            {{- end }}
+            {{- if .Values.broker.tlsSecret }}
+            - name: CAT_HERDER_BROKER_TLS_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: tls.crt
+                  optional: true
+            - name: CAT_HERDER_BROKER_TLS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: tls.key
+                  optional: true
+            - name: CAT_HERDER_BROKER_CLIENT_CA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: client-ca.crt
+                  optional: true
+            - name: CAT_HERDER_BROKER_ALLOWED_SPIFFE_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.tlsSecret }}
+                  key: allowed-spiffe-ids
+                  optional: true
+            {{- end }}
+            {{- if .Values.dependencies.postgres.enabled }}
+            - name: CAT_HERDER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cat-herder-postgres
+                  key: database-url
+                  optional: true
+            {{- end }}
+            {{- if .Values.dependencies.nats.enabled }}
+            - name: CAT_HERDER_NATS_URL
+              value: "nats://{{ .Values.dependencies.nats.serviceName }}:4222"
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.broker.grpcPort }}
+{{- end }}
