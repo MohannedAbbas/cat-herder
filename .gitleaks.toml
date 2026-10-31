@@ -1,0 +1,18 @@
+# gitleaks configuration for cat-herder.
+#
+# The allowlist suppresses secrets that are intentionally committed as test
+# fixtures (fake credentials + test private keys). Everything else scans with
+# gitleaks' default rules.
+
+[allowlist]
+  description = "Synthetic test fixtures used to verify secret redaction and credential-broker behavior."
+  paths = [
+    # Test-only private keys (not real secrets).
+    '''test_key\.pem''',
+  ]
+  regexes = [
+    # Fake Slack bot token in redact.rs tests.
+    '''xoxb-0123456789-0123456789-abcdefgh''',
+    # Fake GitLab PAT in redact.rs tests.
+    '''glpat-abcdefghijklmnopqrstuvwxyz''',
+  ]

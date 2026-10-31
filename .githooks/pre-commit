@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block the commit when gitleaks finds secrets in the staged
+# changes. Enable it once per clone with `git config core.hooksPath .githooks`
+# (or `make hooks`).
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "warning: gitleaks not found; skipping secret scan" >&2
+  echo "         install: https://github.com/gitleaks/gitleaks" >&2
+  exit 0
+fi
+
+gitleaks protect --staged --no-banner --redact

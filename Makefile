@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt lint run chart tilt prune harness-image sandbox-image canary
+.PHONY: build test coverage fmt lint run chart tilt prune harness-image sandbox-image canary hooks
 
 # The Rust workspace lives in control-plane/ (see control-plane/Cargo.toml).
 WORKSPACE := control-plane
@@ -31,6 +31,10 @@ canary:
 
 chart:
 	helm lint helm/cat-herder
+
+# Enable the gitleaks pre-commit hook (runs on `git commit`).
+hooks:
+	git config core.hooksPath .githooks
 
 tilt:
 	tilt up

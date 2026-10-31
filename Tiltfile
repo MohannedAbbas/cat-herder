@@ -56,11 +56,17 @@ custom_build(
 
 load('ext://helm_resource', 'helm_resource')
 
+# Optional, git-ignored dev values overrides (may hold local secrets/PII).
+# Applied when the file is present so a clean clone still works without it.
+helm_flags = ['--create-namespace']
+if os.path.exists('dev-values.yaml'):
+    helm_flags += ['-f', 'dev-values.yaml']
+
 helm_resource(
     'cat-herder',
     'helm/cat-herder',
     namespace='cat-herder',
-    flags=['--create-namespace'],
+    flags=helm_flags,
     deps=['helm/cat-herder'],
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
     image_keys=['controlPlane.image', 'harness.image', 'ui.image', 'broker.image'],

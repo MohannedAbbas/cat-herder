@@ -18,6 +18,9 @@ build/
 # Tilt
 .tiltbuildhistory/
 
+# Local dev values (may contain personal/dev-only values + secrets)
+dev-values.yaml
+
 # IDE / OS
 .idea/
 .vscode/
