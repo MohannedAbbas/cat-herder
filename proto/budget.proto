@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package cat_herder.v1;
+
+// Budget control channel (PLAN.md §12) — the metering proxy (LiteLLM) calls this
+// before each model call to atomically consume the run's token budget. The control
+// plane owns the atomic Redis counter (INCRBY via a Lua script) and rejects over-cap
+// calls, transitioning the run to `BudgetPaused`.
+//
+// Hosted on the same gRPC endpoint as `HarnessControl` (the control plane's gRPC
+// server), but used by the metering proxy rather than the harness.
+
+service BudgetControl {
+  // Atomically consume `tokens` from the run's budget. Returns `exceeded=true` (and
+  // pauses the run) when the call would cross the cap.
+  rpc Consume(ConsumeRequest) returns (ConsumeResponse);
+  // The run's remaining allowance (the harness's fast-path optimization).
+  rpc Remaining(RemainingRequest) returns (RemainingResponse);
+  // Reset (or raise) the run's counter — used by the budget lease at run start and
+  // by an explicit budget raise.
+  rpc Reset(ResetRequest) returns (ResetResponse);
+}
+
+message ConsumeRequest {
+  uint64 run_id = 1;
+  uint64 tokens = 2;
+}
+
+message ConsumeResponse {
+  bool exceeded = 1;
+  uint64 consumed = 2;
+  uint64 remaining = 3;
+}
+
+message RemainingRequest {
+  uint64 run_id = 1;
+}
+
+message RemainingResponse {
+  uint64 remaining = 1;
+}
+
+message ResetRequest {
+  uint64 run_id = 1;
+}
+
+message ResetResponse {}

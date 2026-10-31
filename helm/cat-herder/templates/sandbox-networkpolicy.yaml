@@ -148,7 +148,9 @@ spec:
         - protocol: TCP
           port: {{ .Values.agentSandbox.networkPolicy.gitHosts.port }}
 ---
-# Allow the configured LLM provider API (e.g. api.deepseek.com) on :443.
+# Model traffic. When the LiteLLM metering proxy is enabled, the harness reaches ONLY
+# the proxy (the raw provider endpoint stays unreachable — physical budget enforcement,
+# PLAN.md §12/§11.4). Otherwise the raw LLM provider API on :443 is allowed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -165,6 +167,15 @@ spec:
   policyTypes:
     - Egress
   egress:
+    {{- if .Values.litellm.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cat-herder-litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    {{- else }}
     - to:
         {{- range .Values.agentSandbox.networkPolicy.llm.cidrs }}
         - ipBlock:
@@ -173,6 +184,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.agentSandbox.networkPolicy.llm.port }}
+    {{- end }}
 ---
 # Allow package registries (e.g. crates.io for `cargo`) on :443. Agents need
 # these to fetch dependencies when they build/test the target repo.

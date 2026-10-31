@@ -148,8 +148,10 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
                 model: Some(model),
                 repo: opt("repo"),
                 language: opt("language"),
+                budget: args["budget"].as_u64(),
             };
 
+            let budget = req.budget;
             match start_run(
                 req,
                 runtime,
@@ -161,10 +163,18 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
             )
             .await
             {
-                Ok(run) => (
-                    serde_json::to_string(&RunResponse::from(&run)).unwrap_or_default(),
-                    false,
-                ),
+                Ok(run) => {
+                    if let Err(e) =
+                        super::issue_budget(&state.budgets, &state.budget_counter, run.id, budget)
+                            .await
+                    {
+                        eprintln!("budget lease failed for run {}: {e}", run.id.0);
+                    }
+                    (
+                        serde_json::to_string(&RunResponse::from(&run)).unwrap_or_default(),
+                        false,
+                    )
+                }
                 Err(e) => (format!("run failed: {e}"), true),
             }
         }

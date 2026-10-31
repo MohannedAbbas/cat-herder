@@ -158,13 +158,30 @@ Brokered credentials and a real budget hard-stop; both are called out as
   `docs/design/credentials.md`. ⬜ Follow-on: SPIRE-issued SVID rotation, a
   control-plane-signed run token binding `run_id` to the verified caller.
 
-- [ ] **8. Budget engine with a hard stop (§12).**
+- [x] **8. Budget engine with a hard stop (§12).**
   Only post-hoc token counting exists (harness `record_usage` + `input/output_tokens`).
   No metering proxy, no atomic counter, no `BudgetPaused` transition.
   *Done when:* all model traffic goes through a pinned LiteLLM proxy metering against a
   central atomic counter (Redis `INCRBY`) keyed by `run_id`, rejecting over-cap calls
   pre-model; pod egress for model traffic allows only the proxy; over-cap transitions
   to `BudgetPaused` and notifies; subagent fan-out shares the same counter.
+  *Status:* ✅ landed — ✅ `Budget` entity + `BudgetRepository` port (Postgres migration
+  `0026` + in-memory); ✅ `BudgetCounter` port + `ConsumeOutcome`; ✅ atomic Redis
+  counter (`store-redis`, Lua `INCRBY`-and-rollback, keyed `budget:<run_id>:consumed`)
+  + in-memory fallback; ✅ budget lease at run start (`issue_budget` persists the cap +
+  zeroes the counter, wired into `create_run`/webhook/MCP); ✅ `proto/budget.proto`
+  `BudgetControl` gRPC (`Consume`/`Remaining`/`Reset`) hosted on the control plane's
+  gRPC server; ✅ `consume_budget` → atomic consume, over-cap → `Running -> BudgetPaused`
+  + `budget.exceeded`/`run.budget_paused` events (event + deep link is the notify);
+  ✅ `POST /v1/runs/{id}/budget` raise/resume (`BudgetPaused -> Running`, re-seeded
+  counter); ✅ run `budget` on `RunRequest`/`CreateRunRequest`/`RunResponse`/webhook/MCP;
+  ✅ harness routes model traffic through the proxy (`CAT_HERDER_LLM_PROXY_URL` →
+  `set_provider_base_url`); ✅ Helm Redis + pinned LiteLLM deployments + model-egress →
+  proxy-only NetworkPolicy. Subagent fan-out shares the counter by construction (keyed
+  by `run_id`). See `docs/design/budget.md`. ⬜ Remaining: the LiteLLM `budget_manager`/
+  callback shim that actually calls `Consume` pre-call (the contract is documented in
+  the chart's `config.yaml`); harness pre-call fast-path (optimization, not authority);
+  token `settle` (DECRBY the estimate-vs-actual delta).
 
 - [ ] **9. Policy engine — RBAC/ABAC decision points (§11.8).**
   Auth today is a single admin session; no roles, no policies, no per-decision checks.

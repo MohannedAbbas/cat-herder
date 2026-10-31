@@ -15,7 +15,7 @@ Kubernetes-native **control plane and governance layer** for AI coding agents.
 | `knowledge/` | OKF knowledge base (skills/commands), seed |
 | `ui/` | React dashboard (sessions, agents, status) — SPA served by nginx |
 | `helm/cat-herder/` | Umbrella Helm chart (control plane + dependencies + agent-sandbox) |
-| `proto/` | Harness ↔ control plane gRPC contract (`control.proto`) + credential broker (`credential.proto`) |
+| `proto/` | Harness ↔ control plane gRPC contract (`control.proto`) + credential broker (`credential.proto`) + budget control (`budget.proto`) |
 | `Tiltfile` | Local dev: builds images and installs the chart with [Tilt](https://tilt.dev) |
 
 ## Quickstart
@@ -78,6 +78,8 @@ The control plane is configured via environment variables:
 | `CAT_HERDER_GITHUB_API_BASE` | Optional API base for the broker (default `https://api.github.com`; override for GitHub Enterprise). |
 | `CAT_HERDER_BROKER_URL` | gRPC endpoint (`host:port`) of a separate credential-broker service. When set, the control plane talks to the remote broker instead of running one in-process. |
 | `CAT_HERDER_BROKER_CA` / `CAT_HERDER_BROKER_CLIENT_CERT` / `CAT_HERDER_BROKER_CLIENT_KEY` | Optional TLS material for the control plane → broker gRPC client (PEM). The broker is verified against `_CA`; the client cert/key present the control plane's mTLS identity. |
+| `CAT_HERDER_REDIS_URL` | Redis endpoint for the atomic budget counter (§12). When unset, the control plane falls back to an in-memory counter (single-replica dev). |
+| `CAT_HERDER_LLM_PROXY_URL` | The LiteLLM metering proxy (§12). When set, the control plane injects it into the harness, which routes all model traffic through the proxy for budget enforcement. |
 
 ### Credential broker service (separate deployment)
 
@@ -91,6 +93,17 @@ instead of in-process. It serves `proto/credential.proto` over gRPC with optiona
 | `CAT_HERDER_BROKER_CLIENT_CA` | Client CA for mTLS (PEM). When set, callers must present a client cert signed by this CA. |
 | `CAT_HERDER_BROKER_ALLOWED_SPIFFE_IDS` | Comma-separated allowlist of SPIFFE-style URI SANs a caller's client cert must carry (checked when set). |
 | `CAT_HERDER_DATABASE_URL` / `CAT_HERDER_NATS_URL` | Shared Postgres/NATS, matching the control plane, so grants/events land in the same tables. |
+
+### Budget engine (§12)
+
+Per-run token budgets are enforced by a metering proxy + an atomic counter (see
+`docs/design/budget.md`). `POST /v1/runs` accepts an optional `budget` cap; the control
+plane exposes a `BudgetControl` gRPC service (`Consume`/`Remaining`/`Reset`) on its gRPC
+port that the proxy calls before each model call, rejecting over-cap calls (which
+transition the run to `budget_paused`). Raise/resume via `POST /v1/runs/{id}/budget`.
+The chart deploys Redis (`dependencies.redis`) and pinned LiteLLM (`litellm`) when
+enabled; the LiteLLM `budget_manager` hook that calls `Consume` is documented in the
+chart's `litellm-config` ConfigMap.
 
 ### GitHub OAuth SSO
 

@@ -10,15 +10,15 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{
-    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, CredentialGrantStatus, GitRepo,
-    Run, RunId,
+    ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, CredentialGrantStatus,
+    GitRepo, Run, RunId,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
-    AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository,
-    CredentialGrantRepository, DomainResult, EventRepository, GitRepoRepository, LeaseManager,
-    ModelRepository, ProviderRepository, RunRepository, SessionRepository, SettingRepository,
-    ToolRepository, TransitionRepository,
+    AgentRepository, ApprovalRepository, AuditRepository, BudgetCounter, BudgetRepository,
+    CheckpointRepository, ConsumeOutcome, CredentialGrantRepository, DomainResult, EventRepository,
+    GitRepoRepository, LeaseManager, ModelRepository, ProviderRepository, RunRepository,
+    SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -685,6 +685,57 @@ impl LeaseManager for InMemoryLeaseManager {
     }
 }
 
+/// In-memory budget-cap store (`PLAN.md` §12).
+#[derive(Clone, Default)]
+pub struct InMemoryBudgetRepository {
+    inner: Arc<RwLock<HashMap<RunId, Budget>>>,
+}
+
+impl BudgetRepository for InMemoryBudgetRepository {
+    async fn save(&self, budget: &Budget) -> DomainResult<Budget> {
+        self.inner.write().await.insert(budget.run_id, *budget);
+        Ok(*budget)
+    }
+
+    async fn get(&self, run_id: RunId) -> DomainResult<Option<Budget>> {
+        Ok(self.inner.read().await.get(&run_id).copied())
+    }
+}
+
+/// In-memory atomic budget counter (`PLAN.md` §12) — the single-replica dev fallback
+/// for Redis. Holds `consumed` per run; `consume` is atomic under one lock, so fan-out
+/// can't overshoot the cap.
+#[derive(Clone, Default)]
+pub struct InMemoryBudgetCounter {
+    inner: Arc<RwLock<HashMap<RunId, u64>>>,
+}
+
+impl BudgetCounter for InMemoryBudgetCounter {
+    async fn consume(&self, run_id: RunId, cap: u64, tokens: u64) -> DomainResult<ConsumeOutcome> {
+        let mut map = self.inner.write().await;
+        let consumed = map.entry(run_id).or_insert(0);
+        let next = consumed.saturating_add(tokens);
+        if cap > 0 && next > cap {
+            return Ok(ConsumeOutcome::Exceeded {
+                cap,
+                consumed: *consumed,
+            });
+        }
+        *consumed = next;
+        Ok(ConsumeOutcome::Ok { consumed: next })
+    }
+
+    async fn remaining(&self, run_id: RunId, cap: u64) -> DomainResult<u64> {
+        let consumed = self.inner.read().await.get(&run_id).copied().unwrap_or(0);
+        Ok(cap.saturating_sub(consumed))
+    }
+
+    async fn reset(&self, run_id: RunId) -> DomainResult<()> {
+        self.inner.write().await.insert(run_id, 0);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,5 +898,54 @@ mod tests {
         assert_eq!(revoked.status, CredentialGrantStatus::Revoked);
         assert!(revoked.revoked_at.is_some());
         assert!(repo.list_active(RunId(7)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn budget_counter_consumes_and_rejects_over_cap() {
+        let counter = InMemoryBudgetCounter::default();
+        assert_eq!(
+            counter.consume(RunId(7), 100, 40).await.unwrap(),
+            ConsumeOutcome::Ok { consumed: 40 }
+        );
+        assert_eq!(counter.remaining(RunId(7), 100).await.unwrap(), 60);
+        // Fan-out: two parallel-ish consumes still can't overshoot.
+        assert_eq!(
+            counter.consume(RunId(7), 100, 60).await.unwrap(),
+            ConsumeOutcome::Ok { consumed: 100 }
+        );
+        assert_eq!(
+            counter.consume(RunId(7), 100, 1).await.unwrap(),
+            ConsumeOutcome::Exceeded {
+                cap: 100,
+                consumed: 100
+            }
+        );
+        // reset seeds a fresh run.
+        counter.reset(RunId(7)).await.unwrap();
+        assert_eq!(counter.remaining(RunId(7), 100).await.unwrap(), 100);
+    }
+
+    #[tokio::test]
+    async fn budget_counter_cap_zero_means_unbounded() {
+        let counter = InMemoryBudgetCounter::default();
+        assert_eq!(
+            counter.consume(RunId(7), 0, 1_000_000).await.unwrap(),
+            ConsumeOutcome::Ok {
+                consumed: 1_000_000
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn budget_repository_roundtrip() {
+        let repo = InMemoryBudgetRepository::default();
+        let budget = Budget {
+            run_id: RunId(7),
+            cap: 500,
+            updated_at: SystemTime::now(),
+        };
+        repo.save(&budget).await.unwrap();
+        assert_eq!(repo.get(RunId(7)).await.unwrap().unwrap().cap, 500);
+        assert!(repo.get(RunId(8)).await.unwrap().is_none());
     }
 }

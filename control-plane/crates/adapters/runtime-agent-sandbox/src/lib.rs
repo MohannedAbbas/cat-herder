@@ -261,6 +261,15 @@ impl SandboxRuntime {
             env.push(serde_json::json!({ "name": "CAT_HERDER_BROKER_URL", "value": broker_url }));
         }
 
+        // The LiteLLM metering proxy (PLAN.md §12) — the harness routes its model
+        // traffic through it so every call is metered. Injected only when the control
+        // plane is configured with one.
+        if let Ok(proxy_url) = std::env::var("CAT_HERDER_LLM_PROXY_URL")
+            && !proxy_url.trim().is_empty()
+        {
+            env.push(serde_json::json!({ "name": "CAT_HERDER_LLM_PROXY_URL", "value": proxy_url }));
+        }
+
         // The inactivity threshold the harness's own stuck watchdog uses (kept in lock
         // step with the pod liveness probe below via `self.pod`).
         env.push(serde_json::json!({

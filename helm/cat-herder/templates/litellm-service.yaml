@@ -1,0 +1,17 @@
+{{- if .Values.litellm.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.litellm.serviceName }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-litellm
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  selector:
+    app.kubernetes.io/name: cat-herder-litellm
+  ports:
+    - name: http
+      port: 4000
+      targetPort: {{ .Values.litellm.port }}
+{{- end }}

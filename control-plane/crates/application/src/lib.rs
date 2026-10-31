@@ -8,11 +8,14 @@ use std::time::SystemTime;
 use cat_herder_domain::api::{
     SessionRun, is_safe_repo_url, new_session_id, repo_identity_from_url,
 };
-use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, Run, RunId, RunState, Usage};
+use cat_herder_domain::entities::{
+    ApprovalRequest, ApprovalStatus, Budget, Run, RunId, RunState, Usage,
+};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
-    AgentRuntime, ApprovalRepository, CredentialBroker, DomainResult, EventBus, EventRepository,
-    RunRepository, RunRequest, SessionRepository, TransitionRepository,
+    AgentRuntime, ApprovalRepository, BudgetCounter, BudgetRepository, ConsumeOutcome,
+    CredentialBroker, DomainResult, EventBus, EventRepository, RunRepository, RunRequest,
+    SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::shard::shard_for;
@@ -565,6 +568,128 @@ where
     Ok(decided)
 }
 
+/// Issue a run's budget lease at start (`PLAN.md` §12): persist the durable cap and
+/// zero the atomic counter so the metering proxy enforces it from the first model call.
+/// A run with no cap (`None`/`0`) is unbounded — a no-op here.
+pub async fn issue_budget<BD: BudgetRepository, CT: BudgetCounter>(
+    budgets: &BD,
+    counter: &CT,
+    run_id: RunId,
+    cap: Option<u64>,
+) -> DomainResult<()> {
+    let Some(cap) = cap.filter(|c| *c > 0) else {
+        return Ok(());
+    };
+    budgets
+        .save(&Budget {
+            run_id,
+            cap,
+            updated_at: SystemTime::now(),
+        })
+        .await?;
+    counter.reset(run_id).await?;
+    Ok(())
+}
+
+/// Enforce a run's budget on one model call (`PLAN.md` §12) — the authoritative hard
+/// stop the metering proxy calls before each call. Atomically consumes `tokens` against
+/// the run's cap; on `Exceeded` the run transitions to `BudgetPaused` and a
+/// `budget.exceeded` event is emitted (the notification is the event + deep link, as
+/// with §10). Returns the consumption outcome.
+#[allow(clippy::too_many_arguments)]
+pub async fn consume_budget<CT, BD, P, S, T, B, E>(
+    run_id: RunId,
+    tokens: u64,
+    counter: &CT,
+    budgets: &BD,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+    events: &E,
+) -> DomainResult<ConsumeOutcome>
+where
+    CT: BudgetCounter,
+    BD: BudgetRepository,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+    E: EventRepository,
+{
+    let Some(budget) = budgets.get(run_id).await? else {
+        return Ok(ConsumeOutcome::Ok { consumed: 0 });
+    };
+    let cap = budget.cap;
+
+    let outcome = counter.consume(run_id, cap, tokens).await?;
+
+    if let ConsumeOutcome::Exceeded { cap, consumed } = outcome {
+        // Record the audited budget event (never a secret; attribution data).
+        let event = Event::budget_exceeded(run_id, cap, consumed);
+        let stored = events.append(run_id, &event).await?;
+        publish_event(bus, &stored).await;
+
+        // Pause the run: only a live `Running` run can be paused by the budget.
+        if let Some(run) = repo.get(run_id).await?
+            && run.state == RunState::Running
+        {
+            let mut run = run;
+            persist_transition(&mut run, RunState::BudgetPaused, transitions, bus).await?;
+            sessions.sync_run(&run).await?;
+        }
+    }
+
+    Ok(outcome)
+}
+
+/// Raise (or set) a run's budget cap and resume a paused run (`PLAN.md` §12). Updating
+/// the durable cap and zeroing the counter lets a `BudgetPaused` run continue;
+/// otherwise the new cap applies from the next model call. Returns the updated run.
+#[allow(clippy::too_many_arguments)]
+pub async fn raise_budget<BD, CT, P, S, T, B>(
+    run_id: RunId,
+    cap: u64,
+    budgets: &BD,
+    counter: &CT,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<Run>
+where
+    BD: BudgetRepository,
+    CT: BudgetCounter,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let run = repo.get(run_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run {} not found", run_id.0),
+        )
+    })?;
+
+    budgets
+        .save(&Budget {
+            run_id,
+            cap,
+            updated_at: SystemTime::now(),
+        })
+        .await?;
+    counter.reset(run_id).await?;
+
+    // Resume a budget-paused run back to Running.
+    let mut run = run;
+    if run.state == RunState::BudgetPaused {
+        persist_transition(&mut run, RunState::Running, transitions, bus).await?;
+        sessions.sync_run(&run).await?;
+    }
+    Ok(run)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,8 +697,9 @@ mod tests {
     use cat_herder_domain::ports::EventRepository;
     use cat_herder_domain::reconcile::RuntimeStatus;
     use cat_herder_store_inmemory::{
-        InMemoryApprovalRepository, InMemoryEventRepository, InMemoryRunRepository,
-        InMemorySessionRepository, InMemoryTransitionRepository,
+        InMemoryApprovalRepository, InMemoryBudgetCounter, InMemoryBudgetRepository,
+        InMemoryEventRepository, InMemoryRunRepository, InMemorySessionRepository,
+        InMemoryTransitionRepository,
     };
 
     struct StubRuntime {
@@ -716,6 +842,7 @@ mod tests {
             model: None,
             repo: Some(repo.to_string()),
             language: None,
+            budget: None,
         }
     }
 
@@ -730,6 +857,7 @@ mod tests {
             model: None,
             repo: None,
             language: None,
+            budget: None,
         }
     }
 
@@ -1528,5 +1656,221 @@ mod tests {
         .unwrap();
 
         assert_eq!(broker.revoked_runs(), vec![run.id]);
+    }
+
+    #[tokio::test]
+    async fn budget_enforced_and_pauses_run_on_exceed() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let budgets = InMemoryBudgetRepository::default();
+        let counter = InMemoryBudgetCounter::default();
+
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+        // Move PodPending -> Running so a budget pause can apply.
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+
+        issue_budget(&budgets, &counter, run.id, Some(100))
+            .await
+            .unwrap();
+
+        // Two consumes within cap.
+        let o1 = consume_budget(
+            run.id,
+            40,
+            &counter,
+            &budgets,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &events,
+        )
+        .await
+        .unwrap();
+        assert_eq!(o1, ConsumeOutcome::Ok { consumed: 40 });
+        let o2 = consume_budget(
+            run.id,
+            60,
+            &counter,
+            &budgets,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &events,
+        )
+        .await
+        .unwrap();
+        assert_eq!(o2, ConsumeOutcome::Ok { consumed: 100 });
+
+        // Over cap -> rejected + run paused + budget.exceeded recorded.
+        let o3 = consume_budget(
+            run.id,
+            1,
+            &counter,
+            &budgets,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &events,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            o3,
+            ConsumeOutcome::Exceeded {
+                cap: 100,
+                consumed: 100
+            }
+        );
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::BudgetPaused
+        );
+        let types: Vec<String> = events
+            .list(run.id, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"budget.exceeded".to_string()));
+        assert!(types.contains(&"run.budget_paused".to_string()));
+    }
+
+    #[tokio::test]
+    async fn raise_budget_resumes_paused_run() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let budgets = InMemoryBudgetRepository::default();
+        let counter = InMemoryBudgetCounter::default();
+
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+
+        issue_budget(&budgets, &counter, run.id, Some(10))
+            .await
+            .unwrap();
+        consume_budget(
+            run.id,
+            20,
+            &counter,
+            &budgets,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &events,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.get(run.id).await.unwrap().unwrap().state,
+            RunState::BudgetPaused
+        );
+
+        // Raise the cap -> resumed, and the counter can accept more spend.
+        let resumed = raise_budget(
+            run.id,
+            1000,
+            &budgets,
+            &counter,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.state, RunState::Running);
+        assert_eq!(budgets.get(run.id).await.unwrap().unwrap().cap, 1000);
+        assert_eq!(
+            consume_budget(
+                run.id,
+                500,
+                &counter,
+                &budgets,
+                &repo,
+                &sessions,
+                &transitions,
+                &StubBus,
+                &events,
+            )
+            .await
+            .unwrap(),
+            ConsumeOutcome::Ok { consumed: 500 }
+        );
+    }
+
+    #[tokio::test]
+    async fn issue_budget_is_noop_without_a_cap() {
+        let budgets = InMemoryBudgetRepository::default();
+        let counter = InMemoryBudgetCounter::default();
+        issue_budget(&budgets, &counter, RunId(7), None)
+            .await
+            .unwrap();
+        assert!(budgets.get(RunId(7)).await.unwrap().is_none());
+        assert_eq!(
+            consume_budget(
+                RunId(7),
+                100,
+                &counter,
+                &budgets,
+                &InMemoryRunRepository::new(),
+                &InMemorySessionRepository::default(),
+                &InMemoryTransitionRepository::new(
+                    InMemoryRunRepository::new(),
+                    InMemoryEventRepository::default()
+                ),
+                &StubBus,
+                &InMemoryEventRepository::default(),
+            )
+            .await
+            .unwrap(),
+            ConsumeOutcome::Ok { consumed: 0 }
+        );
     }
 }

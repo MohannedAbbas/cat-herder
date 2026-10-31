@@ -443,6 +443,32 @@ def set_provider_key(model: str) -> None:
     # add more providers as needed
 
 
+def set_provider_base_url(model: str) -> None:
+    """Route the model's API through the LiteLLM metering proxy (PLAN.md §12).
+
+    The proxy is the authoritative budget hard stop — all model traffic must go
+    through it. LiteLLM exposes an OpenAI-compatible `/v1` route; per-provider base-url
+    env vars are pointed at it so the provider SDK calls the proxy, not the raw
+    provider endpoint (which the sandbox egress policy forbids anyway).
+    """
+    proxy = os.environ.get("CAT_HERDER_LLM_PROXY_URL", "").strip().rstrip("/")
+    if not proxy:
+        return
+    provider = model.split(":", 1)[0].lower()
+    base = f"{proxy}/v1"
+    if provider == "openai":
+        os.environ["OPENAI_BASE_URL"] = base
+    elif provider == "deepseek":
+        # DeepSeek is OpenAI-compatible; set both so whichever env var the client
+        # reads routes through the proxy.
+        os.environ["OPENAI_BASE_URL"] = base
+        os.environ.setdefault("DEEPSEEK_BASE_URL", base)
+    elif provider == "anthropic":
+        os.environ["ANTHROPIC_BASE_URL"] = base
+    elif provider == "google" or provider == "google_genai":
+        os.environ.setdefault("GOOGLE_BASE_URL", base)
+
+
 def parse_interrupt_on() -> dict:
     """Tools that pause for human approval (PLAN.md §10). Read from
     `CAT_HERDER_INTERRUPT_ON` (a JSON object mapping tool name -> true). Empty (off)
@@ -712,6 +738,9 @@ def main() -> None:
         return
 
     set_provider_key(model)
+    # Route model traffic through the LiteLLM metering proxy (PLAN.md §12) so every
+    # call is metered against the run's budget before reaching the provider.
+    set_provider_base_url(model)
 
     # Clone the target repo (if any) so the agent can read and modify it.
     if REPO_URL:

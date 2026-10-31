@@ -163,6 +163,9 @@ pub struct CreateRunRequest {
     pub repo: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    /// Token budget cap for the run (§12). `None`/`0` = unbounded.
+    #[serde(default)]
+    pub budget: Option<u64>,
 }
 
 fn default_max_concurrency() -> u32 {
@@ -192,6 +195,8 @@ pub struct RunResponse {
     /// LLM token usage reported by the harness.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Token budget cap for the run (§12). `None`/`0` = unbounded.
+    pub budget: Option<u64>,
 }
 
 impl From<&crate::entities::Run> for RunResponse {
@@ -214,6 +219,7 @@ impl From<&crate::entities::Run> for RunResponse {
             report: run.report.clone(),
             input_tokens: run.input_tokens,
             output_tokens: run.output_tokens,
+            budget: None,
         }
     }
 }

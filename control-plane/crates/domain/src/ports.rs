@@ -6,7 +6,8 @@
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use crate::entities::{
-    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Run, RunId, RunState,
+    ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, GitRepo, Run, RunId,
+    RunState,
 };
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
@@ -28,6 +29,8 @@ pub struct RunRequest {
     pub model: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
+    /// Token budget cap for the run (`PLAN.md` §12). `None`/`0` = unbounded.
+    pub budget: Option<u64>,
 }
 
 /// Inbound (driving): every trigger source normalizes its events to `RunRequest`.
@@ -253,4 +256,39 @@ pub trait CredentialGrantRepository {
 
 pub trait Notifier {
     async fn notify(&self, message: &str) -> DomainResult<()>;
+}
+
+/// The outcome of an atomic budget `consume` (`PLAN.md` §12). The counter is the
+/// single serialization point for every model call in a run, so parallel subagent
+/// fan-out cannot overshoot the cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumeOutcome {
+    /// The call is within budget; `consumed` is the running total.
+    Ok { consumed: u64 },
+    /// The call would exceed `cap` (the increment was rolled back).
+    Exceeded { cap: u64, consumed: u64 },
+}
+
+/// Durable per-run budget cap (`PLAN.md` §12). The real-time consumed count is
+/// authoritative in the [`BudgetCounter`]; this repository holds the cap that the
+/// counter is seeded from and that `consume` enforces against.
+pub trait BudgetRepository {
+    /// Persist (upsert) the run's budget cap.
+    async fn save(&self, budget: &Budget) -> DomainResult<Budget>;
+    /// The run's budget, or `None` when it has none.
+    async fn get(&self, run_id: RunId) -> DomainResult<Option<Budget>>;
+}
+
+/// The atomic, real-time budget counter (`PLAN.md` §12) — the authoritative hard-stop
+/// enforcement point. Backed by Redis `INCRBY` (via a Lua script for atomicity) in
+/// production, with an in-memory fallback for single-replica dev. Keyed by `run_id`,
+/// so every model call (including subagent fan-out) hits the same counter.
+pub trait BudgetCounter {
+    /// Atomically consume `tokens` from the run's counter against `cap`. Returns
+    /// `Ok` when within budget, `Exceeded` otherwise (the increment is rolled back).
+    async fn consume(&self, run_id: RunId, cap: u64, tokens: u64) -> DomainResult<ConsumeOutcome>;
+    /// The remaining allowance (`cap - consumed`), for the harness fast-path.
+    async fn remaining(&self, run_id: RunId, cap: u64) -> DomainResult<u64>;
+    /// Zero the run's counter (fresh run seed, or preemptive revocation mid-run).
+    async fn reset(&self, run_id: RunId) -> DomainResult<()>;
 }

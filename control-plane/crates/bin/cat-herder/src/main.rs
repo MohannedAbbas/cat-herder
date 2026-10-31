@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl, CheckpointRepo,
-    ControlLinks, CredentialGrantRepo, EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth,
-    GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo, OAuthConfig, PrClient, ProviderRepo,
-    RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
+    BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, EventBusImpl,
+    EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo,
+    OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
@@ -24,19 +25,20 @@ use cat_herder_domain::ports::{
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
-    InMemoryCheckpointRepository, InMemoryCredentialGrantRepository, InMemoryEventRepository,
-    InMemoryLeaseManager, InMemoryModelRepository, InMemoryProviderRepository,
-    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
-    InMemoryTransitionRepository,
+    InMemoryBudgetCounter, InMemoryBudgetRepository, InMemoryCheckpointRepository,
+    InMemoryCredentialGrantRepository, InMemoryEventRepository, InMemoryLeaseManager,
+    InMemoryModelRepository, InMemoryProviderRepository, InMemoryRunRepository,
+    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::{NatsEventBus, NatsLeaseManager};
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
-    PostgresCheckpointRepository, PostgresCredentialGrantRepository, PostgresEventRepository,
-    PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
-    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository, PostgresStore,
-    PostgresToolRepository, PostgresTransitionRepository,
+    PostgresBudgetRepository, PostgresCheckpointRepository, PostgresCredentialGrantRepository,
+    PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
+    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresSettingRepository, PostgresStore, PostgresToolRepository, PostgresTransitionRepository,
 };
+use cat_herder_store_redis::RedisBudgetCounter;
 use tokio::sync::RwLock;
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
@@ -239,6 +241,7 @@ struct Repos {
     checkpoints: CheckpointRepo,
     approvals: ApprovalRepo,
     grants: CredentialGrantRepo,
+    budgets: BudgetRepo,
     agents: AgentRepo,
     providers: ProviderRepo,
     models: ModelRepo,
@@ -263,6 +266,7 @@ impl Repos {
             checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
             approvals: ApprovalRepo::InMemory(InMemoryApprovalRepository::default()),
             grants: CredentialGrantRepo::InMemory(InMemoryCredentialGrantRepository::default()),
+            budgets: BudgetRepo::InMemory(InMemoryBudgetRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
             providers: ProviderRepo::InMemory(InMemoryProviderRepository::default()),
             models: ModelRepo::InMemory(InMemoryModelRepository::default()),
@@ -304,6 +308,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                     grants: CredentialGrantRepo::Postgres(PostgresCredentialGrantRepository::new(
                         &store,
                     )),
+                    budgets: BudgetRepo::Postgres(PostgresBudgetRepository::new(&store)),
                     agents: AgentRepo::Postgres(PostgresAgentRepository::new(&store)),
                     providers: ProviderRepo::Postgres(PostgresProviderRepository::new(&store)),
                     models: ModelRepo::Postgres(PostgresModelRepository::new(&store)),
@@ -383,6 +388,28 @@ async fn main() {
     let broker: BrokerImpl = match build_remote_broker().await {
         Some(remote) => remote,
         None => build_local_broker(repos.grants.clone(), repos.events.clone(), bus.clone()),
+    };
+
+    // Atomic budget counter (PLAN.md §12) — the authoritative hard-stop enforcement
+    // point. Redis when CAT_HERDER_REDIS_URL is set, otherwise the in-memory fallback
+    // (single-replica dev, where the one process meters every run).
+    let budget_counter: BudgetCounterImpl = match std::env::var("CAT_HERDER_REDIS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(url) => match RedisBudgetCounter::connect(&url).await {
+            Ok(c) => {
+                eprintln!("Redis budget counter connected");
+                BudgetCounterImpl::Redis(Box::new(c))
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: Redis budget counter unavailable ({e}); using in-memory counter"
+                );
+                BudgetCounterImpl::InMemory(InMemoryBudgetCounter::default())
+            }
+        },
+        None => BudgetCounterImpl::InMemory(InMemoryBudgetCounter::default()),
     };
 
     // Shard leases for the sharded reconciler (PLAN.md §6). NATS JetStream KV when
@@ -616,6 +643,8 @@ async fn main() {
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
         broker,
+        budgets: repos.budgets,
+        budget_counter,
         bus,
         agents: repos.agents,
         providers: repos.providers,

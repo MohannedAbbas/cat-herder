@@ -14,7 +14,7 @@ test:
 # from the denominator; those are covered by DB-backed integration tests (see CI).
 # Requires: cargo install cargo-llvm-cov (and `llvm-tools-preview` rustup component).
 coverage:
-	cd $(WORKSPACE) && cargo llvm-cov --fail-under-lines 85 --ignore-filename-regex 'bin/cat-herder|runtime-agent-sandbox|store-postgres|store-nats' --html
+	cd $(WORKSPACE) && cargo llvm-cov --fail-under-lines 85 --ignore-filename-regex 'bin/cat-herder|runtime-agent-sandbox|store-postgres|store-nats|store-redis' --html
 
 fmt:
 	cd $(WORKSPACE) && cargo fmt

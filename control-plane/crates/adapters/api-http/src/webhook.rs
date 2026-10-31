@@ -29,6 +29,9 @@ pub struct WebhookPayload {
     pub repo: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    /// Token budget cap for the run (§12). `None`/`0` = unbounded.
+    #[serde(default)]
+    pub budget: Option<u64>,
 }
 
 fn default_kind() -> RunKind {
@@ -51,6 +54,7 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
         model: payload.model,
         repo: payload.repo,
         language: payload.language,
+        budget: payload.budget,
     }
 }
 
@@ -69,6 +73,7 @@ mod tests {
             agent_id: None,
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
+            budget: Some(10_000),
         }
     }
 

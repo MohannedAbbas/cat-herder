@@ -13,6 +13,7 @@ cat-herder-credential-broker-rpc = { path = "../credential-broker-rpc" }
 cat-herder-store-inmemory = { path = "../store-inmemory" }
 cat-herder-store-postgres = { path = "../store-postgres" }
 cat-herder-store-nats = { path = "../store-nats" }
+cat-herder-store-redis = { path = "../store-redis" }
 axum.workspace = true
 axum-extra.workspace = true
 bcrypt.workspace = true

@@ -91,8 +91,28 @@ dependencies:
     serviceName: cat-herder-nats
   redis:
     enabled: false
+    # Redis is the atomic budget counter backend (PLAN.md §12): the control plane's
+    # metering endpoint INCRBYs against it. Disable for single-replica dev (in-memory
+    # counter fallback).
+    image: redis:7-alpine
+    storage: 1Gi
+    serviceName: cat-herder-redis
   minio:
     enabled: false
+
+# LiteLLM metering proxy (PLAN.md §12) — the authoritative budget hard stop. When
+# enabled, all model traffic flows through it and is metered against the control
+# plane's atomic counter (via a LiteLLM budget hook that calls `BudgetControl/Consume`).
+# The sandbox egress policy then permits only this proxy for model traffic, so the raw
+# provider endpoint is unreachable from the pod.
+litellm:
+  enabled: false
+  image: ghcr.io/berriai/litellm:main-stable
+  replicas: 1
+  port: 4000
+  serviceName: cat-herder-litellm
+  # Master key for the proxy's admin/management API (from a Secret, key `master-key`).
+  masterKeySecret: cat-herder-litellm
 
 agentSandbox:
   enabled: true

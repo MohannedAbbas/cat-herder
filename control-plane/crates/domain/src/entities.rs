@@ -147,6 +147,17 @@ pub struct GitRepo {
     pub enabled: bool,
 }
 
+/// A per-run token budget (`PLAN.md` §12). `cap` is the authoritative token ceiling
+/// (durable in Postgres); the real-time consumed count lives in the atomic budget
+/// counter (Redis), and the final attribution rollup lands on the run's token usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub run_id: RunId,
+    /// Token cap for the run. `0` means "no budget" (unbounded — enforcement skipped).
+    pub cap: u64,
+    pub updated_at: SystemTime,
+}
+
 /// Lifecycle of a minted credential grant (`PLAN.md` §11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

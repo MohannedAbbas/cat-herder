@@ -72,13 +72,15 @@ impl ControlLinks {
     }
 }
 
-/// Serve the harness control channel on `addr` (blocks until the server stops).
+/// Serve the harness control channel and the budget control channel on `addr` (blocks
+/// until the server stops).
 pub async fn grpc_serve(
     state: AppState,
     addr: std::net::SocketAddr,
 ) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
-        .add_service(grpc_server(state))
+        .add_service(grpc_server(state.clone()))
+        .add_service(crate::budget::budget_server(state))
         .serve(addr)
         .await
 }

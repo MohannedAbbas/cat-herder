@@ -8,6 +8,7 @@ members = [
     "crates/adapters/store-inmemory",
     "crates/adapters/store-postgres",
     "crates/adapters/store-nats",
+    "crates/adapters/store-redis",
     "crates/adapters/credentials-github",
     "crates/adapters/credential-broker",
     "crates/adapters/credential-broker-rpc",

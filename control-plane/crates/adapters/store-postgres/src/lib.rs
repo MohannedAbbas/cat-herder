@@ -7,6 +7,7 @@
 mod agent;
 mod approval;
 mod audit;
+mod budget;
 mod checkpoint;
 mod codec;
 mod credential_grant;
@@ -24,6 +25,7 @@ mod transition;
 pub use agent::PostgresAgentRepository;
 pub use approval::PostgresApprovalRepository;
 pub use audit::PostgresAuditRepository;
+pub use budget::PostgresBudgetRepository;
 pub use checkpoint::PostgresCheckpointRepository;
 pub use credential_grant::PostgresCredentialGrantRepository;
 pub use event::PostgresEventRepository;

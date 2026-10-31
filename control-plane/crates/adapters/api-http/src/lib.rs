@@ -12,7 +12,9 @@ use axum::{
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
-use cat_herder_application::{Completion, Outcome, complete_run, respond_approval, start_run};
+use cat_herder_application::{
+    Completion, Outcome, complete_run, issue_budget, respond_approval, start_run,
+};
 use cat_herder_credential_broker::CredentialBrokerService;
 use cat_herder_credential_broker_rpc::RemoteCredentialBroker;
 use cat_herder_domain::api::{
@@ -32,6 +34,7 @@ use cat_herder_store_inmemory::{
 };
 
 pub use auth::Auth;
+pub use budget::{BudgetCounterImpl, BudgetRepo, budget_server, raise_budget_for_run};
 pub use bus::EventBusImpl;
 pub use crypto::AesGcmCipher;
 pub use grpc::{ControlLinks, grpc_serve, grpc_server};
@@ -46,6 +49,7 @@ pub use repo::{
 
 mod admin;
 mod auth;
+mod budget;
 mod bus;
 mod crypto;
 mod grpc;
@@ -126,6 +130,10 @@ pub struct AppState {
     /// `mint` fails gracefully and the runtime falls back to a registered repo token or
     /// none).
     pub broker: BrokerImpl,
+    /// Durable per-run budget caps (`PLAN.md` §12).
+    pub budgets: BudgetRepo,
+    /// The atomic, real-time budget counter (Redis in production, in-memory otherwise).
+    pub budget_counter: BudgetCounterImpl,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -184,6 +192,8 @@ impl Default for AppState {
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
             broker,
+            budgets: BudgetRepo::InMemory(Default::default()),
+            budget_counter: BudgetCounterImpl::InMemory(Default::default()),
             bus,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
@@ -208,6 +218,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run))
+        .route("/v1/runs/{id}/budget", post(raise_budget_handler))
         .route(
             "/v1/runs/{id}/events",
             get(get_run_events).post(post_run_event),
@@ -322,6 +333,7 @@ async fn create_run(
         model: Some(model),
         repo: req.repo,
         language: req.language,
+        budget: req.budget,
     };
 
     let run = start_run(
@@ -335,6 +347,12 @@ async fn create_run(
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Budget lease (§12): persist the cap + zero the counter so the proxy enforces it
+    // from the first call. Best-effort — a lease failure must not fail the run.
+    if let Err(e) = issue_budget(&state.budgets, &state.budget_counter, run.id, req.budget).await {
+        eprintln!("budget lease failed for run {}: {e}", run.id.0);
+    }
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }
@@ -354,6 +372,31 @@ async fn get_run(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(RunResponse::from(&run)))
+}
+
+/// Request body for `POST /v1/runs/{id}/budget` (`PLAN.md` §12) — raise (or set) a
+/// run's budget cap; a `BudgetPaused` run resumes to `Running`.
+#[derive(Debug, serde::Deserialize)]
+pub struct RaiseBudgetRequest {
+    pub cap: u64,
+}
+
+async fn raise_budget_handler(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(req): Json<RaiseBudgetRequest>,
+) -> Result<Json<RunResponse>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    raise_budget_for_run(&state, run_id, req.cap)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let run = state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
     Ok(Json(RunResponse::from(&run)))
 }
 
@@ -822,6 +865,7 @@ async fn webhook_generic(
         ))?;
     req.model = Some(model);
 
+    let budget = req.budget;
     let run = start_run(
         req,
         runtime,
@@ -833,6 +877,10 @@ async fn webhook_generic(
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Err(e) = issue_budget(&state.budgets, &state.budget_counter, run.id, budget).await {
+        eprintln!("budget lease failed for run {}: {e}", run.id.0);
+    }
 
     Ok((StatusCode::CREATED, Json(RunResponse::from(&run))))
 }

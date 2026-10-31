@@ -46,6 +46,9 @@ pub mod event_type {
     // Credential brokering (PLAN.md §11.3) — every mint/revoke is audited.
     pub const CREDENTIAL_MINTED: &str = "credential.minted";
     pub const CREDENTIAL_REVOKED: &str = "credential.revoked";
+
+    // Spend governance (PLAN.md §12) — the proxy rejected a call over the run's cap.
+    pub const BUDGET_EXCEEDED: &str = "budget.exceeded";
 }
 
 /// Canonical event envelope. `seq` is assigned by the control plane (sole writer);
@@ -130,6 +133,10 @@ impl Event {
         Self::lifecycle(run, event_type::RUN_AWAITING_INPUT)
     }
 
+    pub fn run_budget_paused(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_BUDGET_PAUSED)
+    }
+
     /// The lifecycle event for a run's *current* state. Used by the reconciler and
     /// the terminal-transition paths so every state change lands in the log exactly
     /// once, with the state it represents.
@@ -146,6 +153,7 @@ impl Event {
             TimedOut => Self::run_timed_out(run),
             Cancelled => Self::run_cancelled(run),
             AwaitingInput => Self::run_awaiting_input(run),
+            BudgetPaused => Self::run_budget_paused(run),
             // States without a wired event type yet fall back to a generic lifecycle
             // event carrying the state, so nothing is silently dropped from the log.
             _ => Self::lifecycle(run, "run.state"),
@@ -181,6 +189,17 @@ impl Event {
             event_type::CREDENTIAL_REVOKED,
             None,
             serde_json::json!({ "grant_id": grant_id }),
+        )
+    }
+
+    /// The run's budget was exceeded — the metering proxy rejected a call that would
+    /// have crossed the cap (`PLAN.md` §12). Carries the cap + consumed counts.
+    pub fn budget_exceeded(run_id: RunId, cap: u64, consumed: u64) -> Self {
+        Self::new(
+            run_id,
+            event_type::BUDGET_EXCEEDED,
+            None,
+            serde_json::json!({ "cap": cap, "consumed": consumed }),
         )
     }
 }

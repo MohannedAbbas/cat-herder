@@ -1,0 +1,26 @@
+{{- if .Values.litellm.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cat-herder-litellm-config
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-litellm
+    app.kubernetes.io/part-of: cat-herder
+data:
+  config.yaml: |
+    # LiteLLM metering proxy (PLAN.md §12). This is a minimal placeholder: configure
+    # the model_list (provider + api key) and register the budget-enforcement hook.
+    #
+    # The hard stop: a LiteLLM budget_manager / custom callback MUST call the control
+    # plane's `BudgetControl/Consume` gRPC (cat-herder-api:50051) before each model
+    # call with (run_id, tokens); on `exceeded=true` it rejects the call, which
+    # transitions the run to `BudgetPaused`. LiteLLM runs as a pinned, CVE-tracked
+    # edge component (§12/§19); pin the image digest in production.
+    model_list:
+      - model_name: placeholder
+        litellm_params:
+          model: openai/placeholder
+          api_key: os.environ/LITELLM_PLACEHOLDER_API_KEY
+    general_settings: {}
+{{- end }}

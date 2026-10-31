@@ -20,12 +20,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(true)
         .build_client(false)
-        .compile_protos(&[root.join("proto/control.proto")], &[root.join("proto")])?;
+        .compile_protos(
+            &[
+                root.join("proto/control.proto"),
+                root.join("proto/budget.proto"),
+            ],
+            &[root.join("proto")],
+        )?;
 
-    // Re-run the build script if the proto changes.
+    // Re-run the build script if either proto changes.
     println!(
         "cargo:rerun-if-changed={}",
         root.join("proto/control.proto").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("proto/budget.proto").display()
     );
     Ok(())
 }

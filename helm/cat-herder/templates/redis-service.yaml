@@ -1,0 +1,17 @@
+{{- if .Values.dependencies.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.dependencies.redis.serviceName }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-redis
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  selector:
+    app.kubernetes.io/name: cat-herder-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+{{- end }}
