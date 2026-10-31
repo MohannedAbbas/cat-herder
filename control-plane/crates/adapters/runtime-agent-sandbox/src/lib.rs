@@ -20,6 +20,10 @@ use kube::{
 };
 use tokio::sync::RwLock;
 
+mod version;
+
+pub use version::{Semver, VersionRange, harness_version, is_incompatible, parse_semver};
+
 /// Init-container shell: materialize the workspace onto the RWX PVC (PLAN.md §6/§13).
 /// Skips when the tree is already present (resume); supplies a git askpass that echoes
 /// `GIT_TOKEN` for private-repo clones (the token never appears in argv or logs).
@@ -117,6 +121,11 @@ pub struct SandboxRuntime {
     /// plane so a `workflow` run's pod gets its `WORKFLOW_STEPS` without the runtime
     /// resolving the catalog itself (§7).
     workflow_steps: Arc<RwLock<HashMap<String, Vec<(String, String)>>>>,
+    /// The parsed harness image version (from `harness_image`), used to enforce the
+    /// version-compatibility matrix (§9). `None` when the image is tagless/digest-pinned.
+    harness_version: Option<Semver>,
+    /// The harness version range this control plane supports (§9).
+    harness_range: VersionRange,
 }
 
 impl SandboxRuntime {
@@ -154,15 +163,20 @@ impl SandboxRuntime {
         let namespace = namespace.into();
         let api = Api::namespaced_with(client.clone(), &namespace, &Self::api_resource());
         let secrets = Api::<Secret>::namespaced(client, &namespace);
+        let harness_image = harness_image.into();
+        let harness_version = version::harness_version(&harness_image);
+        let harness_range = VersionRange::from_env();
         Ok(Self {
             api,
             secrets,
             namespace,
-            harness_image: harness_image.into(),
+            harness_image,
             pod,
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
             git_tokens: Arc::new(RwLock::new(HashMap::new())),
             workflow_steps: Arc::new(RwLock::new(HashMap::new())),
+            harness_version,
+            harness_range,
         })
     }
 
@@ -191,6 +205,12 @@ impl SandboxRuntime {
     /// result here, so `spawn` can inject `WORKFLOW_STEPS` without touching the catalog.
     pub async fn update_workflow_steps(&self, steps: HashMap<String, Vec<(String, String)>>) {
         *self.workflow_steps.write().await = steps;
+    }
+
+    /// Whether the configured harness image is within the supported version range (§9).
+    /// Used to warn at startup before the first (refused) spawn.
+    pub fn harness_is_compatible(&self) -> bool {
+        !is_incompatible(self.harness_version, &self.harness_range)
     }
 
     /// Resolve the git token scoped to this run's repo, if one is registered. The
@@ -441,6 +461,21 @@ impl SandboxRuntime {
 
 impl AgentRuntime for SandboxRuntime {
     async fn spawn(&self, run: &Run, git_token: Option<&str>) -> DomainResult<()> {
+        // Version-compatibility matrix (§9): refuse to launch a harness image whose
+        // parsed version falls outside the control plane's supported range. A tagless
+        // (digest-pinned) image is unverifiable and allowed through.
+        if is_incompatible(self.harness_version, &self.harness_range) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing to launch incompatible harness image '{}': version {:?} \
+                     is outside the supported range {:?}",
+                    self.harness_image, self.harness_version, self.harness_range
+                ),
+            )
+            .into());
+        }
+
         let api_key = self.resolve_api_key(run).await;
         // A broker-minted credential (passed in) wins; otherwise fall back to the
         // registered repo token (legacy long-lived PAT path) for hosts without a broker.

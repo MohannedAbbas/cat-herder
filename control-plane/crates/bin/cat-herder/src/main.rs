@@ -390,6 +390,17 @@ async fn main() {
             None
         }
     };
+    // Version-compatibility matrix (§9): warn at boot if the configured harness image
+    // is outside the supported range, before the first spawn is refused.
+    if let Some(rt) = &runtime
+        && !rt.harness_is_compatible()
+    {
+        eprintln!(
+            "warning: configured harness image is outside the supported version range \
+             (see CAT_HERDER_HARNESS_MIN_VERSION / CAT_HERDER_HARNESS_MAX_VERSION); \
+             runs will be refused until it is corrected"
+        );
+    }
 
     let repos = build_repos(&agent_models()).await;
 

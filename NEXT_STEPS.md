@@ -310,10 +310,22 @@ Brokered credentials and a real budget hard-stop; both are called out as
 
 ## Tier 4 — scale, hardening, observability
 
-- [ ] **14. Client-facing gRPC + harness version-compat matrix (§9, §14).**
+- [x] **14. Client-facing gRPC + harness version-compat matrix (§9, §14).**
   *Done when:* gRPC is a real client API (or the decision is recorded to keep it
   internal); the control plane refuses to launch harness images outside its supported
   range.
+  *Status:* ✅ landed — ✅ **decision recorded** (gRPC stays internal: REST + MCP are
+  the client-facing surface; the `HarnessControl`/`BudgetControl` tonic services remain
+  internal, mTLS-authenticated) in `docs/design/client-api.md`, matching §14's protocol
+  map; ✅ **version-compatibility matrix** — `runtime-agent-sandbox/src/version.rs`
+  (`Semver`/`parse_semver`/`harness_version`/`VersionRange`/`is_incompatible`) parses the
+  harness image tag and, at `spawn`, the runtime **refuses to launch** an image whose
+  version falls outside `CAT_HERDER_HARNESS_MIN_VERSION`/`_MAX_VERSION` (inclusive;
+  unset = unbounded; a tagless/digest-pinned image is unverifiable and allowed); a
+  boot-time warning surfaces an incompatible image before the first refused spawn. See
+  `docs/design/client-api.md`. ⬜ Deferred: the harness-side declaration of the
+  control-plane API range it supports (the two-way half of the matrix), and mTLS/SVID
+  hardening of the control channel (with §9/§20).
 
 - [ ] **15. Isolation tiers (§13).** RuntimeClass-backed gVisor/Kata/Firecracker via
   `SandboxTemplate` choice, beyond the current single default template.
