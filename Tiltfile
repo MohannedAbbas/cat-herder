@@ -35,13 +35,32 @@ custom_build(
     skips_local_docker=True,
 )
 
-# Agent harness (used by agent-sandbox SandboxTemplate at runtime; not yet wired
-# into the chart's templates, but built here so it's available in the registry).
+# Agent harness, Python-only base (used by agent-sandbox SandboxTemplate at runtime;
+# the chart's `harness.image` points here by default). Tilt injects the built ref
+# into the chart via `image_keys` below.
 custom_build(
     'cat-herder-agent-harness',
     'podman build -t $EXPECTED_REF -f agent-harness/Containerfile agent-harness && podman push $EXPECTED_REF',
     ['./agent-harness'],
     skips_local_docker=True,
+)
+
+# Agent harness, Rust-capable variant. Layers the Rust toolchain ON TOP OF the base
+# image above; it is a separate custom_build (source deps don't force ordering), so it
+# also lists the base build as a resource_dep. At build time it reads the base image's
+# exact tag from the dev cluster (Tilt has pushed it and moved the running SandboxTemplate
+# pod onto it) and passes it as --build-arg BASE_IMAGE, so the variant is always built
+# FROM the same base ref that Tilt is serving. Agents opt in per-agent via the template
+# `image` field (exposed to the chart as `harness.rustImage`).
+custom_build(
+    'cat-herder-agent-harness-rust',
+    'BASE_REF=$(kubectl -n cat-herder get sandboxtemplate cat-herder-agent '
+    + "-o jsonpath='{.spec.podTemplate.spec.containers[0].image}') && "
+    + 'podman build --build-arg BASE_IMAGE=$BASE_REF '
+    + '-t $EXPECTED_REF -f agent-harness/Containerfile.rust agent-harness && podman push $EXPECTED_REF',
+    ['./agent-harness/Containerfile.rust'],
+    skips_local_docker=True,
+    resource_deps=['cat-herder-agent-harness'],
 )
 
 # UI (React SPA served by nginx).
@@ -69,8 +88,8 @@ helm_resource(
     flags=helm_flags,
     deps=['helm/cat-herder'],
     # Inject the Tilt-built images (full ref incl. tag) into the chart values.
-    image_keys=['controlPlane.image', 'harness.image', 'ui.image', 'broker.image'],
-    image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-ui', 'cat-herder-broker'],
+    image_keys=['controlPlane.image', 'harness.image', 'harness.rustImage', 'ui.image', 'broker.image'],
+    image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-agent-harness-rust', 'cat-herder-ui', 'cat-herder-broker'],
 )
 
 # Expose the API and UI with explicit Service-targeted port-forwards. Tilt's

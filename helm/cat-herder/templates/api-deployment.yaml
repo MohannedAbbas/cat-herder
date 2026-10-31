@@ -27,6 +27,11 @@ spec:
               value: {{ .Values.controlPlane.port | quote }}
             - name: CAT_HERDER_HARNESS_IMAGE
               value: "{{ .Values.harness.image }}"
+            {{- if .Values.harness.rustImage }}
+            # Rust-capable harness variant; agents opt in via their template `image`.
+            - name: CAT_HERDER_HARNESS_RUST_IMAGE
+              value: "{{ .Values.harness.rustImage }}"
+            {{- end }}
             {{- if .Values.workspace.enabled }}
             - name: CAT_HERDER_WORKSPACE_PVC
               value: {{ .Values.workspace.pvcName | quote }}
