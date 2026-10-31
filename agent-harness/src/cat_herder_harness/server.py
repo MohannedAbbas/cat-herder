@@ -259,32 +259,46 @@ class ControlChannel:
                 yield control_pb2.HarnessMessage(heartbeat=control_pb2.Heartbeat())
 
     def _run(self) -> None:
-        try:
-            responses = self._stub.Connect(self._generator())
-            got_seed = False
-            for resp in responses:
-                if not got_seed:
-                    got_seed = True
-                    if resp.WhichOneof("msg") == "checkpoint" and resp.checkpoint.checkpoint_id:
-                        cp = resp.checkpoint
-                        self._seed = (
-                            cp.thread_id,
-                            cp.checkpoint_ns,
-                            cp.checkpoint_id,
-                            cp.serde_type,
-                            cp.payload,
-                        )
+        # Reconnect for the life of the pod. The API pod can be mid-restart when the
+        # harness first connects (e.g. a Tilt/Helm image roll), and a single transient
+        # UNAVAILABLE must not permanently drop event/heartbeat reporting (§6/§9).
+        first_attempt = True
+        backoff = 1.0
+        while True:
+            try:
+                responses = self._stub.Connect(self._generator())
+                got_seed = False
+                for resp in responses:
+                    if not got_seed:
+                        got_seed = True
+                        if resp.WhichOneof("msg") == "checkpoint" and resp.checkpoint.checkpoint_id:
+                            cp = resp.checkpoint
+                            self._seed = (
+                                cp.thread_id,
+                                cp.checkpoint_ns,
+                                cp.checkpoint_id,
+                                cp.serde_type,
+                                cp.payload,
+                            )
+                        self._seed_event.set()
+                    elif resp.WhichOneof("msg") == "signal":
+                        # HITL: hand the resume/cancel signal to the waiting agent loop (§10).
+                        self._signals.put((resp.signal.signal, resp.signal.response))
+                backoff = 1.0
+            except grpc.RpcError as exc:  # noqa: BLE001 — retry rather than give up
+                print(
+                    f"gRPC control channel error (retrying in {backoff:.0f}s): {exc}",
+                    flush=True,
+                )
+            finally:
+                if first_attempt:
+                    # Never block the agent's startup waiting for the channel: treat the
+                    # first (possibly failed) attempt as the seed decision, and keep
+                    # retrying in the background so events/heartbeats eventually flow.
+                    first_attempt = False
                     self._seed_event.set()
-                elif resp.WhichOneof("msg") == "signal":
-                    # HITL: hand the resume/cancel signal to the waiting agent loop (§10).
-                    self._signals.put((resp.signal.signal, resp.signal.response))
-        except grpc.RpcError as exc:  # noqa: BLE001 — the run still completes
-            print(f"gRPC control channel error: {exc}", flush=True)
-        finally:
-            # Ensure callers waiting on the seed (or a signal) don't block forever if
-            # the channel errors before they arrive.
-            self._seed_event.set()
-            self._signals.put(None)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
 
 
 def report_event(
@@ -884,7 +898,7 @@ def main() -> None:
     # checkpointed locally and flushed to the control plane over the gRPC channel. On a
     # re-created pod the control plane returns the latest checkpoint (the resume seed)
     # and we resume from it. Import lazily so the health server is up before langgraph.
-    from checkpoint_saver import RemoteCheckpointSaver
+    from .checkpoint_saver import RemoteCheckpointSaver
 
     saver = None
     resume = False
