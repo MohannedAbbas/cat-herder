@@ -1,4 +1,9 @@
-# Cat Herder agent harness image (runs inside the sandbox pod).
+# Cat Herder agent harness image — Python-only base (runs inside the sandbox pod).
+#
+# This is the default harness image: Python + uv + the harness venv, nothing else.
+# For target repos that need a Rust toolchain (cargo/rustc + a C linker + perl for
+# `ring`), build agent-harness/Containerfile.rust, which layers the toolchain on top
+# of this image (see its --build-arg BASE_IMAGE).
 FROM python:3.12-slim
 
 # uv, taken from its official image (keeps the base python image untouched).
@@ -10,19 +15,17 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 
-# git (clone), curl + build-essential + perl (Rust/ring build), ca-certificates (HTTPS).
+# git (clone) and ca-certificates (HTTPS) are all the Python harness needs.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates curl build-essential perl \
+    && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchain (cargo/rustc) so the agent can build/test the target repo.
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-
 # Install deps + the project into a venv, frozen to the lockfile.
-RUN uv sync --frozen --no-dev --no-editable --no-cache
+RUN uv sync --frozen --no-dev --no-editable --no-cache \
+    && rm -rf /root/.cache/uv
 
-# Make the venv's python and the Rust toolchain available on PATH.
-ENV PATH="/app/.venv/bin:/root/.cargo/bin:$PATH"
+# Make the venv's python available on PATH.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Working directory the target repo is cloned into (empty by default).
 RUN mkdir -p /repo

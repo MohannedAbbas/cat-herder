@@ -1,0 +1,26 @@
+# Cat Herder agent harness image — Rust-capable variant.
+#
+# Layers a Rust toolchain (cargo/rustc) onto the Python-only base harness image so
+# an agent can build/test a Rust target repo. Point an agent template at this image
+# via its per-agent `image` field; the base image is used everywhere else.
+#
+# Build (the Tiltfile does this automatically, after building the base image):
+#   podman build -f agent-harness/Containerfile.rust \
+#     --build-arg BASE_IMAGE=<base-ref> -t <ref> agent-harness
+ARG BASE_IMAGE=cat-herder-agent-harness:0.1.0
+FROM ${BASE_IMAGE}
+
+# build-essential: cc/ld (linker crate builds need) + perl (openssl-sys / ring build).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential perl ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain (cargo/rustc) so the agent can build/test the target repo.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal \
+    && rm -rf /root/.cache/uv
+
+# Make the Rust toolchain available on PATH (the base image already put the venv first).
+ENV PATH="/root/.cargo/bin:$PATH"
+
+CMD ["python", "-m", "cat_herder_harness.server"]

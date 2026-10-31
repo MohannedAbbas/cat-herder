@@ -59,7 +59,12 @@ controlPlane:
   reconcileIntervalSecs: 10
 
 harness:
+  # Python-only base harness image (the SandboxTemplate default).
   image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0
+  # Rust-capable variant (same base + cargo/rustc/linker). Agents that must build or
+  # test a Rust repo opt in per-agent by setting their template `image` to this ref
+  # (the control plane exposes it to the catalog's default agents).
+  rustImage: ghcr.io/your-org/cat-herder-agent-harness-rust:0.1.0
 
 # Durable workspace (PLAN.md §6/§13): a shared ReadWriteMany PVC holds each run's
 # working tree (per-run subpath), so file edits survive pod recreation and a resumed
