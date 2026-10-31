@@ -164,6 +164,7 @@ mod tests {
             trigger: "api".into(),
             actor: None,
             model: None,
+            image: None,
             repo: Some("https://github.com/org/repo".into()),
             language: None,
             workflow_ref: None,

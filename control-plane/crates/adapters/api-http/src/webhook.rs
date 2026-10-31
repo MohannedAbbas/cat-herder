@@ -55,6 +55,7 @@ pub fn normalize(payload: WebhookPayload) -> RunRequest {
         trigger: "webhook".into(),
         actor: payload.actor,
         model: payload.model,
+        image: None,
         repo: payload.repo,
         language: payload.language,
         workflow_ref: None,

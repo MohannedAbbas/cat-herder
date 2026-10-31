@@ -105,6 +105,7 @@ mod tests {
             trigger: "api".into(),
             actor: None,
             model: None,
+            image: None,
             repo: None,
             language: None,
             workflow_ref: None,

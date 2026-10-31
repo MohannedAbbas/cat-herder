@@ -42,8 +42,8 @@ where
         sqlx::query_scalar(
             "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
              trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
-             finished_at, pr_url, report, input_tokens, output_tokens, callback_url) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING id",
+             finished_at, pr_url, report, input_tokens, output_tokens, callback_url, image) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING id",
         )
         .bind(&kind)
         .bind(&state)
@@ -65,14 +65,15 @@ where
         .bind(run.input_tokens as i64)
         .bind(run.output_tokens as i64)
         .bind(run.callback_url.as_deref())
+        .bind(run.image.as_deref())
         .fetch_one(executor)
         .await
     } else {
         sqlx::query_scalar(
             "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
              trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
-             finished_at, pr_url, report, input_tokens, output_tokens, callback_url) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             finished_at, pr_url, report, input_tokens, output_tokens, callback_url, image) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
              ON CONFLICT (id) DO UPDATE SET \
                kind = EXCLUDED.kind, state = EXCLUDED.state, \
                task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
@@ -83,7 +84,7 @@ where
                started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
                pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
                input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens, \
-               callback_url = EXCLUDED.callback_url \
+               callback_url = EXCLUDED.callback_url, image = EXCLUDED.image \
              RETURNING id",
         )
         .bind(run.id.0 as i64)
@@ -107,6 +108,7 @@ where
         .bind(run.input_tokens as i64)
         .bind(run.output_tokens as i64)
         .bind(run.callback_url.as_deref())
+        .bind(run.image.as_deref())
         .fetch_one(executor)
         .await
     }
@@ -178,6 +180,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         input_tokens: row.try_get::<i64, _>("input_tokens")? as u64,
         output_tokens: row.try_get::<i64, _>("output_tokens")? as u64,
         callback_url: row.try_get("callback_url")?,
+        image: row.try_get("image")?,
     })
 }
 
@@ -244,6 +247,7 @@ mod tests {
             trigger: "webhook".into(),
             actor: Some("octocat".into()),
             model: Some("anthropic/claude-sonnet-4-6".into()),
+            image: None,
             repo: Some("org/repo".into()),
             language: Some("rust".into()),
             workflow_ref: None,

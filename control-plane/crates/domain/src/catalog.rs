@@ -15,6 +15,8 @@ use crate::entities::{RunKind, RunState, WorkflowDefinition, WorkflowStep};
 pub struct CatalogDefaults {
     /// Harness image reference seeded into every agent template.
     pub harness_image: String,
+    /// Rust-capable harness image reference seeded into the Rust agent template.
+    pub harness_rust_image: String,
     /// Per-agent concurrency caps (agent id → max concurrent runs).
     pub max_concurrency: HashMap<String, u32>,
 }
@@ -22,18 +24,24 @@ pub struct CatalogDefaults {
 /// Default harness image (matches the chart's `harness.image` placeholder).
 pub const DEFAULT_HARNESS_IMAGE: &str = "cat-herder-agent-harness:0.1.0";
 
+/// Default Rust-capable harness image (ships cargo/rustc). Matches the
+/// `harness.rustImage` placeholder in the chart.
+pub const DEFAULT_HARNESS_RUST_IMAGE: &str = "cat-herder-agent-harness-rust:0.1.0";
+
 impl Default for CatalogDefaults {
     fn default() -> Self {
         let max_concurrency = [
             ("agent-codeact", 8u32),
             ("agent-reviewer", 4u32),
             ("agent-docs", 4u32),
+            ("agent-rust", 4u32),
         ]
         .iter()
         .map(|(id, n)| (id.to_string(), *n))
         .collect();
         Self {
             harness_image: DEFAULT_HARNESS_IMAGE.to_string(),
+            harness_rust_image: DEFAULT_HARNESS_RUST_IMAGE.to_string(),
             max_concurrency,
         }
     }
@@ -50,6 +58,11 @@ impl CatalogDefaults {
             && !image.trim().is_empty()
         {
             cfg.harness_image = image.trim().to_string();
+        }
+        if let Ok(image) = std::env::var("CAT_HERDER_HARNESS_RUST_IMAGE")
+            && !image.trim().is_empty()
+        {
+            cfg.harness_rust_image = image.trim().to_string();
         }
         cfg
     }
@@ -116,6 +129,24 @@ pub fn default_agents_with(
             tools: vec!["filesystem".into(), "web_search".into()],
             max_concurrency: defaults.concurrency("agent-docs"),
         },
+        AgentTemplate {
+            id: "agent-rust".into(),
+            name: "Rust coding agent".into(),
+            description:
+                "Rust specialist: builds, tests, and edits Rust repos with cargo/rustc available."
+                    .into(),
+            image: defaults.harness_rust_image.clone(),
+            runtime_tier: RuntimeTier::Default,
+            model: model("agent-rust", "deepseek:deepseek-chat"),
+            tools: vec![
+                "filesystem".into(),
+                "execute".into(),
+                "git".into(),
+                "github".into(),
+                "credential".into(),
+            ],
+            max_concurrency: defaults.concurrency("agent-rust"),
+        },
     ]
 }
 
@@ -162,17 +193,57 @@ mod tests {
     #[test]
     fn no_overrides_keeps_defaults() {
         let agents = default_agents(&HashMap::new());
-        assert_eq!(agents.len(), 3);
+        assert_eq!(agents.len(), 4);
         assert!(agents.iter().all(|a| a.model.contains(':')));
+    }
+
+    #[test]
+    fn agent_rust_seeded_on_rust_image() {
+        let agents = default_agents(&HashMap::new());
+        let rust = agents
+            .iter()
+            .find(|a| a.id == "agent-rust")
+            .expect("agent-rust seeded");
+        assert_eq!(rust.name, "Rust coding agent");
+        assert_eq!(rust.image, DEFAULT_HARNESS_RUST_IMAGE);
+        assert_eq!(rust.model, "deepseek:deepseek-chat");
+        assert_eq!(rust.max_concurrency, 4);
+        assert!(rust.tools.contains(&"execute".to_string()));
+        // Existing agents keep the Python harness image.
+        let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();
+        assert_eq!(codeact.image, DEFAULT_HARNESS_IMAGE);
+    }
+
+    #[test]
+    fn rust_image_override_applies() {
+        // SAFETY: single-threaded test mutation of the process env.
+        unsafe {
+            std::env::set_var("CAT_HERDER_HARNESS_RUST_IMAGE", "ghcr.io/acme/rust:9.9.9");
+        }
+        let d = CatalogDefaults::from_env();
+        assert_eq!(d.harness_rust_image, "ghcr.io/acme/rust:9.9.9");
+        let agents = default_agents_with(&d, &HashMap::new());
+        let rust = agents.iter().find(|a| a.id == "agent-rust").unwrap();
+        assert_eq!(rust.image, "ghcr.io/acme/rust:9.9.9");
+        unsafe {
+            std::env::remove_var("CAT_HERDER_HARNESS_RUST_IMAGE");
+        }
+        // Blank/unset falls back to the default.
+        assert_eq!(
+            CatalogDefaults::from_env().harness_rust_image,
+            DEFAULT_HARNESS_RUST_IMAGE
+        );
     }
 
     #[test]
     fn catalog_defaults_match_historical_values() {
         let d = CatalogDefaults::default();
         assert_eq!(d.harness_image, DEFAULT_HARNESS_IMAGE);
+        assert_eq!(d.harness_rust_image, DEFAULT_HARNESS_RUST_IMAGE);
         assert_eq!(d.concurrency("agent-codeact"), 8);
         assert_eq!(d.concurrency("agent-reviewer"), 4);
         assert_eq!(d.concurrency("agent-docs"), 4);
+        assert_eq!(d.concurrency("agent-rust"), 4);
         // Unknown agent → safe fallback.
         assert_eq!(d.concurrency("agent-unknown"), 1);
     }
@@ -186,6 +257,7 @@ mod tests {
         assert!(
             agents
                 .iter()
+                .filter(|a| a.id != "agent-rust")
                 .all(|a| a.image == "ghcr.io/acme/harness:9.9.9")
         );
         let codeact = agents.iter().find(|a| a.id == "agent-codeact").unwrap();

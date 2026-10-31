@@ -91,6 +91,8 @@ pub struct Run {
     pub actor: Option<String>,
     /// Agent/model + repository + language context (optional, trigger-provided).
     pub model: Option<String>,
+    /// Harness image to run this execution on (per-agent). `None` = global default.
+    pub image: Option<String>,
     pub repo: Option<String>,
     pub language: Option<String>,
     /// A configurable workflow to run (its id), used when `kind == Workflow` (§7).
