@@ -37,6 +37,30 @@ export function useRun(id: string | undefined) {
   })
 }
 
+export function useRunDiff(id: string | undefined) {
+  return useQuery({
+    queryKey: ['runs', id, 'diff'],
+    queryFn: () => api.getRunDiff(Number(id)),
+    enabled: id != null,
+  })
+}
+
+export function useRunApproval(id: string | undefined) {
+  return useQuery({
+    queryKey: ['runs', id, 'approval'],
+    queryFn: () => api.getRunApproval(Number(id)),
+    enabled: id != null,
+  })
+}
+
+export function useRunReview(id: string | undefined) {
+  return useQuery({
+    queryKey: ['runs', id, 'review'],
+    queryFn: () => api.getRunReview(Number(id)),
+    enabled: id != null,
+  })
+}
+
 export function useProviders() {
   return useQuery({ queryKey: ['providers'], queryFn: () => api.listProviders() })
 }

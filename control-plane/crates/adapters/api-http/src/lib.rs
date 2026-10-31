@@ -11,11 +11,13 @@ use axum::{
     routing::{get, post, put},
 };
 use axum_extra::extract::cookie::CookieJar;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use cat_herder_application::{
-    Completion, Outcome, complete_run, issue_budget, respond_approval, start_run,
+    Completion, Outcome, complete_run, decide_review, issue_budget, request_review,
+    respond_approval, review_feedback_task_spec, start_run,
 };
 use cat_herder_credential_broker::CredentialBrokerService;
 use cat_herder_credential_broker_rpc::RemoteCredentialBroker;
@@ -23,13 +25,15 @@ use cat_herder_domain::api::{
     AgentTemplate, CreateRunRequest, EventListResponse, EventResponse, RunResponse, Session,
     SessionRun, SessionSummary, repo_identity_from_url,
 };
-use cat_herder_domain::entities::{ApprovalStatus, Run, RunId, RunState, Usage};
+use cat_herder_domain::entities::{
+    ApprovalStatus, Review, ReviewStatus, ReviewVerdict, Run, RunId, RunState, Usage,
+};
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, DedupRepository, EventBus,
-    EventRepository, GitRepoRepository, MintedCredential, RunRepository, RunRequest,
-    SessionRepository, SettingRepository,
+    EventRepository, GitRepoRepository, MintedCredential, ReviewRepository, RunRepository,
+    RunRequest, SessionRepository, SettingRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
 use cat_herder_store_inmemory::{
@@ -46,7 +50,7 @@ pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
     AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, CredentialGrantRepo, EventRepo,
-    GitRepoRepo, ModelRepo, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
+    GitRepoRepo, ModelRepo, ProviderRepo, ReviewRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
     TransitionRepo,
 };
 pub use trigger::{
@@ -137,6 +141,8 @@ pub struct AppState {
     pub transitions: TransitionRepo,
     pub checkpoints: CheckpointRepo,
     pub approvals: ApprovalRepo,
+    /// Durable result reviews (`PLAN.md` §10).
+    pub reviews: ReviewRepo,
     /// The JIT credential broker (`PLAN.md` §11.3). Remote (gRPC) when a broker endpoint
     /// is configured; otherwise the in-process service with an empty issuer map (whose
     /// `mint` fails gracefully and the runtime falls back to a registered repo token or
@@ -207,6 +213,7 @@ impl Default for AppState {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(Default::default()),
             approvals: ApprovalRepo::InMemory(Default::default()),
+            reviews: ReviewRepo::InMemory(Default::default()),
             broker,
             budgets: BudgetRepo::InMemory(Default::default()),
             budget_counter: BudgetCounterImpl::InMemory(Default::default()),
@@ -243,6 +250,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/runs/{id}/events/stream", get(stream_run_events))
         .route("/v1/approvals/{id}/respond", post(respond_approval_handler))
+        .route("/v1/reviews", get(list_reviews))
+        .route("/v1/reviews/{id}/respond", post(respond_review_handler))
+        .route("/v1/runs/{id}/diff", get(get_run_diff))
+        .route("/v1/runs/{id}/approval", get(get_run_approval))
+        .route("/v1/runs/{id}/review", get(get_run_review))
         .route("/v1/webhooks/generic", post(webhook_generic))
         .route("/v1/webhooks/github", post(webhook_github))
         .route("/v1/webhooks/gitlab", post(webhook_gitlab))
@@ -654,6 +666,295 @@ async fn respond_approval_handler(
     })))
 }
 
+/// Request body for `POST /v1/reviews/{id}/respond` (`PLAN.md` §10). `verdict` is
+/// `approved` | `rejected` | `changes_requested`; `feedback` carries the reviewer's
+/// comments (required for change requests).
+#[derive(Debug, serde::Deserialize)]
+pub struct RespondReviewRequest {
+    pub verdict: ReviewVerdict,
+    #[serde(default)]
+    pub feedback: Option<String>,
+}
+
+/// Millis-since-epoch for a [`std::time::SystemTime`] (wire form for review timing).
+fn to_millis(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// List the result-review queue (`PLAN.md` §10): pending reviews, oldest first,
+/// enriched with each run's task + report + PR link so a reviewer can see what they
+/// are reviewing before responding.
+async fn list_reviews(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    require_role(&state, &jar, Decision::ResultReview, Default::default()).await?;
+
+    let reviews = state
+        .reviews
+        .list_pending()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::with_capacity(reviews.len());
+    for review in reviews {
+        let run = state.repo.get(review.run_id).await.ok().flatten();
+        out.push(serde_json::json!({
+            "id": review.id,
+            "run_id": review.run_id.0,
+            "status": review.status,
+            "verdict": review.verdict,
+            "reviewer": review.reviewer,
+            "feedback": review.feedback,
+            "created_at": to_millis(review.created_at),
+            "reviewed_at": review.reviewed_at.map(to_millis),
+            "deadline_at": to_millis(review.deadline_at),
+            "task_spec": run.as_ref().map(|r| r.task_spec.clone()),
+            "report": run.as_ref().and_then(|r| r.report.clone()),
+            "pr_url": run.as_ref().and_then(|r| r.pr_url.clone()),
+        }));
+    }
+    Ok(Json(out))
+}
+
+/// Record a reviewer's verdict on a result review (§10). `approved` moves the run to
+/// `Reviewed`; `rejected`/`changes_requested` move it to `Rejected` and spawn a
+/// follow-up run carrying the feedback as its task spec.
+async fn respond_review_handler(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+    Json(req): Json<RespondReviewRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // §11.8: result review is an authorization decision ("who may mark a result
+    // reviewed/approved").
+    require_role(&state, &jar, Decision::ResultReview, Default::default()).await?;
+
+    // 404 for unknown, 409 for an already-decided review.
+    let existing = state
+        .reviews
+        .get(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "review not found".to_string()))?;
+    if existing.status != ReviewStatus::Pending {
+        return Err((StatusCode::CONFLICT, "review already decided".to_string()));
+    }
+
+    // The reviewer's identity is the session's username (password admin or SSO login).
+    let token = jar.get("session").map(|c| c.value().to_string());
+    let reviewer = match token {
+        Some(t) => state.auth.session_username(&t).await,
+        None => None,
+    };
+
+    let review = decide_review(
+        &id,
+        req.verdict,
+        reviewer,
+        req.feedback.clone(),
+        &state.reviews,
+        &state.events,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Rejection / change requests feed back as a new run (review-feedback task_spec).
+    if matches!(
+        review.verdict,
+        Some(ReviewVerdict::Rejected | ReviewVerdict::ChangesRequested)
+    ) {
+        spawn_review_followup(&state, &review).await;
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "run_id": review.run_id.0,
+        "status": review.status,
+        "verdict": review.verdict,
+        "reviewer": review.reviewer,
+        "feedback": review.feedback,
+    })))
+}
+
+/// Spawn a follow-up run carrying the reviewer's feedback as its task spec (§10).
+/// Reuses the reviewed run's repo/model/language/etc. so the new run re-does the work
+/// with the requested changes. Best-effort: with no runtime (or a missing parent) the
+/// review still stands, just without a follow-up run.
+async fn spawn_review_followup(state: &AppState, review: &Review) {
+    let Some(runtime) = &state.runtime else {
+        return;
+    };
+    let Ok(Some(parent)) = state.repo.get(review.run_id).await else {
+        return;
+    };
+    let task_spec = review_feedback_task_spec(
+        &parent.task_spec,
+        parent.id,
+        review.verdict.unwrap_or(ReviewVerdict::ChangesRequested),
+        review.reviewer.as_deref(),
+        review.feedback.as_deref(),
+    );
+    let req = RunRequest {
+        kind: parent.kind,
+        task_spec,
+        dedup_key: String::new(),
+        max_concurrency: parent.max_concurrency,
+        trigger: "review".into(),
+        actor: parent.actor.clone(),
+        model: parent.model.clone(),
+        repo: parent.repo.clone(),
+        language: parent.language.clone(),
+        budget: None,
+    };
+    match start_run(
+        req,
+        runtime,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+        &state.broker,
+    )
+    .await
+    {
+        Ok(run) => eprintln!(
+            "spawned review follow-up run {} for review {}",
+            run.id.0, review.id
+        ),
+        Err(e) => eprintln!("review follow-up run failed for review {}: {e}", review.id),
+    }
+}
+
+/// Decode a base64 file content blob to UTF-8 text for the diff view (best-effort:
+/// binary files yield `None`).
+fn decode_base64_text(b64: &str) -> Option<String> {
+    let bytes = STANDARD.decode(b64).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// The workspace diff for a run — the changed files the harness reported on
+/// `finished` (stored in the `agent.finished` event), with base64 content decoded to
+/// text for display. Empty `changes` when the run produced no reviewable output.
+async fn get_run_diff(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    // The diff is the `changes` payload of the latest `agent.finished` event.
+    let events = state
+        .events
+        .list(run_id, 0, 1000)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let changes = events
+        .iter()
+        .rev()
+        .find(|e| e.event_type == event_type::AGENT_FINISHED)
+        .and_then(|e| e.payload.get("changes").cloned())
+        .and_then(|v| serde_json::from_value::<Vec<FileChange>>(v).ok())
+        .unwrap_or_default();
+
+    let view: Vec<serde_json::Value> = changes
+        .iter()
+        .map(|fc| {
+            let content = fc
+                .content_base64
+                .as_deref()
+                .and_then(decode_base64_text);
+            serde_json::json!({
+                "path": fc.path,
+                "status": fc.status,
+                "content": content,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "changes": view })))
+}
+
+/// The pending approval for a run (the interrupt checkpoint + pending tool call), or
+/// `404` when the run has none. This is the "de-blind" view an approver reads from the
+/// deep link before responding.
+async fn get_run_approval(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    let approval = state
+        .approvals
+        .list_pending()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .into_iter()
+        .find(|a| a.run_id == run_id)
+        .ok_or((StatusCode::NOT_FOUND, "no pending approval".to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "id": approval.id,
+        "run_id": approval.run_id.0,
+        "status": approval.status,
+        "resume_token": approval.resume_token,
+        "payload": approval.payload,
+        "created_at": to_millis(approval.created_at),
+    })))
+}
+
+/// The pending review for a run (verdict options + deadline + feedback), or `404` when
+/// the run has none. This is the "de-blind" view a reviewer reads before responding.
+async fn get_run_review(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let run_id = RunId(id);
+    state
+        .repo
+        .get(run_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
+
+    let review = state
+        .reviews
+        .list_pending()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .into_iter()
+        .find(|r| r.run_id == run_id)
+        .ok_or((StatusCode::NOT_FOUND, "no pending review".to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "run_id": review.run_id.0,
+        "status": review.status,
+        "verdict": review.verdict,
+        "reviewer": review.reviewer,
+        "feedback": review.feedback,
+        "created_at": to_millis(review.created_at),
+        "deadline_at": to_millis(review.deadline_at),
+    })))
+}
+
 /// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the
 /// agent-projection event, then — for `finished`/`stuck` — advances the run's lifecycle,
 /// reclaims the sandbox, and (on success with a diff) opens a PR.
@@ -724,8 +1025,26 @@ pub(crate) async fn ingest_harness_event(
             // On success with a diff, open a PR in the background (the write token
             // lives here in the control plane, never in the sandbox).
             if outcome == Outcome::Succeeded {
+                let has_changes = changes.as_ref().is_some_and(|c| !c.is_empty());
                 maybe_open_pr(state, &run, report, changes).await;
+
+                // A run that produced reviewable changes (a diff/PR) enters the result
+                // review loop (§10): Succeeded -> AwaitingReview.
+                if has_changes {
+                    request_review_for_run(state, &run).await;
+                }
             }
+
+            // Re-fetch so the response reflects the review transition applied above
+            // (Succeeded -> AwaitingReview); the PR link still lands async in the
+            // background. A failure here leaves the already-recorded run unchanged.
+            let run = state
+                .repo
+                .get(run_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(run);
 
             Ok(RunResponse::from(&run))
         }
@@ -896,6 +1215,29 @@ fn pr_title(task_spec: &str) -> String {
         "cat-herder run".to_string()
     } else {
         first_line.chars().take(80).collect()
+    }
+}
+
+/// Enter a `Succeeded` run that produced reviewable changes into the result-review
+/// loop (§10). The deadline is configurable via `CAT_HERDER_REVIEW_DEADLINE_SECS`
+/// (default 72h). Best-effort — a failure here must not fail the already-recorded run.
+async fn request_review_for_run(state: &AppState, run: &Run) {
+    let deadline_secs = env_u32_or("CAT_HERDER_REVIEW_DEADLINE_SECS", 72 * 60 * 60) as u64;
+    let deadline_at =
+        std::time::SystemTime::now() + std::time::Duration::from_secs(deadline_secs);
+    if let Err(e) = request_review(
+        run.id,
+        deadline_at,
+        &state.reviews,
+        &state.events,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+    )
+    .await
+    {
+        eprintln!("review request failed for run {}: {e}", run.id.0);
     }
 }
 

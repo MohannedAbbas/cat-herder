@@ -365,6 +365,378 @@ async fn respond_approval_approves_and_resumes_run() {
     assert_eq!(decided.response.as_deref(), Some("go ahead"));
 }
 
+// --- result review --------------------------------------------------------
+
+#[tokio::test]
+async fn list_reviews_requires_auth() {
+    let (status, _) = send(app(), "/v1/reviews").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn respond_review_unknown_id_returns_404() {
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
+        router(state),
+        &token,
+        "/v1/reviews/nope/respond",
+        r#"{"verdict":"approved"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn respond_review_already_decided_returns_409() {
+    use cat_herder_domain::entities::{Review, ReviewStatus, ReviewVerdict, RunId};
+    use cat_herder_domain::ports::ReviewRepository;
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    state
+        .reviews
+        .create(&Review {
+            id: "decided-1".into(),
+            run_id: RunId(1),
+            status: ReviewStatus::Decided,
+            verdict: Some(ReviewVerdict::Approved),
+            reviewer: Some("octocat".into()),
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: Some(SystemTime::now()),
+            deadline_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
+        router(state),
+        &token,
+        "/v1/reviews/decided-1/respond",
+        r#"{"verdict":"rejected"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn respond_review_approves_and_reviews_run() {
+    use cat_herder_domain::entities::{
+        Review, ReviewStatus, Run, RunId, RunKind, RunState, ReviewVerdict,
+    };
+    use cat_herder_domain::ports::{ReviewRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    // A run awaiting review + a pending review.
+    let run = Run {
+        id: RunId(42),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingReview,
+        task_spec: "fix the bug".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: Some("https://github.com/org/repo/pull/1".into()),
+        report: Some("# Done".into()),
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .reviews
+        .create(&Review {
+            id: "pending-1".into(),
+            run_id: RunId(42),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
+        router(state.clone()),
+        &token,
+        "/v1/reviews/pending-1/respond",
+        r#"{"verdict":"approved"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The run was reviewed and the verdict recorded with the reviewer identity.
+    assert_eq!(
+        state.repo.get(RunId(42)).await.unwrap().unwrap().state,
+        RunState::Reviewed
+    );
+    let decided = state.reviews.get("pending-1").await.unwrap().unwrap();
+    assert_eq!(decided.status, ReviewStatus::Decided);
+    assert_eq!(decided.verdict, Some(ReviewVerdict::Approved));
+    assert_eq!(decided.reviewer.as_deref(), Some("admin"));
+}
+
+#[tokio::test]
+async fn list_reviews_returns_pending_queue_with_run_context() {
+    use cat_herder_domain::entities::{Review, ReviewStatus, Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::{ReviewRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(7),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingReview,
+        task_spec: "refactor the parser".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .reviews
+        .create(&Review {
+            id: "pending-1".into(),
+            run_id: RunId(7),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+
+    let token = login_token(&state).await;
+    let app = router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/reviews")
+                .header("cookie", format!("session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], "pending-1");
+    assert_eq!(list[0]["run_id"], 7);
+    assert_eq!(list[0]["task_spec"], "refactor the parser");
+    assert_eq!(list[0]["status"], "pending");
+}
+
+// --- result review + diff/approval/review deep-link views ------------------
+
+#[tokio::test]
+async fn get_run_diff_returns_decoded_changes() {
+    use cat_herder_domain::entities::{Run, RunId, RunKind, RunState};
+    use cat_herder_domain::events::Event;
+    use cat_herder_domain::ports::{EventRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(42),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingReview,
+        task_spec: "fix".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .events
+        .append(
+            RunId(42),
+            &Event::new(
+                RunId(42),
+                "agent.finished",
+                None,
+                serde_json::json!({
+                    "changes": [
+                        { "path": "src/main.rs", "status": "modified", "content_base64": "aGVsbG8=" }
+                    ]
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = send(router(state), "/v1/runs/42/diff").await;
+    assert_eq!(status, StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let changes = value["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["path"], "src/main.rs");
+    assert_eq!(changes[0]["status"], "modified");
+    assert_eq!(changes[0]["content"], "hello");
+}
+
+#[tokio::test]
+async fn get_run_diff_unknown_run_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/diff").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_run_approval_returns_pending_approval() {
+    use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::{ApprovalRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(7),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingInput,
+        task_spec: "needs approval".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .approvals
+        .create(&ApprovalRequest {
+            id: "ap-1".into(),
+            run_id: RunId(7),
+            resume_token: "ckpt-42".into(),
+            payload: serde_json::json!({ "tool": "push", "args": { "branch": "main" } }),
+            status: ApprovalStatus::Pending,
+            response: None,
+            created_at: SystemTime::now(),
+            responded_at: None,
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = send(router(state), "/v1/runs/7/approval").await;
+    assert_eq!(status, StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["id"], "ap-1");
+    assert_eq!(value["run_id"], 7);
+    assert_eq!(value["resume_token"], "ckpt-42");
+    assert_eq!(value["payload"]["tool"], "push");
+}
+
+#[tokio::test]
+async fn get_run_approval_none_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/approval").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_run_review_returns_pending_review() {
+    use cat_herder_domain::entities::{Review, ReviewStatus, Run, RunId, RunKind, RunState};
+    use cat_herder_domain::ports::{ReviewRepository, RunRepository};
+    use std::time::SystemTime;
+
+    let state = AppState::default();
+    let run = Run {
+        id: RunId(9),
+        kind: RunKind::Agent,
+        state: RunState::AwaitingReview,
+        task_spec: "review me".into(),
+        session_id: None,
+        max_concurrency: 1,
+        created_at: SystemTime::now(),
+        trigger: "api".into(),
+        actor: None,
+        model: None,
+        repo: None,
+        language: None,
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    state.repo.save(&run).await.unwrap();
+    state
+        .reviews
+        .create(&Review {
+            id: "rev-1".into(),
+            run_id: RunId(9),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = send(router(state), "/v1/runs/9/review").await;
+    assert_eq!(status, StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["id"], "rev-1");
+    assert_eq!(value["run_id"], 9);
+    assert_eq!(value["status"], "pending");
+    assert!(value["deadline_at"].is_number());
+}
+
+#[tokio::test]
+async fn get_run_review_none_returns_404() {
+    let (status, _) = send(app(), "/v1/runs/999/review").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn webhook_without_runtime_returns_503() {
     let (status, _) = post_json(

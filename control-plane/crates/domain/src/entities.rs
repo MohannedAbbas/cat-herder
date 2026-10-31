@@ -50,6 +50,14 @@ pub enum ReviewVerdict {
     ChangesRequested,
 }
 
+/// Whether a result review has been decided (`PLAN.md` §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStatus {
+    Pending,
+    Decided,
+}
+
 /// A single execution (agent or workflow).
 #[derive(Debug, Clone)]
 pub struct Run {
@@ -96,13 +104,23 @@ pub struct Checkpoint {
     pub occurred_at: SystemTime,
 }
 
-/// Result-review decision (see `PLAN.md` §10).
+/// A durable result-review request (see `PLAN.md` §10). Created when a run that
+/// produced reviewable changes (a diff/PR) reaches `Succeeded`; the run then enters
+/// `AwaitingReview`. `decide` records the reviewer's verdict (`approved`/`rejected`/
+/// `changes_requested`) and the run leaves via `Reviewed`/`Rejected`. `deadline_at`
+/// is the escalation horizon — a review still `Pending` past it escalates (the
+/// notify → auto-approve/reject policy is a follow-on, as with §10 approvals).
 #[derive(Debug, Clone)]
-pub struct ReviewDecision {
+pub struct Review {
+    pub id: String,
     pub run_id: RunId,
-    pub verdict: ReviewVerdict,
-    pub feedback: String,
-    pub reviewed_at: SystemTime,
+    pub status: ReviewStatus,
+    pub verdict: Option<ReviewVerdict>,
+    pub reviewer: Option<String>,
+    pub feedback: Option<String>,
+    pub created_at: SystemTime,
+    pub reviewed_at: Option<SystemTime>,
+    pub deadline_at: SystemTime,
 }
 
 /// Whether a human-in-the-loop approval has been decided, and how.

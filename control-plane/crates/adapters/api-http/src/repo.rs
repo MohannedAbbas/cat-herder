@@ -6,28 +6,29 @@ use cat_herder_domain::api::{
     AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool,
 };
 use cat_herder_domain::entities::{
-    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Run, RunId,
+    ApprovalRequest, ApprovalStatus, Checkpoint, CredentialGrant, GitRepo, Review, ReviewVerdict,
+    Run, RunId,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, ApprovalRepository, AuditRepository, CheckpointRepository,
     CredentialGrantRepository, DomainResult, EventRepository, GitRepoRepository, ModelRepository,
-    ProviderRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
-    TransitionRepository,
+    ProviderRepository, ReviewRepository, RunRepository, SessionRepository, SettingRepository,
+    ToolRepository, TransitionRepository,
 };
 use cat_herder_store_inmemory::{
     InMemoryAgentRepository, InMemoryApprovalRepository, InMemoryAuditRepository,
     InMemoryCheckpointRepository, InMemoryCredentialGrantRepository, InMemoryEventRepository,
     InMemoryGitRepoRepository, InMemoryModelRepository, InMemoryProviderRepository,
-    InMemoryRunRepository, InMemorySessionRepository, InMemorySettingRepository,
-    InMemoryToolRepository, InMemoryTransitionRepository,
+    InMemoryReviewRepository, InMemoryRunRepository, InMemorySessionRepository,
+    InMemorySettingRepository, InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
     PostgresCheckpointRepository, PostgresCredentialGrantRepository, PostgresEventRepository,
     PostgresGitRepoRepository, PostgresModelRepository, PostgresProviderRepository,
-    PostgresRunRepository, PostgresSessionRepository, PostgresSettingRepository,
-    PostgresToolRepository, PostgresTransitionRepository,
+    PostgresReviewRepository, PostgresRunRepository, PostgresSessionRepository,
+    PostgresSettingRepository, PostgresToolRepository, PostgresTransitionRepository,
 };
 
 #[derive(Clone)]
@@ -148,6 +149,55 @@ impl ApprovalRepository for ApprovalRepo {
         match self {
             ApprovalRepo::InMemory(r) => r.decide(id, status, response).await,
             ApprovalRepo::Postgres(p) => p.decide(id, status, response).await,
+        }
+    }
+
+    async fn list_pending(&self) -> DomainResult<Vec<ApprovalRequest>> {
+        match self {
+            ApprovalRepo::InMemory(r) => r.list_pending().await,
+            ApprovalRepo::Postgres(p) => p.list_pending().await,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ReviewRepo {
+    InMemory(InMemoryReviewRepository),
+    Postgres(PostgresReviewRepository),
+}
+
+impl ReviewRepository for ReviewRepo {
+    async fn create(&self, review: &Review) -> DomainResult<Review> {
+        match self {
+            ReviewRepo::InMemory(r) => r.create(review).await,
+            ReviewRepo::Postgres(p) => p.create(review).await,
+        }
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Review>> {
+        match self {
+            ReviewRepo::InMemory(r) => r.get(id).await,
+            ReviewRepo::Postgres(p) => p.get(id).await,
+        }
+    }
+
+    async fn list_pending(&self) -> DomainResult<Vec<Review>> {
+        match self {
+            ReviewRepo::InMemory(r) => r.list_pending().await,
+            ReviewRepo::Postgres(p) => p.list_pending().await,
+        }
+    }
+
+    async fn decide(
+        &self,
+        id: &str,
+        verdict: ReviewVerdict,
+        reviewer: Option<String>,
+        feedback: Option<String>,
+    ) -> DomainResult<Review> {
+        match self {
+            ReviewRepo::InMemory(r) => r.decide(id, verdict, reviewer, feedback).await,
+            ReviewRepo::Postgres(p) => p.decide(id, verdict, reviewer, feedback).await,
         }
     }
 }
@@ -560,5 +610,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decided.status, ApprovalStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn inmemory_review_repo_delegates() {
+        use cat_herder_domain::entities::{Review, ReviewStatus, ReviewVerdict};
+
+        let repo = ReviewRepo::InMemory(InMemoryReviewRepository::default());
+        let review = Review {
+            id: "r1".into(),
+            run_id: RunId(1),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        };
+        repo.create(&review).await.unwrap();
+        assert_eq!(repo.list_pending().await.unwrap().len(), 1);
+        let decided = repo
+            .decide(
+                "r1",
+                ReviewVerdict::Approved,
+                Some("octocat".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(decided.verdict, Some(ReviewVerdict::Approved));
+        assert!(repo.list_pending().await.unwrap().is_empty());
     }
 }

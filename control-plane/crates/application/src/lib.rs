@@ -9,13 +9,14 @@ use cat_herder_domain::api::{
     SessionRun, is_safe_repo_url, new_session_id, repo_identity_from_url,
 };
 use cat_herder_domain::entities::{
-    ApprovalRequest, ApprovalStatus, Budget, Run, RunId, RunState, Usage,
+    ApprovalRequest, ApprovalStatus, Budget, Review, ReviewStatus, ReviewVerdict, Run, RunId,
+    RunState, Usage,
 };
 use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
     AgentRuntime, ApprovalRepository, BudgetCounter, BudgetRepository, ConsumeOutcome,
-    CredentialBroker, DomainResult, EventBus, EventRepository, RunRepository, RunRequest,
-    SessionRepository, TransitionRepository,
+    CredentialBroker, DomainResult, EventBus, EventRepository, ReviewRepository, RunRepository,
+    RunRequest, SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::shard::shard_for;
@@ -568,6 +569,182 @@ where
     Ok(decided)
 }
 
+/// Render a review-feedback task spec for a follow-up run (`PLAN.md` §10). Rejection
+/// or change requests feed back as a new run whose `task_spec` carries the reviewer's
+/// verdict + comments, linked to the original run by the review event.
+pub fn review_feedback_task_spec(
+    original_task_spec: &str,
+    run_id: RunId,
+    verdict: ReviewVerdict,
+    reviewer: Option<&str>,
+    feedback: Option<&str>,
+) -> String {
+    let verdict_label = match verdict {
+        ReviewVerdict::Approved => "approved",
+        ReviewVerdict::Rejected => "rejected",
+        ReviewVerdict::ChangesRequested => "changes requested",
+    };
+    let reviewer = reviewer.unwrap_or("a reviewer");
+    let mut spec = format!(
+        "Address review feedback ({verdict_label}) from {reviewer} on run {}.\n",
+        run_id.0
+    );
+    if let Some(fb) = feedback.map(str::trim).filter(|s| !s.is_empty()) {
+        spec.push_str(&format!("Reviewer feedback:\n{fb}\n"));
+    }
+    spec.push_str(&format!("\nOriginal task:\n{original_task_spec}"));
+    spec
+}
+
+/// Use case: request a result review (`PLAN.md` §10). Persists a pending `Review`
+/// (with the escalation `deadline_at`) and advances a `Succeeded` run to
+/// `AwaitingReview`. Returns `Ok(None)` when the run is not in `Succeeded` — e.g. a
+/// re-delivered `finished` event whose run is already `AwaitingReview` — so a review
+/// is never created twice for the same run.
+#[allow(clippy::too_many_arguments)]
+pub async fn request_review<R, E, P, S, T, B>(
+    run_id: RunId,
+    deadline_at: SystemTime,
+    reviews: &R,
+    events: &E,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<Option<Review>>
+where
+    R: ReviewRepository,
+    E: EventRepository,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    // Only a run in `Succeeded` can enter review. Guard before creating the durable
+    // review so a duplicate `finished` event is a no-op.
+    let run = repo.get(run_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run {} not found", run_id.0),
+        )
+    })?;
+    if run.state != RunState::Succeeded {
+        return Ok(None);
+    }
+
+    let review = Review {
+        id: uuid::Uuid::new_v4().to_string(),
+        run_id,
+        status: ReviewStatus::Pending,
+        verdict: None,
+        reviewer: None,
+        feedback: None,
+        created_at: SystemTime::now(),
+        reviewed_at: None,
+        deadline_at,
+    };
+    let review = reviews.create(&review).await?;
+
+    // Record the request in the event log (carries the review id for the deep link).
+    let deadline_ms = deadline_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let event = Event::new(
+        run_id,
+        event_type::REVIEW_REQUESTED,
+        None,
+        serde_json::json!({
+            "review_id": review.id,
+            "deadline_at_ms": deadline_ms,
+        }),
+    );
+    let stored = events.append(run_id, &event).await?;
+    publish_event(bus, &stored).await;
+
+    let mut run = run;
+    persist_transition(&mut run, RunState::AwaitingReview, transitions, bus).await?;
+    sessions.sync_run(&run).await?;
+    Ok(Some(review))
+}
+
+/// Use case: record a reviewer's verdict on a result review (`PLAN.md` §10).
+/// `Approved` → `Reviewed`; `Rejected`/`ChangesRequested` → `Rejected`. The verdict,
+/// reviewer, and feedback are persisted on the `Review`; a `review.decided` event is
+/// appended. Returns the decided review.
+#[allow(clippy::too_many_arguments)]
+pub async fn decide_review<R, E, P, S, T, B>(
+    review_id: &str,
+    verdict: ReviewVerdict,
+    reviewer: Option<String>,
+    feedback: Option<String>,
+    reviews: &R,
+    events: &E,
+    repo: &P,
+    sessions: &S,
+    transitions: &T,
+    bus: &B,
+) -> DomainResult<Review>
+where
+    R: ReviewRepository,
+    E: EventRepository,
+    P: RunRepository,
+    S: SessionRepository,
+    T: TransitionRepository,
+    B: EventBus,
+{
+    let review = reviews.get(review_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("review {review_id} not found"),
+        )
+    })?;
+    if review.status != ReviewStatus::Pending {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("review {review_id} already decided"),
+        )
+        .into());
+    }
+
+    let decided = reviews
+        .decide(review_id, verdict, reviewer.clone(), feedback.clone())
+        .await?;
+
+    let event = Event::new(
+        review.run_id,
+        event_type::REVIEW_DECIDED,
+        None,
+        serde_json::json!({
+            "review_id": review.id,
+            "verdict": verdict,
+            "reviewer": reviewer,
+            "feedback": feedback,
+        }),
+    );
+    let stored = events.append(review.run_id, &event).await?;
+    publish_event(bus, &stored).await;
+
+    // Advance the lifecycle: Approved -> Reviewed; otherwise -> Rejected.
+    let run = repo.get(review.run_id).await?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run {} not found", review.run_id.0),
+        )
+    })?;
+    let mut run = run;
+    let target = match verdict {
+        ReviewVerdict::Approved => RunState::Reviewed,
+        ReviewVerdict::Rejected | ReviewVerdict::ChangesRequested => RunState::Rejected,
+    };
+    if run.state == RunState::AwaitingReview {
+        persist_transition(&mut run, target, transitions, bus).await?;
+        sessions.sync_run(&run).await?;
+    }
+
+    Ok(decided)
+}
+
 /// Issue a run's budget lease at start (`PLAN.md` §12): persist the durable cap and
 /// zero the atomic counter so the metering proxy enforces it from the first model call.
 /// A run with no cap (`None`/`0`) is unbounded — a no-op here.
@@ -698,8 +875,8 @@ mod tests {
     use cat_herder_domain::reconcile::RuntimeStatus;
     use cat_herder_store_inmemory::{
         InMemoryApprovalRepository, InMemoryBudgetCounter, InMemoryBudgetRepository,
-        InMemoryEventRepository, InMemoryRunRepository, InMemorySessionRepository,
-        InMemoryTransitionRepository,
+        InMemoryEventRepository, InMemoryReviewRepository, InMemoryRunRepository,
+        InMemorySessionRepository, InMemoryTransitionRepository,
     };
 
     struct StubRuntime {
@@ -1576,6 +1753,332 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    /// Drive a run to `Succeeded` so the review use cases can operate on it.
+    async fn run_to_succeeded() -> (
+        RunId,
+        InMemoryRunRepository,
+        InMemorySessionRepository,
+        InMemoryEventRepository,
+        InMemoryTransitionRepository,
+    ) {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+        complete_run(
+            run.id,
+            Outcome::Succeeded,
+            Completion {
+                report: Some("# Done".into()),
+                usage: None,
+            },
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+        (run.id, repo, sessions, events, transitions)
+    }
+
+    #[test]
+    fn review_feedback_task_spec_embeds_verdict_and_feedback() {
+        let spec = review_feedback_task_spec(
+            "Fix the bug",
+            RunId(42),
+            ReviewVerdict::ChangesRequested,
+            Some("octocat"),
+            Some("add a test"),
+        );
+        assert!(spec.contains("changes requested"));
+        assert!(spec.contains("octocat"));
+        assert!(spec.contains("add a test"));
+        assert!(spec.contains("Fix the bug"));
+        assert!(spec.contains("run 42"));
+    }
+
+    #[tokio::test]
+    async fn request_review_enters_awaiting_review_and_persists() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::Succeeded
+        );
+
+        let deadline = SystemTime::now() + std::time::Duration::from_secs(3600);
+        let review = request_review(
+            run_id,
+            deadline,
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap()
+        .expect("review requested");
+
+        assert_eq!(review.status, ReviewStatus::Pending);
+        assert_eq!(review.run_id, run_id);
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::AwaitingReview
+        );
+        assert_eq!(reviews.list_pending().await.unwrap().len(), 1);
+        let types: Vec<String> = events
+            .list(run_id, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"review.requested".to_string()));
+        assert!(types.contains(&"run.awaiting_review".to_string()));
+    }
+
+    #[tokio::test]
+    async fn decide_review_approves_to_reviewed() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+        let review = request_review(
+            run_id,
+            SystemTime::now(),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap()
+        .expect("review requested");
+
+        let decided = decide_review(
+            &review.id,
+            ReviewVerdict::Approved,
+            Some("octocat".into()),
+            None,
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decided.status, ReviewStatus::Decided);
+        assert_eq!(decided.verdict, Some(ReviewVerdict::Approved));
+        assert_eq!(decided.reviewer.as_deref(), Some("octocat"));
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::Reviewed
+        );
+        assert!(reviews.list_pending().await.unwrap().is_empty());
+        let types: Vec<String> = events
+            .list(run_id, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"review.decided".to_string()));
+        assert!(types.contains(&"run.reviewed".to_string()));
+    }
+
+    #[tokio::test]
+    async fn decide_review_changes_requested_rejects() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+        let review = request_review(
+            run_id,
+            SystemTime::now(),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap()
+        .expect("review requested");
+
+        let decided = decide_review(
+            &review.id,
+            ReviewVerdict::ChangesRequested,
+            None,
+            Some("please fix".into()),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decided.verdict, Some(ReviewVerdict::ChangesRequested));
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::Rejected
+        );
+        let types: Vec<String> = events
+            .list(run_id, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
+        assert!(types.contains(&"run.rejected".to_string()));
+    }
+
+    #[tokio::test]
+    async fn decide_review_unknown_id_errors() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+        assert!(
+            decide_review(
+                "nope",
+                ReviewVerdict::Approved,
+                None,
+                None,
+                &reviews,
+                &events,
+                &repo,
+                &sessions,
+                &transitions,
+                &StubBus,
+            )
+            .await
+            .is_err()
+        );
+        // The run is untouched.
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn decide_review_already_decided_errors() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+        let review = request_review(
+            run_id,
+            SystemTime::now(),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap()
+        .expect("review requested");
+        decide_review(
+            &review.id,
+            ReviewVerdict::Approved,
+            None,
+            None,
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            decide_review(
+                &review.id,
+                ReviewVerdict::Rejected,
+                None,
+                None,
+                &reviews,
+                &events,
+                &repo,
+                &sessions,
+                &transitions,
+                &StubBus,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn request_review_is_idempotent_for_already_awaiting_review() {
+        let (run_id, repo, sessions, events, transitions) = run_to_succeeded().await;
+        let reviews = InMemoryReviewRepository::default();
+
+        let first = request_review(
+            run_id,
+            SystemTime::now(),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert!(first.is_some());
+        assert_eq!(
+            repo.get(run_id).await.unwrap().unwrap().state,
+            RunState::AwaitingReview
+        );
+
+        // A re-delivered `finished` event must not create a second review.
+        let second = request_review(
+            run_id,
+            SystemTime::now(),
+            &reviews,
+            &events,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+        )
+        .await
+        .unwrap();
+        assert!(second.is_none());
+        assert_eq!(reviews.list_pending().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

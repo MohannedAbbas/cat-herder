@@ -43,6 +43,10 @@ pub mod event_type {
     pub const APPROVAL_REQUESTED: &str = "approval.requested";
     pub const APPROVAL_RESPONDED: &str = "approval.responded";
 
+    // Result review (PLAN.md §10).
+    pub const REVIEW_REQUESTED: &str = "review.requested";
+    pub const REVIEW_DECIDED: &str = "review.decided";
+
     // Credential brokering (PLAN.md §11.3) — every mint/revoke is audited.
     pub const CREDENTIAL_MINTED: &str = "credential.minted";
     pub const CREDENTIAL_REVOKED: &str = "credential.revoked";
@@ -137,6 +141,18 @@ impl Event {
         Self::lifecycle(run, event_type::RUN_BUDGET_PAUSED)
     }
 
+    pub fn run_awaiting_review(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_AWAITING_REVIEW)
+    }
+
+    pub fn run_reviewed(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_REVIEWED)
+    }
+
+    pub fn run_rejected(run: &Run) -> Self {
+        Self::lifecycle(run, event_type::RUN_REJECTED)
+    }
+
     /// The lifecycle event for a run's *current* state. Used by the reconciler and
     /// the terminal-transition paths so every state change lands in the log exactly
     /// once, with the state it represents.
@@ -154,9 +170,9 @@ impl Event {
             Cancelled => Self::run_cancelled(run),
             AwaitingInput => Self::run_awaiting_input(run),
             BudgetPaused => Self::run_budget_paused(run),
-            // States without a wired event type yet fall back to a generic lifecycle
-            // event carrying the state, so nothing is silently dropped from the log.
-            _ => Self::lifecycle(run, "run.state"),
+            AwaitingReview => Self::run_awaiting_review(run),
+            Reviewed => Self::run_reviewed(run),
+            Rejected => Self::run_rejected(run),
         }
     }
 

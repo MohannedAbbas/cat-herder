@@ -149,3 +149,43 @@ export interface GitRepoWrite {
   token?: string
   writeToken?: string
 }
+
+/** A changed file in a run's workspace diff (`GET /v1/runs/{id}/diff`). */
+export interface FileChange {
+  path: string
+  /** `added` | `modified` | `deleted`. */
+  status: string
+  /** Decoded file content (text), or `null` for deleted / binary files. */
+  content: string | null
+}
+
+/** The workspace diff for a run. */
+export interface RunDiff {
+  changes: FileChange[]
+}
+
+export type ReviewVerdict = 'approved' | 'rejected' | 'changes_requested'
+
+/** A pending result review (`GET /v1/runs/{id}/review`). */
+export interface Review {
+  id: string
+  run_id: number
+  status: string
+  verdict: ReviewVerdict | null
+  reviewer: string | null
+  feedback: string | null
+  created_at: number
+  deadline_at: number
+}
+
+/** A pending human-in-the-loop approval (`GET /v1/runs/{id}/approval`). */
+export interface Approval {
+  id: string
+  run_id: number
+  status: string
+  /** The opaque LangGraph checkpoint id of the paused state. */
+  resume_token: string
+  /** The pending tool call / question shown to the approver. */
+  payload: unknown
+  created_at: number
+}

@@ -1,12 +1,16 @@
 import type {
   AgentTemplate,
+  Approval,
   AuditEntry,
   GitHost,
   GitRepo,
   GitRepoWrite,
   Model,
   Provider,
+  Review,
+  ReviewVerdict,
   Run,
+  RunDiff,
   RunRecord,
   RunState,
   Session,
@@ -299,6 +303,88 @@ const runs: RunRecord[] = [
     inputTokens: 0,
     outputTokens: 0,
   },
+  {
+    id: 5,
+    kind: 'agent',
+    state: 'awaiting_input',
+    trigger: 'api',
+    actor: 'octocat',
+    model: 'anthropic/claude-sonnet-4-6',
+    repo: 'org/auth-service',
+    language: 'rust',
+    sessionId: 'sess-01',
+    taskSpec: 'Push the fix to main and open a PR.',
+    createdAt: '2026-10-23T09:58:00Z',
+    startedAt: '2026-10-23T09:59:00Z',
+    finishedAt: null,
+    prUrl: null,
+    report: null,
+    inputTokens: 0,
+    outputTokens: 0,
+  },
+  {
+    id: 6,
+    kind: 'agent',
+    state: 'awaiting_review',
+    trigger: 'api',
+    actor: null,
+    model: 'openai/gpt-5.5',
+    repo: 'org/web-app',
+    language: 'typescript',
+    sessionId: 'sess-02',
+    taskSpec: 'Migrate the HTTP adapter from axum 0.7 to 0.8.',
+    createdAt: '2026-10-22T15:31:00Z',
+    startedAt: '2026-10-22T15:32:00Z',
+    finishedAt: '2026-10-22T16:12:00Z',
+    prUrl: null,
+    report: '## Summary\n\nMigrated the HTTP adapter from axum 0.7 to 0.8.\n',
+    inputTokens: 0,
+    outputTokens: 0,
+  },
+]
+
+// Workspace diffs keyed by run id, pending approvals, and pending reviews — the
+// deep-link views an approver/reviewer reads before responding (§10, §20).
+const diffs: Record<number, RunDiff> = {
+  6: {
+    changes: [
+      {
+        path: 'src/http.rs',
+        status: 'modified',
+        content: '// axum 0.8 handler\npub async fn handler() -> impl IntoResponse {\n    "ok"\n}\n',
+      },
+      {
+        path: 'README.md',
+        status: 'modified',
+        content: '# web-app\n\nMigrated to axum 0.8.\n',
+      },
+      { path: 'src/legacy.rs', status: 'deleted', content: null },
+    ],
+  },
+}
+
+const approvals: Approval[] = [
+  {
+    id: 'ap-1',
+    run_id: 5,
+    status: 'pending',
+    resume_token: '1ef9c0b0-0000-4000-8000-000000000000',
+    payload: { tool: 'git.push', args: { branch: 'main', remote: 'origin' } },
+    created_at: Date.parse('2026-10-23T09:59:30Z'),
+  },
+]
+
+const reviews: Review[] = [
+  {
+    id: 'rev-1',
+    run_id: 6,
+    status: 'pending',
+    verdict: null,
+    reviewer: null,
+    feedback: null,
+    created_at: Date.parse('2026-10-22T16:12:00Z'),
+    deadline_at: Date.parse('2026-10-25T16:12:00Z'),
+  },
 ]
 
 // Active → terminal priority for deriving a session's aggregate status.
@@ -344,10 +430,9 @@ let tools: Tool[] = [
 
 let repos: GitRepo[] = []
 
-let gitHosts: GitHost[] = [
+const gitHosts: GitHost[] = [
   { host: 'github.com', label: 'GitHub' },
 ]
-
 function aggregateStatus(runs: Run[]): RunState | 'idle' {
   if (runs.length === 0) return 'idle'
   const present = new Set(runs.map((r) => r.state))
@@ -386,7 +471,28 @@ export const mockApi: CatHerderApi = {
     return r ? delay(r) : Promise.reject(new Error(`run ${id} not found`))
   },
 
-  login: (_u, _p) => {
+  getRunDiff: (id) => delay(diffs[id] ?? { changes: [] }),
+  getRunApproval: (id) => delay(approvals.find((a) => a.run_id === id) ?? null),
+  getRunReview: (id) => delay(reviews.find((r) => r.run_id === id) ?? null),
+  respondApproval: (id, approve) => {
+    const a = approvals.find((x) => x.id === id)
+    if (!a) return Promise.reject(new Error(`approval ${id} not found`))
+    a.status = approve ? 'approved' : 'rejected'
+    recordAudit('approval.respond', 'approval', id)
+    return delay(undefined)
+  },
+  respondReview: (id, verdict: ReviewVerdict, feedback) => {
+    const r = reviews.find((x) => x.id === id)
+    if (!r) return Promise.reject(new Error(`review ${id} not found`))
+    r.status = 'decided'
+    r.verdict = verdict
+    r.reviewer = 'admin'
+    r.feedback = feedback ?? null
+    recordAudit('review.respond', 'review', id)
+    return delay(undefined)
+  },
+
+  login: () => {
     authenticated = true
     return delay(undefined)
   },

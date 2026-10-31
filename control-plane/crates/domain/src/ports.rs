@@ -6,8 +6,8 @@
 
 use crate::api::{AgentTemplate, AuditEntry, Model, Provider, Session, SessionRun, Tool};
 use crate::entities::{
-    ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, GitRepo, Run, RunId,
-    RunState,
+    ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, GitRepo, Review,
+    ReviewVerdict, Run, RunId, RunState,
 };
 use crate::events::Event;
 use crate::reconcile::RuntimeStatus;
@@ -166,6 +166,27 @@ pub trait ApprovalRepository {
         status: ApprovalStatus,
         response: Option<String>,
     ) -> DomainResult<ApprovalRequest>;
+    /// Every pending approval, oldest first (the approval queue).
+    async fn list_pending(&self) -> DomainResult<Vec<ApprovalRequest>>;
+}
+
+/// Durable result reviews (`PLAN.md` §10). A review is created when a run producing
+/// reviewable changes (a diff/PR) enters `AwaitingReview`; `decide` records the
+/// reviewer's verdict and the run leaves via `Reviewed`/`Rejected`.
+pub trait ReviewRepository {
+    /// Persist a new (pending) review request, assigning an id if empty.
+    async fn create(&self, review: &Review) -> DomainResult<Review>;
+    async fn get(&self, id: &str) -> DomainResult<Option<Review>>;
+    /// The review queue: every pending review, oldest first.
+    async fn list_pending(&self) -> DomainResult<Vec<Review>>;
+    /// Record the reviewer's verdict (and optional feedback) on a review.
+    async fn decide(
+        &self,
+        id: &str,
+        verdict: ReviewVerdict,
+        reviewer: Option<String>,
+        feedback: Option<String>,
+    ) -> DomainResult<Review>;
 }
 
 /// Fan-out transport for events (`PLAN.md` §9) — e.g. NATS JetStream. Best-effort:

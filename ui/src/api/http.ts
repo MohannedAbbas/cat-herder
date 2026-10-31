@@ -1,10 +1,13 @@
 import type {
   AgentTemplate,
+  Approval,
   AuditEntry,
   GitHost,
   GitRepo,
   Model,
   Provider,
+  Review,
+  RunDiff,
   RunRecord,
   Session,
   SessionSummary,
@@ -27,6 +30,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+/** Like `request`, but returns `null` for a 404 (used for optional per-run views). */
+async function requestOptional<T>(path: string): Promise<T | null> {
+  const res = await fetch(`${config.apiBaseUrl}${path}`, { credentials: 'include' })
+  if (res.status === 404) return null
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`GET ${path} failed: ${res.status} ${res.statusText}${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as T
+}
+
 function json(method: string, body?: unknown): RequestInit {
   return {
     method,
@@ -43,6 +57,18 @@ export const httpApi: CatHerderApi = {
   getAgent: (id) => request<AgentTemplate>(`/v1/agents/${id}`),
   listRuns: () => request<RunRecord[]>('/v1/runs'),
   getRun: (id) => request<RunRecord>(`/v1/runs/${id}`),
+
+  getRunDiff: (id) => request<RunDiff>(`/v1/runs/${id}/diff`),
+  getRunApproval: (id) => requestOptional<Approval>(`/v1/runs/${id}/approval`),
+  getRunReview: (id) => requestOptional<Review>(`/v1/runs/${id}/review`),
+  respondApproval: (id, approve, response) =>
+    request(`/v1/approvals/${id}/respond`, json('POST', { approve, response })).then(
+      () => undefined,
+    ),
+  respondReview: (id, verdict, feedback) =>
+    request(`/v1/reviews/${id}/respond`, json('POST', { verdict, feedback })).then(
+      () => undefined,
+    ),
 
   login: (username, password) =>
     request('/v1/auth/login', json('POST', { username, password })).then(() => undefined),

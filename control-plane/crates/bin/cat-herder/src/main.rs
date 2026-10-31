@@ -11,8 +11,8 @@ use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
     BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, DedupRepo,
     EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
-    KeySecretStore, ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, RunRepo,
-    SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
+    KeySecretStore, ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, ReviewRepo,
+    RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
@@ -29,16 +29,17 @@ use cat_herder_store_inmemory::{
     InMemoryBudgetCounter, InMemoryBudgetRepository, InMemoryCheckpointRepository,
     InMemoryCredentialGrantRepository, InMemoryDedupRepository, InMemoryEventRepository,
     InMemoryLeaseManager, InMemoryModelRepository, InMemoryProviderRepository,
-    InMemoryRunRepository, InMemorySettingRepository, InMemoryToolRepository,
-    InMemoryTransitionRepository,
+    InMemoryReviewRepository, InMemoryRunRepository, InMemorySettingRepository,
+    InMemoryToolRepository, InMemoryTransitionRepository,
 };
 use cat_herder_store_nats::{NatsEventBus, NatsLeaseManager};
 use cat_herder_store_postgres::{
     PostgresAgentRepository, PostgresApprovalRepository, PostgresAuditRepository,
     PostgresBudgetRepository, PostgresCheckpointRepository, PostgresCredentialGrantRepository,
     PostgresEventRepository, PostgresGitRepoRepository, PostgresModelRepository,
-    PostgresProviderRepository, PostgresRunRepository, PostgresSessionRepository,
-    PostgresSettingRepository, PostgresStore, PostgresToolRepository, PostgresTransitionRepository,
+    PostgresProviderRepository, PostgresReviewRepository, PostgresRunRepository,
+    PostgresSessionRepository, PostgresSettingRepository, PostgresStore, PostgresToolRepository,
+    PostgresTransitionRepository,
 };
 use cat_herder_store_redis::{RedisBudgetCounter, RedisDedupRepository};
 use tokio::sync::RwLock;
@@ -242,6 +243,7 @@ struct Repos {
     transitions: TransitionRepo,
     checkpoints: CheckpointRepo,
     approvals: ApprovalRepo,
+    reviews: ReviewRepo,
     grants: CredentialGrantRepo,
     budgets: BudgetRepo,
     agents: AgentRepo,
@@ -267,6 +269,7 @@ impl Repos {
             transitions: TransitionRepo::InMemory(transitions),
             checkpoints: CheckpointRepo::InMemory(InMemoryCheckpointRepository::default()),
             approvals: ApprovalRepo::InMemory(InMemoryApprovalRepository::default()),
+            reviews: ReviewRepo::InMemory(InMemoryReviewRepository::default()),
             grants: CredentialGrantRepo::InMemory(InMemoryCredentialGrantRepository::default()),
             budgets: BudgetRepo::InMemory(InMemoryBudgetRepository::default()),
             agents: AgentRepo::InMemory(InMemoryAgentRepository::new(models)),
@@ -307,6 +310,7 @@ async fn build_repos(models: &HashMap<String, String>) -> Repos {
                         &store,
                     )),
                     approvals: ApprovalRepo::Postgres(PostgresApprovalRepository::new(&store)),
+                    reviews: ReviewRepo::Postgres(PostgresReviewRepository::new(&store)),
                     grants: CredentialGrantRepo::Postgres(PostgresCredentialGrantRepository::new(
                         &store,
                     )),
@@ -673,6 +677,7 @@ async fn main() {
         transitions: repos.transitions,
         checkpoints: repos.checkpoints,
         approvals: repos.approvals,
+        reviews: repos.reviews,
         broker,
         budgets: repos.budgets,
         budget_counter,

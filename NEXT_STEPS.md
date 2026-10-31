@@ -234,16 +234,50 @@ Brokered credentials and a real budget hard-stop; both are called out as
   `docs/design/triggers.md`. ⬜ Deferred: task templates (§5, with #13), cron scheduler,
   per-source secret vaulting, service-to-service mTLS.
 
-- [ ] **11. Result-review loop (§10).**
+- [x] **11. Result-review loop (§10).**
   `AwaitingReview`/`Reviewed`/`Rejected` exist but nothing enters or leaves them.
   *Done when:* a run producing a diff/PR enters `AwaitingReview` with a deadline +
   escalation; a reviewer's verdict (incl. `changes_requested` feedback) is persisted
   as `ReviewDecision` and feeds a re-run via a review-feedback `task_spec`.
+  *Status:* ✅ landed — ✅ `Review` entity (id, `status` pending/decided, `verdict`,
+  `reviewer`, `feedback`, `created_at`/`reviewed_at`/`deadline_at`) + `ReviewStatus` +
+  `ReviewRepository` port (`create`/`get`/`list_pending`/`decide`) with Postgres
+  (migration `0027`, `PostgresReviewRepository`) + in-memory (`InMemoryReviewRepository`)
+  + `ReviewRepo` selector; ✅ `review.requested`/`review.decided` events + lifecycle
+  events `run.awaiting_review`/`run.reviewed`/`run.rejected` wired into
+  `Event::lifecycle_for`; ✅ **enter the loop** — a `finished` event that produced
+  non-empty changes transitions `Succeeded -> AwaitingReview` (no changes → stays
+  `Succeeded`); ✅ **review queue + verdict** — `GET /v1/reviews` (pending, oldest
+  first, enriched with the run's task/report/PR link) and
+  `POST /v1/reviews/{id}/respond` (`approved` → `Reviewed`; `rejected`/
+  `changes_requested` → `Rejected`), gated by `Decision::ResultReview`, the reviewer
+  identity captured from the session; ✅ **re-run loop** — reject/change-requests spawn
+  a follow-up run whose `task_spec` is the rendered review feedback (`trigger: review`),
+  linked by the `review.decided` event. ⬜ Deferred: deadline **escalation** (notify →
+  auto-approve/reject past `deadline_at`, which is persisted but not yet acted on — the
+  same follow-on as §10 approvals), and the read-only diff view (#12) that de-blinds the
+  reviewer. Not yet exercised end-to-end against a live cluster/LLM.
 
-- [ ] **12. Read-only run/diff view — de-blind approvals (§10, §20).**
+- [x] **12. Read-only run/diff view — de-blind approvals (§10, §20).**
   The UI renders the markdown report but has no diff view and no approval UI.
   *Done when:* an approver/reviewer can see the interrupt checkpoint, pending tool
   call, and workspace diff from the deep link before responding.
+  *Status:* ✅ landed — ✅ `GET /v1/runs/{id}/diff` returns the run's changed files
+  (the `agent.finished` `changes`, base64 content decoded to text); ✅
+  `GET /v1/runs/{id}/approval` returns the pending approval (interrupt `resume_token`
+  checkpoint + the pending tool-call `payload`) or `404`; ✅ `GET /v1/runs/{id}/review`
+  returns the pending review (verdict options + `deadline_at`) or `404`; ✅
+  `ApprovalRepository::list_pending` (Postgres + in-memory + selector) backs the
+  approval lookup; ✅ **run detail page** (`/runs/:id`) renders the workspace diff, the
+  approval panel (pending action + checkpoint + approve/reject with an optional
+  response), and the review panel (approve / request-changes / reject with feedback),
+  wiring the existing `POST /v1/approvals/{id}/respond` and `POST /v1/reviews/{id}/
+  respond` endpoints; UI types/client/hooks/mock extended + lint-clean. See
+  `docs/design/de-blind.md`. ⬜ Deferred: the **interrupt-time** workspace diff — the
+  harness reports changes only on `finished`, so an approver of a mid-run interrupt
+  still sees the checkpoint + pending tool call but not the diff-so-far (a harness
+  follow-on to collect + report changes on interrupt); dedicated approval/review queue
+  pages (the run deep link is the v1 surface).
 
 - [ ] **13. Configurable workflows + LangGraph run kind (§7).**
   `RunKind::Workflow` exists; `agent-harness/workflows/.gitkeep` is empty; no

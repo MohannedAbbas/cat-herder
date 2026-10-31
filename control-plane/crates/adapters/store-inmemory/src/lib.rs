@@ -11,14 +11,15 @@ use cat_herder_domain::api::{
 use cat_herder_domain::catalog;
 use cat_herder_domain::entities::{
     ApprovalRequest, ApprovalStatus, Budget, Checkpoint, CredentialGrant, CredentialGrantStatus,
-    GitRepo, Run, RunId,
+    GitRepo, Review, ReviewStatus, ReviewVerdict, Run, RunId,
 };
 use cat_herder_domain::events::Event;
 use cat_herder_domain::ports::{
     AgentRepository, ApprovalRepository, AuditRepository, BudgetCounter, BudgetRepository,
     CheckpointRepository, ConsumeOutcome, CredentialGrantRepository, DedupRepository, DomainResult,
     EventRepository, GitRepoRepository, LeaseManager, ModelRepository, ProviderRepository,
-    RunRepository, SessionRepository, SettingRepository, ToolRepository, TransitionRepository,
+    ReviewRepository, RunRepository, SessionRepository, SettingRepository, ToolRepository,
+    TransitionRepository,
 };
 use tokio::sync::RwLock;
 
@@ -187,6 +188,73 @@ impl ApprovalRepository for InMemoryApprovalRepository {
         approval.response = response;
         approval.responded_at = Some(std::time::SystemTime::now());
         Ok(approval.clone())
+    }
+
+    async fn list_pending(&self) -> DomainResult<Vec<ApprovalRequest>> {
+        let mut approvals: Vec<ApprovalRequest> = self
+            .inner
+            .read()
+            .await
+            .values()
+            .filter(|a| a.status == ApprovalStatus::Pending)
+            .cloned()
+            .collect();
+        approvals.sort_by_key(|a| a.created_at);
+        Ok(approvals)
+    }
+}
+
+/// In-memory result-review store (`PLAN.md` §10).
+#[derive(Clone, Default)]
+pub struct InMemoryReviewRepository {
+    inner: Arc<RwLock<HashMap<String, Review>>>,
+}
+
+impl ReviewRepository for InMemoryReviewRepository {
+    async fn create(&self, review: &Review) -> DomainResult<Review> {
+        self.inner
+            .write()
+            .await
+            .insert(review.id.clone(), review.clone());
+        Ok(review.clone())
+    }
+
+    async fn get(&self, id: &str) -> DomainResult<Option<Review>> {
+        Ok(self.inner.read().await.get(id).cloned())
+    }
+
+    async fn list_pending(&self) -> DomainResult<Vec<Review>> {
+        let mut reviews: Vec<Review> = self
+            .inner
+            .read()
+            .await
+            .values()
+            .filter(|r| r.status == ReviewStatus::Pending)
+            .cloned()
+            .collect();
+        reviews.sort_by_key(|r| r.created_at);
+        Ok(reviews)
+    }
+
+    async fn decide(
+        &self,
+        id: &str,
+        verdict: ReviewVerdict,
+        reviewer: Option<String>,
+        feedback: Option<String>,
+    ) -> DomainResult<Review> {
+        let mut map = self.inner.write().await;
+        let review =
+            map.get_mut(id)
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "review not found").into()
+                })?;
+        review.status = ReviewStatus::Decided;
+        review.verdict = Some(verdict);
+        review.reviewer = reviewer;
+        review.feedback = feedback;
+        review.reviewed_at = Some(std::time::SystemTime::now());
+        Ok(review.clone())
     }
 }
 
@@ -980,5 +1048,39 @@ mod tests {
         // After the TTL lapses the key is new again.
         tokio::time::advance(std::time::Duration::from_secs(11)).await;
         assert!(!dedup.check_and_record("k1", ttl).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn review_create_list_decide_roundtrip() {
+        let repo = InMemoryReviewRepository::default();
+        let review = Review {
+            id: "r1".into(),
+            run_id: RunId(7),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: std::time::SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: std::time::SystemTime::now(),
+        };
+        repo.create(&review).await.unwrap();
+        assert_eq!(repo.get("r1").await.unwrap().unwrap().status, ReviewStatus::Pending);
+        assert_eq!(repo.list_pending().await.unwrap().len(), 1);
+
+        let decided = repo
+            .decide(
+                "r1",
+                ReviewVerdict::Rejected,
+                Some("octocat".into()),
+                Some("redo it".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decided.status, ReviewStatus::Decided);
+        assert_eq!(decided.verdict, Some(ReviewVerdict::Rejected));
+        assert_eq!(decided.reviewer.as_deref(), Some("octocat"));
+        assert!(decided.reviewed_at.is_some());
+        assert!(repo.list_pending().await.unwrap().is_empty());
     }
 }

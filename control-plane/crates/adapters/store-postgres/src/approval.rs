@@ -102,6 +102,17 @@ impl ApprovalRepository for PostgresApprovalRepository {
             std::io::Error::new(std::io::ErrorKind::NotFound, "approval not found").into()
         })
     }
+
+    async fn list_pending(&self) -> DomainResult<Vec<ApprovalRequest>> {
+        let rows =
+            sqlx::query("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at")
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter()
+            .map(approval_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]

@@ -1,11 +1,15 @@
 import type {
   AgentTemplate,
+  Approval,
   AuditEntry,
   GitHost,
   GitRepo,
   GitRepoWrite,
   Model,
   Provider,
+  Review,
+  ReviewVerdict,
+  RunDiff,
   RunRecord,
   Session,
   SessionSummary,
@@ -28,6 +32,15 @@ export interface CatHerderApi {
   getAgent(id: string): Promise<AgentTemplate>
   listRuns(): Promise<RunRecord[]>
   getRun(id: number): Promise<RunRecord>
+
+  // run deep-link views (§10, §20) — de-blind approvals and reviews
+  getRunDiff(id: number): Promise<RunDiff>
+  /** The pending approval for a run, or `null` when there is none. */
+  getRunApproval(id: number): Promise<Approval | null>
+  /** The pending review for a run, or `null` when there is none. */
+  getRunReview(id: number): Promise<Review | null>
+  respondApproval(id: string, approve: boolean, response?: string): Promise<void>
+  respondReview(id: string, verdict: ReviewVerdict, feedback?: string): Promise<void>
 
   // auth
   login(username: string, password: string): Promise<void>
