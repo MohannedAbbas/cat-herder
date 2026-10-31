@@ -2,6 +2,8 @@
 //!
 //! Generic over the port implementations (not `dyn`), per `PLAN.md` §5.
 
+pub mod metrics;
+
 use std::collections::HashSet;
 use std::time::SystemTime;
 
@@ -287,6 +289,14 @@ where
                     // One atomic transition per state change, so the log records the full
                     // walk (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
                     persist_transition(&mut updated, next, transitions, bus).await?;
+                    // Cold-start metric (§16/§23): trigger -> running latency.
+                    if next == RunState::Running {
+                        let elapsed = SystemTime::now()
+                            .duration_since(updated.created_at)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0);
+                        metrics::cold_start().record(elapsed);
+                    }
                 }
                 sessions.sync_run(&updated).await?;
                 changed += 1;

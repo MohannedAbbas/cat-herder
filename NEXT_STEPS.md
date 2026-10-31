@@ -342,8 +342,19 @@ Brokered credentials and a real budget hard-stop; both are called out as
   inline `podTemplate` + `runtimeClassName` is the v1 form of the choice). Not yet
   exercised end-to-end against a live cluster with the runtimes installed.
 
-- [ ] **16. Kueue + Karpenter (§13).** Compute quotas and on-demand (GPU/spot) node
+- [x] **16. Kueue + Karpenter (§13).** Compute quotas and on-demand (GPU/spot) node
   provisioning; measure the cold-start p95 against the §23 SLO (< 60s).
+  *Status:* ✅ landed — ✅ **Kueue quotas** — the chart installs the quota hierarchy
+  (ResourceFlavor + ClusterQueue + LocalQueue, `kueue.*` values) and the runtime labels
+  each Sandbox pod with `kueue.x-k8s.io/queue-name` (`CAT_HERDER_KUEUE_QUEUE`); ✅
+  **Karpenter provisioning** — the chart installs on-demand + spot NodePools
+  (`karpenter.*` values, `nodeClassRef` to a cloud NodeClass); ✅ **cold-start metric**
+  — a lock-free Prometheus-format `ColdStartHistogram` (`application/src/metrics.rs`)
+  recorded when a run reaches `Running` (`now - created_at`) and exposed at
+  `GET /metrics`, so the §23 p95 (< 60s) is measurable. See `docs/design/provisioning.md`.
+  ⬜ Deferred: installing the Kueue/Karpenter controllers themselves, the agent-sandbox
+  ↔ Kueue `Workload` integration, GPU instance-type selection, and full OTel tracing
+  (#17). Not exercised against a live cluster with the controllers installed.
 
 - [ ] **17. Observability & replay (§16).** `run_id`-correlated OTel tracing across
   Rust + Python, run event replay, cost attribution rollups, and a secret-redaction

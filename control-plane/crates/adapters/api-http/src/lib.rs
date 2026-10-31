@@ -250,6 +250,7 @@ impl Default for AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/metrics", get(metrics))
         .route("/v1/runs", get(list_runs).post(create_run))
         .route("/v1/runs/{id}", get(get_run).delete(admin::delete_run))
         .route("/v1/runs/{id}/budget", post(raise_budget_handler))
@@ -327,6 +328,11 @@ pub fn router(state: AppState) -> Router {
 }
 
 // --- Run handlers ---------------------------------------------------------
+
+/// Expose Prometheus-format metrics (cold-start histogram, §16/§23).
+async fn metrics() -> String {
+    cat_herder_application::metrics::cold_start().encode_prometheus()
+}
 
 /// Resolve the model for a run: an explicit `model` wins, else the selected agent's
 /// model. Returns `None` when neither is provided (models are agent-specific).

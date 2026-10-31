@@ -1,0 +1,34 @@
+{{- /* Compute quotas via Kueue (PLAN.md §16). This installs the quota hierarchy; the */ -}}
+{{- /* Kueue controller must be installed separately. The runtime labels each Sandbox */ -}}
+{{- /* pod with `kueue.x-k8s.io/queue-name` (CAT_HERDER_KUEUE_QUEUE) to admit against */ -}}
+{{- /* the LocalQueue below. */ -}}
+{{- if .Values.kueue.enabled }}
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: {{ .Values.kueue.flavor }}
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: {{ .Values.kueue.clusterQueue }}
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+    - coveredResources: ["cpu", "memory"]
+      flavors:
+        - name: {{ .Values.kueue.flavor }}
+          resources:
+            - name: "cpu"
+              nominalQuota: {{ .Values.kueue.cpuQuota }}
+            - name: "memory"
+              nominalQuota: {{ .Values.kueue.memoryQuota }}
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: {{ .Values.kueue.queue }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+spec:
+  clusterQueue: {{ .Values.kueue.clusterQueue }}
+{{- end }}

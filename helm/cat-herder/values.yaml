@@ -205,6 +205,31 @@ agentSandbox:
       enabled: false
       handler: kata-qemu
 
+# Compute quotas via Kueue (PLAN.md §16). The chart installs Kueue's quota hierarchy
+# (ResourceFlavor + ClusterQueue + LocalQueue); the Kueue controller itself must be
+# installed separately (e.g. via its Helm chart). The runtime adapter labels each
+# Sandbox pod with `kueue.x-k8s.io/queue-name: <queue>` (set via CAT_HERDER_KUEUE_QUEUE)
+# so a Kueue integration can admit it against the LocalQueue. Set `enabled: true` once
+# Kueue is running; `cpuQuota`/`memoryQuota` bound the cluster-wide concurrency budget.
+kueue:
+  enabled: false
+  # LocalQueue / ClusterQueue names the runtime's CAT_HERDER_KUEUE_QUEUE should match.
+  queue: cat-herder
+  clusterQueue: cat-herder
+  flavor: default
+  cpuQuota: "100"
+  memoryQuota: "200Gi"
+
+# On-demand node provisioning via Karpenter (PLAN.md §16). The chart installs the
+# NodePools (on-demand + spot); the Karpenter controller + a cloud NodeClass (e.g.
+# EC2NodeClass) must be installed separately. `nodeClassRef` is the cloud NodeClass
+# name each NodePool references. Set `enabled: true` once Karpenter is running.
+karpenter:
+  enabled: false
+  nodeClassRef: default
+  onDemandCpuLimit: "1000"
+  spotCpuLimit: "1000"
+
 # GitHub OAuth SSO (optional; password login still works when disabled).
 # When enabled the API exposes /v1/auth/github/login and
 # /v1/auth/github/callback. The client id/secret come from the Secret named in

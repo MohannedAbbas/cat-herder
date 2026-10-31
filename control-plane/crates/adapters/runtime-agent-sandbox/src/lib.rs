@@ -393,6 +393,18 @@ impl SandboxRuntime {
             (None, _) => Vec::new(),
         };
 
+        // Pod labels. A Kueue queue-name label is added when CAT_HERDER_KUEUE_QUEUE is
+        // set, so a Kueue integration can admit the sandbox against a LocalQueue (§16).
+        let mut pod_labels = serde_json::json!({
+            "app.kubernetes.io/name": "cat-herder-harness",
+            "app.kubernetes.io/part-of": "cat-herder",
+        });
+        if let Ok(queue) = std::env::var("CAT_HERDER_KUEUE_QUEUE")
+            && !queue.trim().is_empty()
+        {
+            pod_labels["kueue.x-k8s.io/queue-name"] = serde_json::json!(queue);
+        }
+
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
         obj.data = serde_json::json!({
             "spec": {
@@ -409,10 +421,7 @@ impl SandboxRuntime {
                     // onto the pod it builds from this inline template; the egress
                     // NetworkPolicy selects on `app.kubernetes.io/name`.
                     "metadata": {
-                        "labels": {
-                            "app.kubernetes.io/name": "cat-herder-harness",
-                            "app.kubernetes.io/part-of": "cat-herder",
-                        },
+                        "labels": pod_labels,
                     },
                     "spec": {
                         // One-shot workload: on liveness-kill/crash the pod goes terminal
