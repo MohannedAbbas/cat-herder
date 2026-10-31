@@ -42,8 +42,8 @@ where
         sqlx::query_scalar(
             "INSERT INTO runs (kind, state, task_spec, session_id, max_concurrency, created_at, \
              trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
-             finished_at, pr_url, report, input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING id",
+             finished_at, pr_url, report, input_tokens, output_tokens, callback_url) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING id",
         )
         .bind(&kind)
         .bind(&state)
@@ -64,14 +64,15 @@ where
         .bind(run.report.as_deref())
         .bind(run.input_tokens as i64)
         .bind(run.output_tokens as i64)
+        .bind(run.callback_url.as_deref())
         .fetch_one(executor)
         .await
     } else {
         sqlx::query_scalar(
             "INSERT INTO runs (id, kind, state, task_spec, session_id, max_concurrency, created_at, \
              trigger, actor, model, repo, language, workflow_ref, runtime_tier, started_at, \
-             finished_at, pr_url, report, input_tokens, output_tokens) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+             finished_at, pr_url, report, input_tokens, output_tokens, callback_url) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (id) DO UPDATE SET \
                kind = EXCLUDED.kind, state = EXCLUDED.state, \
                task_spec = EXCLUDED.task_spec, session_id = EXCLUDED.session_id, \
@@ -81,7 +82,8 @@ where
                workflow_ref = EXCLUDED.workflow_ref, runtime_tier = EXCLUDED.runtime_tier, \
                started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, \
                pr_url = EXCLUDED.pr_url, report = EXCLUDED.report, \
-               input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens \
+               input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens, \
+               callback_url = EXCLUDED.callback_url \
              RETURNING id",
         )
         .bind(run.id.0 as i64)
@@ -104,6 +106,7 @@ where
         .bind(run.report.as_deref())
         .bind(run.input_tokens as i64)
         .bind(run.output_tokens as i64)
+        .bind(run.callback_url.as_deref())
         .fetch_one(executor)
         .await
     }
@@ -174,6 +177,7 @@ fn run_from_row(row: &PgRow) -> Result<Run, sqlx::Error> {
         report: row.try_get("report")?,
         input_tokens: row.try_get::<i64, _>("input_tokens")? as u64,
         output_tokens: row.try_get::<i64, _>("output_tokens")? as u64,
+        callback_url: row.try_get("callback_url")?,
     })
 }
 
@@ -250,6 +254,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: Some("https://example.com/cb".into()),
         };
         let saved = repo.save(&run).await.expect("save assigns id");
         assert_ne!(saved.id, RunId(0));
@@ -263,6 +268,7 @@ mod tests {
         assert_eq!(got.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
         assert_eq!(got.repo.as_deref(), Some("org/repo"));
         assert_eq!(got.language.as_deref(), Some("rust"));
+        assert_eq!(got.callback_url.as_deref(), Some("https://example.com/cb"));
         assert_eq!(got.state, RunState::Queued);
 
         let mut updated = saved.clone();

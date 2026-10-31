@@ -35,6 +35,8 @@ pub struct RunRequest {
     pub runtime_tier: crate::entities::RuntimeTier,
     /// Token budget cap for the run (`PLAN.md` §12). `None`/`0` = unbounded.
     pub budget: Option<u64>,
+    /// Optional URL the control plane POSTs the terminal result to (reply channel).
+    pub callback_url: Option<String>,
 }
 
 /// Inbound (driving): every trigger source normalizes its events to `RunRequest`.

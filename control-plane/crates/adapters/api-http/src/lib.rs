@@ -68,6 +68,7 @@ mod auth;
 mod budget;
 mod bus;
 mod crypto;
+mod delivery;
 mod grpc;
 mod key_store;
 mod logs;
@@ -492,6 +493,7 @@ async fn create_run(
         workflow_ref: req.workflow_ref,
         runtime_tier,
         budget: req.budget,
+        callback_url: req.callback_url,
     };
 
     let run = start_run(
@@ -1006,6 +1008,7 @@ async fn spawn_review_followup(state: &AppState, review: &Review) {
         workflow_ref: None,
         runtime_tier: parent.runtime_tier,
         budget: None,
+        callback_url: None,
     };
     match start_run(
         req,
@@ -1240,6 +1243,10 @@ pub(crate) async fn ingest_harness_event(
                 .flatten()
                 .unwrap_or(run);
 
+            // Reply channel: if the run has a callback_url, POST the terminal result
+            // back to the triggerer (best-effort; never affects the run lifecycle).
+            delivery::deliver_result(state, &run).await;
+
             Ok(RunResponse::from(&run))
         }
         // The harness's own stuck watchdog reports `stuck` when the agent stops making
@@ -1276,6 +1283,9 @@ pub(crate) async fn ingest_harness_event(
             {
                 eprintln!("failed to terminate sandbox for run {}: {e}", run_id.0);
             }
+
+            // Reply channel: deliver the terminal (stuck) result if a callback is set.
+            delivery::deliver_result(state, &run).await;
 
             Ok(RunResponse::from(&run))
         }

@@ -46,6 +46,7 @@ async fn main() -> DomainResult<()> {
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: None,
     };
 
     println!("spawning Sandbox run-999 ...");

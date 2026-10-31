@@ -132,6 +132,7 @@ where
         report: None,
         input_tokens: 0,
         output_tokens: 0,
+        callback_url: req.callback_url.clone(),
     };
 
     // Create the run and its `run.queued` event atomically (the transition repository
@@ -1034,6 +1035,7 @@ mod tests {
             workflow_ref: None,
             runtime_tier: Default::default(),
             budget: None,
+            callback_url: None,
         }
     }
 
@@ -1051,6 +1053,7 @@ mod tests {
             workflow_ref: None,
             runtime_tier: Default::default(),
             budget: None,
+            callback_url: None,
         }
     }
 
@@ -1077,6 +1080,31 @@ mod tests {
 
         let stored = repo.get(run.id).await.unwrap().unwrap();
         assert_eq!(stored.state, RunState::PodPending);
+    }
+
+    #[tokio::test]
+    async fn start_run_copies_callback_url_onto_run() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let mut request = req();
+        request.callback_url = Some("https://example.com/cb".into());
+        let run = start_run(
+            request,
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(run.callback_url.as_deref(), Some("https://example.com/cb"));
+        let stored = repo.get(run.id).await.unwrap().unwrap();
+        assert_eq!(stored.callback_url.as_deref(), Some("https://example.com/cb"));
     }
 
     #[tokio::test]

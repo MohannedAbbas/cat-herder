@@ -209,6 +209,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         };
         assert!(run.transition(Scheduled).is_ok());
         assert_eq!(run.state, Scheduled);
@@ -237,6 +238,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         };
         let err = run.transition(Running).unwrap_err();
         assert_eq!(err.from, Queued);
@@ -267,6 +269,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         };
         for next in [Scheduled, PodPending, Running, Succeeded] {
             run.transition(next).expect("valid transition");

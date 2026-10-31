@@ -171,6 +171,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         };
         let run = runs.save(&run).await.expect("save run");
 

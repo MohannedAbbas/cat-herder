@@ -113,6 +113,7 @@ mod tests {
             report: None,
             input_tokens: 0,
             output_tokens: 0,
+            callback_url: None,
         };
 
         // Create the run and its `run.queued` event atomically (id assigned).
