@@ -532,6 +532,13 @@ def clone_repo(repo_url: str) -> bool:
         print(f"refusing to clone unsafe repo URL: {repo_url}", flush=True)
         return False
 
+    # Already materialized — either by the control plane's init container or a
+    # resumed workspace on the durable RWX PVC (§6/§13). Skip re-cloning so a resumed
+    # agent sees its own edits instead of a fresh checkout.
+    if os.path.isdir(os.path.join(REPO_DIR, ".git")):
+        print(f"workspace already materialized at {REPO_DIR}; skipping clone", flush=True)
+        return True
+
     env = os.environ.copy()
     if GIT_TOKEN:
         env["GIT_ASKPASS"] = write_git_askpass()

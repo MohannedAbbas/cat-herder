@@ -90,12 +90,21 @@ pod death and pause/resume at an interrupt.
   `docs/design/hitl.md`. ⬜ Deferred: approval timeout + escalation (§10), Slack/email
   delivery (the notification is an event + deep link for now).
 
-- [ ] **5. Durable workspace: RWX PVC + MinIO snapshots (§6, §13).**
+- [x] **5. Durable workspace: RWX PVC + MinIO snapshots (§6, §13).**
   Today the working tree is `/repo` inside the ephemeral pod; the toolchain image
   (`sandbox/`) is the only "sandbox" component. No PVC, no clone cache, no snapshots.
   *Done when:* the working tree lives on a RWX PVC (control-plane-owned materialization
   with a read-only clone-scoped credential, §11.3/§13), snapshotted to in-cluster MinIO
   at quiesced points (interrupt/termination), restored if the volume is lost.
+  *Status:* ✅ **RWX PVC landed** — a shared ReadWriteMany PVC (`cat-herder-workspaces`,
+  Helm `workspace` section) holds each run's working tree in a per-run `subPath`
+  (`run-<id>`, mounted at `/repo`); ✅ **control-plane-owned materialization** — a
+  `workspace-materialize` init container clones the run's repo onto the PVC before the
+  harness starts (`REPO_URL` + `GIT_TOKEN` via askpass, never in argv/logs), skipped on
+  resume; ✅ **resume-aware harness** — `clone_repo` skips when `/repo/.git` exists, so a
+  resumed agent sees its own edits. See `docs/design/workspace.md`. ⬜ Deferred: **MinIO
+  snapshots + restore** (snapshot at quiesced points, restore-if-volume-lost), the
+  content-addressed clone cache, and per-run PVC/retention lifecycle (§18).
 
 - [x] **6. Lease-based, sharded reconcile + crash recovery (§6).**
   `application/src/lib.rs::reconcile_once` is a single in-process 10s loop over all

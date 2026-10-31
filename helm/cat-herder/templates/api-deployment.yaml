@@ -27,6 +27,10 @@ spec:
               value: {{ .Values.controlPlane.port | quote }}
             - name: CAT_HERDER_HARNESS_IMAGE
               value: "{{ .Values.harness.image }}"
+            {{- if .Values.workspace.enabled }}
+            - name: CAT_HERDER_WORKSPACE_PVC
+              value: {{ .Values.workspace.pvcName | quote }}
+            {{- end }}
             - name: CAT_HERDER_STUCK_TIMEOUT_SECS
               value: {{ .Values.controlPlane.stuckTimeoutSecs | default 900 | quote }}
             - name: CAT_HERDER_RUN_TIMEOUT_SECS

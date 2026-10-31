@@ -1,0 +1,23 @@
+{{- if .Values.workspace.enabled }}
+# The durable workspace PVC (PLAN.md §6/§13): one shared ReadWriteMany volume; each
+# run's working tree lives in a per-run subpath (mounted at /repo by the runtime
+# adapter). A RWX-capable StorageClass is required (network/FUSE CSI); MinIO snapshots
+# (restore-if-volume-lost) are a documented follow-on.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.workspace.pvcName }}
+  namespace: {{ .Values.namespace | default "cat-herder" }}
+  labels:
+    app.kubernetes.io/name: cat-herder-workspaces
+    app.kubernetes.io/part-of: cat-herder
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.workspace.storage }}
+  {{- if .Values.workspace.storageClassName }}
+  storageClassName: {{ .Values.workspace.storageClassName }}
+  {{- end }}
+{{- end }}

@@ -61,6 +61,17 @@ controlPlane:
 harness:
   image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0
 
+# Durable workspace (PLAN.md §6/§13): a shared ReadWriteMany PVC holds each run's
+# working tree (per-run subpath), so file edits survive pod recreation and a resumed
+# agent sees its own changes. Requires a RWX-capable StorageClass (a network/FUSE CSI
+# driver); leave `storageClassName` empty to use the cluster default. MinIO snapshots
+# (restore-if-volume-lost) are a documented follow-on (NEXT_STEPS #5).
+workspace:
+  enabled: true
+  storageClassName: ""
+  storage: 5Gi
+  pvcName: cat-herder-workspaces
+
 ui:
   image: ghcr.io/your-org/cat-herder-ui:0.1.0
   replicas: 1

@@ -20,6 +20,14 @@ use kube::{
 };
 use tokio::sync::RwLock;
 
+/// Init-container shell: materialize the workspace onto the RWX PVC (PLAN.md §6/§13).
+/// Skips when the tree is already present (resume); supplies a git askpass that echoes
+/// `GIT_TOKEN` for private-repo clones (the token never appears in argv or logs).
+const WORKSPACE_MATERIALIZE_SCRIPT: &str = "if [ -d /repo/.git ]; then exit 0; fi; \
+if [ -n \"$GIT_TOKEN\" ]; then printf '#!/bin/sh\\necho \"$GIT_TOKEN\"\\n' > /tmp/askpass.sh \
+&& chmod +x /tmp/askpass.sh && export GIT_ASKPASS=/tmp/askpass.sh; fi; \
+git clone --depth 1 -- \"$REPO_URL\" /repo";
+
 /// Tunables for the `Sandbox` pod template, sourced from the environment (with the
 /// historical values as defaults). The chart can template these through so they
 /// don't drift from the harness's actual port/probe path.
@@ -223,13 +231,13 @@ impl SandboxRuntime {
         // The repo to clone and work on (from the run's `repo` field). Normalize to a
         // canonical HTTPS URL so the token (which only authenticates over HTTPS)
         // applies even when the run was triggered with an SSH or `.git`-suffixed URL.
-        if let Some(repo) = run.repo.as_deref()
-            && !repo.is_empty()
-        {
-            let clone_url = repo_identity_from_url(repo)
+        let clone_url = run.repo.as_deref().filter(|r| !r.is_empty()).map(|repo| {
+            repo_identity_from_url(repo)
                 .map(|id| id.url())
-                .unwrap_or_else(|| repo.to_string());
-            env.push(serde_json::json!({ "name": "REPO_URL", "value": clone_url }));
+                .unwrap_or_else(|| repo.to_string())
+        });
+        if let Some(url) = &clone_url {
+            env.push(serde_json::json!({ "name": "REPO_URL", "value": url }));
         }
         // The control plane's in-cluster URL, so the harness can report events back.
         let control_url = std::env::var("CAT_HERDER_CONTROL_URL").unwrap_or_else(|_| {
@@ -295,6 +303,37 @@ impl SandboxRuntime {
             env.push(serde_json::json!({ "name": "GIT_TOKEN", "value": t }));
         }
 
+        let workspace_pvc = std::env::var("CAT_HERDER_WORKSPACE_PVC")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "cat-herder-workspaces".into());
+        let workspace_subpath = format!("run-{}", run.id.0);
+
+        // Control-plane-owned workspace materialization (PLAN.md §6/§13): an init
+        // container clones the run's repo onto the durable RWX PVC before the harness
+        // starts. On resume (re-created pod) the PVC already holds the tree, so the
+        // clone is skipped and the harness sees its own edits.
+        let init_containers: Vec<serde_json::Value> = match (&clone_url, git_token) {
+            (Some(url), token) => {
+                let mut ictx_env = vec![serde_json::json!({ "name": "REPO_URL", "value": url })];
+                if let Some(t) = token.filter(|t| !t.is_empty()) {
+                    ictx_env.push(serde_json::json!({ "name": "GIT_TOKEN", "value": t }));
+                }
+                vec![serde_json::json!({
+                    "name": "workspace-materialize",
+                    "image": self.harness_image,
+                    "command": ["sh", "-c", WORKSPACE_MATERIALIZE_SCRIPT],
+                    "env": ictx_env,
+                    "volumeMounts": [{
+                        "name": "workspace",
+                        "mountPath": "/repo",
+                        "subPath": workspace_subpath,
+                    }],
+                })]
+            }
+            (None, _) => Vec::new(),
+        };
+
         let mut obj = DynamicObject::new(&Self::sandbox_name(run.id), &Self::api_resource());
         obj.data = serde_json::json!({
             "spec": {
@@ -320,11 +359,23 @@ impl SandboxRuntime {
                         // One-shot workload: on liveness-kill/crash the pod goes terminal
                         // (Finished=PodFailed) instead of restart-looping forever.
                         "restartPolicy": "Never",
+                        // The durable workspace: a shared RWX PVC with a per-run subpath,
+                        // so a replacement pod re-attaches the same working tree.
+                        "volumes": [{
+                            "name": "workspace",
+                            "persistentVolumeClaim": { "claimName": workspace_pvc },
+                        }],
+                        "initContainers": init_containers,
                         "containers": [{
                             "name": "harness",
                             "image": self.harness_image,
                             "env": env,
                             "ports": [{ "containerPort": self.pod.container_port }],
+                            "volumeMounts": [{
+                                "name": "workspace",
+                                "mountPath": "/repo",
+                                "subPath": workspace_subpath,
+                            }],
                             // Disk budget: a `cargo build` in the sandbox can write a
                             // multi-GiB target/ + registry cache. A request accounts for it
                             // at scheduling time; a limit bounds it so one run can't fill
@@ -457,5 +508,14 @@ mod tests {
         assert_eq!(c.readiness_path, "/healthz");
         assert_eq!(c.ephemeral_storage_request, "2Gi");
         assert_eq!(c.ephemeral_storage_limit, "10Gi");
+    }
+
+    #[test]
+    fn workspace_materialize_script_skips_existing_and_clones() {
+        // Resume-safe: skip when the tree is already materialized, else clone via an
+        // askpass that echoes GIT_TOKEN (never in argv).
+        assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("git clone"));
+        assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("/repo/.git"));
+        assert!(WORKSPACE_MATERIALIZE_SCRIPT.contains("GIT_ASKPASS"));
     }
 }

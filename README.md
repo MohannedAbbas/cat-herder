@@ -80,6 +80,7 @@ The control plane is configured via environment variables:
 | `CAT_HERDER_BROKER_CA` / `CAT_HERDER_BROKER_CLIENT_CERT` / `CAT_HERDER_BROKER_CLIENT_KEY` | Optional TLS material for the control plane → broker gRPC client (PEM). The broker is verified against `_CA`; the client cert/key present the control plane's mTLS identity. |
 | `CAT_HERDER_REDIS_URL` | Redis endpoint for the atomic budget counter (§12). When unset, the control plane falls back to an in-memory counter (single-replica dev). |
 | `CAT_HERDER_LLM_PROXY_URL` | The LiteLLM metering proxy (§12). When set, the control plane injects it into the harness, which routes all model traffic through the proxy for budget enforcement. |
+| `CAT_HERDER_WORKSPACE_PVC` | The shared RWX workspace PVC (default `cat-herder-workspaces`) that the harness pod mounts at `/repo` (§6/§13). |
 
 ### Credential broker service (separate deployment)
 
@@ -112,6 +113,14 @@ an embedded RBAC/ABAC policy engine (`docs/design/policy.md`). These endpoints n
 require an authenticated session (`401`/`403` otherwise). The policy is a JSON value in
 the `policy` setting (RBAC minimum roles per decision + attribute-based rules); a
 built-in default applies when unset.
+
+### Durable workspace (§6/§13)
+
+The agent's working tree lives on a shared RWX PVC (see `docs/design/workspace.md`):
+the control plane materializes the clone (an init container) into a per-run subpath
+mounted at `/repo`, so file edits survive pod recreation and a resumed agent sees its
+own changes. Requires a RWX-capable StorageClass; MinIO snapshots are a documented
+follow-on.
 
 ### GitHub OAuth SSO
 
