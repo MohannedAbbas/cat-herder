@@ -28,7 +28,12 @@ pub struct JsonRpcRequest {
 }
 
 /// Handle an MCP request and produce a JSON-RPC response (`Null` for notifications).
-pub async fn handle(request: JsonRpcRequest, state: &AppState) -> Value {
+///
+/// `session_id` is the client's Streamable HTTP session (from the `mcp-session-id`
+/// request header), if any. It is ignored for `initialize` (which always mints a fresh
+/// session id) but is used to associate a run created by `run_agent` with that session
+/// so terminal notifications reach its SSE stream.
+pub async fn handle(request: JsonRpcRequest, state: &AppState, session_id: Option<&str>) -> Value {
     let id = request.id;
     // Notifications carry no id and expect no response.
     if id.is_none() {
@@ -36,15 +41,24 @@ pub async fn handle(request: JsonRpcRequest, state: &AppState) -> Value {
     }
 
     match request.method.as_str() {
-        "initialize" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-            },
-        }),
+        "initialize" => {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            // Register the session's outbound channel up front so the client can open
+            // its SSE stream immediately (before any run exists for it).
+            state.mcp_hub.register_session(session_id.clone());
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+                    // Streamable HTTP session id: the client echoes it in the
+                    // `mcp-session-id` header and opens the SSE stream with it.
+                    "sessionId": session_id,
+                },
+            })
+        }
         "tools/list" => json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -57,7 +71,7 @@ pub async fn handle(request: JsonRpcRequest, state: &AppState) -> Value {
                 .get("arguments")
                 .cloned()
                 .unwrap_or(Value::Null);
-            let (text, is_error) = call_tool(name, &args, state).await;
+            let (text, is_error) = call_tool(name, &args, state, session_id).await;
             json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -114,7 +128,7 @@ fn tools() -> Vec<Value> {
     ]
 }
 
-async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool) {
+async fn call_tool(name: &str, args: &Value, state: &AppState, session_id: Option<&str>) -> (String, bool) {
     match name {
         "run_agent" => {
             let task_spec = args["task_spec"].as_str().unwrap_or("").to_string();
@@ -176,6 +190,11 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
             .await
             {
                 Ok(run) => {
+                    // Associate the new run with this MCP session so its terminal
+                    // state is pushed to the client's SSE stream (if it opened one).
+                    if let Some(session_id) = session_id {
+                        state.mcp_hub.associate(run.id.0, session_id.to_string());
+                    }
                     if let Err(e) =
                         super::issue_budget(&state.budgets, &state.budget_counter, run.id, budget)
                             .await
@@ -206,5 +225,50 @@ async fn call_tool(name: &str, args: &Value, state: &AppState) -> (String, bool)
             Err(e) => (format!("error: {e}"), true),
         },
         other => (format!("unknown tool: {other}"), true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_request() -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(1)),
+            method: "initialize".into(),
+            params: Value::Null,
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_returns_a_session_id() {
+        let state = AppState::default();
+        let resp = handle(init_request(), &state, None).await;
+        let session = resp["result"]["sessionId"].as_str().expect("sessionId present");
+        assert!(!session.is_empty(), "session id must not be empty");
+        // Protocol metadata is preserved for backward compatibility.
+        assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(resp["result"]["serverInfo"]["name"], SERVER_NAME);
+    }
+
+    #[tokio::test]
+    async fn initialize_generates_distinct_session_ids() {
+        let state = AppState::default();
+        let a = handle(init_request(), &state, None).await;
+        let b = handle(init_request(), &state, None).await;
+        assert_ne!(a["result"]["sessionId"], b["result"]["sessionId"]);
+    }
+
+    #[tokio::test]
+    async fn notification_without_id_returns_null() {
+        let state = AppState::default();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: None,
+            method: "notifications/initialized".into(),
+            params: Value::Null,
+        };
+        assert_eq!(handle(req, &state, None).await, Value::Null);
     }
 }

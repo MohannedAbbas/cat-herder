@@ -13,7 +13,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 use cat_herder_application::{
     Completion, Outcome, complete_run, decide_review, issue_budget, request_review,
@@ -50,6 +50,7 @@ pub use crypto::AesGcmCipher;
 pub use grpc::{ControlLinks, grpc_serve, grpc_server};
 pub use key_store::KeySecretStore;
 pub use logs::{RunLogLine, RunLogs};
+pub use mcp_hub::McpHub;
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
@@ -73,6 +74,7 @@ mod grpc;
 mod key_store;
 mod logs;
 mod mcp;
+mod mcp_hub;
 mod oauth;
 mod pr;
 mod repo;
@@ -186,6 +188,9 @@ pub struct AppState {
     pub control_links: Arc<ControlLinks>,
     /// In-memory spool of harness log lines + live-tail broadcast (`NEXT_STEPS #18`).
     pub run_logs: RunLogs,
+    /// MCP server-to-client push hub: maps runs to MCP sessions and fans terminal
+    /// run-status notifications out to connected SSE clients (Streamable HTTP).
+    pub mcp_hub: McpHub,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
     /// rotated via the admin API).
     pub cipher: Arc<RwLock<AesGcmCipher>>,
@@ -244,6 +249,7 @@ impl Default for AppState {
             runtime: None,
             control_links: Arc::new(ControlLinks::default()),
             run_logs: RunLogs::new(),
+            mcp_hub: McpHub::new(),
             cipher: Arc::new(RwLock::new(
                 AesGcmCipher::generate().expect("rng available"),
             )),
@@ -277,7 +283,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/webhooks/github", post(webhook_github))
         .route("/v1/webhooks/gitlab", post(webhook_gitlab))
         .route("/v1/webhooks/slack", post(webhook_slack))
-        .route("/mcp", post(mcp_handler))
+        .route("/mcp", post(mcp_handler).get(mcp_sse_handler))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
         .route("/v1/agents", get(list_agents))
@@ -1179,6 +1185,35 @@ async fn get_run_review(
     })))
 }
 
+/// Build the JSON-RPC notification pushed to an MCP client when a run it triggered
+/// reaches a terminal state (`notifications/run/status`). The report is redacted with
+/// the domain redactor before it leaves the control plane.
+fn mcp_run_status_notification(run: &Run) -> String {
+    let state_str = serde_json::to_value(run.state)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", run.state).to_lowercase());
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/run/status",
+        "params": {
+            "run_id": run.id.0,
+            "state": state_str,
+            "report": run.report.as_deref().map(redact),
+            "pr_url": run.pr_url,
+        },
+    })
+    .to_string()
+}
+
+/// Push a terminal run-status notification to the MCP session that triggered `run`
+/// (no-op when the run has no associated session).
+fn notify_mcp_run_status(state: &AppState, run: &Run) {
+    state
+        .mcp_hub
+        .publish(run.id.0, mcp_run_status_notification(run));
+}
+
 /// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the
 /// agent-projection event, then — for `finished`/`stuck` — advances the run's lifecycle,
 /// reclaims the sandbox, and (on success with a diff) opens a PR.
@@ -1274,6 +1309,9 @@ pub(crate) async fn ingest_harness_event(
             // back to the triggerer (best-effort; never affects the run lifecycle).
             delivery::deliver_result(state, &run).await;
 
+            // MCP push: notify a subscribed MCP client the run reached a terminal state.
+            notify_mcp_run_status(state, &run);
+
             Ok(RunResponse::from(&run))
         }
         // The harness's own stuck watchdog reports `stuck` when the agent stops making
@@ -1313,6 +1351,9 @@ pub(crate) async fn ingest_harness_event(
 
             // Reply channel: deliver the terminal (stuck) result if a callback is set.
             delivery::deliver_result(state, &run).await;
+
+            // MCP push: notify a subscribed MCP client the run reached a terminal state.
+            notify_mcp_run_status(state, &run);
 
             Ok(RunResponse::from(&run))
         }
@@ -1886,11 +1927,92 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// MCP endpoint (Streamable HTTP): JSON-RPC 2.0 in, JSON-RPC response out.
+///
+/// Carries an optional `mcp-session-id` header both ways: an inbound one is threaded
+/// into [`mcp::handle`] so a run created by `run_agent` is associated with the session
+/// (whose SSE stream then receives terminal notifications), and an `initialize`
+/// response echoes the (possibly newly generated) session id so the client can open
+/// that stream. The stateless request/response flow is unchanged for clients that
+/// never supply one.
 async fn mcp_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<mcp::JsonRpcRequest>,
-) -> Json<serde_json::Value> {
-    Json(mcp::handle(request, &state).await)
+) -> Response {
+    let session_id = header_str(&headers, &MCP_SESSION_HEADER);
+    let response = mcp::handle(request, &state, session_id.as_deref()).await;
+    // The session id to hand back: an `initialize` result carries a freshly minted
+    // one; otherwise echo the inbound header. When there is none (a stateless client
+    // that never opened a session) we simply omit the header, leaving the original
+    // POST/JSON flow unchanged.
+    let out_session = response["result"]["sessionId"]
+        .as_str()
+        .map(str::to_string)
+        .or(session_id);
+    let mut resp = Json(response).into_response();
+    if let Some(session) = out_session {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&session) {
+            resp.headers_mut().insert(MCP_SESSION_HEADER.clone(), value);
+        }
+    }
+    resp
+}
+
+/// The header naming the MCP session (Streamable HTTP).
+const MCP_SESSION_HEADER: axum::http::HeaderName =
+    axum::http::HeaderName::from_static("mcp-session-id");
+
+/// Read a header value as a UTF-8 string, if present.
+fn header_str(headers: &HeaderMap, name: &axum::http::HeaderName) -> Option<String> {
+    headers.get(name)?.to_str().ok().map(str::to_string)
+}
+
+/// `GET /mcp` — the server-to-client Streamable HTTP channel. When the client sends
+/// `Accept: text/event-stream` and an `mcp-session-id` matching a known session, this
+/// holds the connection open and streams each pushed JSON-RPC message as an SSE event
+/// (`event: message\ndata: <json>\n\n`). Returns `400` when the session is unknown.
+async fn mcp_sse_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<
+    Sse<impl futures::Stream<Item = Result<SseEvent, std::convert::Infallible>>>,
+    (StatusCode, String),
+> {
+    let accepts_sse = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/event-stream"));
+    if !accepts_sse {
+        return Err((
+            StatusCode::NOT_ACCEPTABLE,
+            "GET /mcp requires Accept: text/event-stream".to_string(),
+        ));
+    }
+    let session_id = header_str(&headers, &MCP_SESSION_HEADER).ok_or((
+        StatusCode::BAD_REQUEST,
+        "missing mcp-session-id header".to_string(),
+    ))?;
+    let rx = state.mcp_hub.subscribe(&session_id).ok_or((
+        StatusCode::BAD_REQUEST,
+        "unknown mcp-session-id".to_string(),
+    ))?;
+
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    let event = SseEvent::default().event("message").data(msg);
+                    return Some((Ok(event), rx));
+                }
+                // A lagged receiver skips ahead; keep the connection alive.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                // The sender is gone (session dropped) — end the stream.
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionSummary>> {
@@ -2027,6 +2149,79 @@ mod resolve_image_tests {
         let state = AppState::default();
         let err = resolve_image(&state, Some("missing")).await.unwrap_err();
         assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+}
+
+#[cfg(test)]
+mod mcp_notification_tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn sample_run() -> Run {
+        Run {
+            id: RunId(42),
+            kind: RunKind::Agent,
+            state: RunState::Succeeded,
+            task_spec: "do it".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "mcp".into(),
+            actor: None,
+            model: None,
+            image: None,
+            repo: None,
+            language: None,
+            workflow_ref: None,
+            runtime_tier: Default::default(),
+            started_at: None,
+            finished_at: Some(SystemTime::now()),
+            pr_url: Some("https://github.com/o/r/pull/1".into()),
+            report: Some("all done".into()),
+            input_tokens: 0,
+            output_tokens: 0,
+            callback_url: None,
+        }
+    }
+
+    #[test]
+    fn notification_has_expected_jsonrpc_shape() {
+        let note = mcp_run_status_notification(&sample_run());
+        let v: serde_json::Value = serde_json::from_str(&note).expect("valid json");
+        assert_eq!(v["jsonrpc"], "2.0");
+        assert_eq!(v["method"], "notifications/run/status");
+        assert_eq!(v["params"]["run_id"], 42);
+        assert_eq!(v["params"]["state"], "succeeded");
+        assert_eq!(v["params"]["report"], "all done");
+        assert_eq!(v["params"]["pr_url"], "https://github.com/o/r/pull/1");
+        // A JSON-RPC notification carries no id.
+        assert!(v.get("id").is_none());
+    }
+
+    #[test]
+    fn notification_nulls_absent_pr_url_and_redacts_report() {
+        let mut run = sample_run();
+        run.pr_url = None;
+        run.report = Some("token ghp_0123456789abcdef0123456789abcdef0123".into());
+        let v: serde_json::Value =
+            serde_json::from_str(&mcp_run_status_notification(&run)).unwrap();
+        assert!(v["params"]["pr_url"].is_null());
+        // The redactor must not leak the raw secret.
+        let report = v["params"]["report"].as_str().unwrap_or("");
+        assert!(!report.contains("ghp_0123456789abcdef0123456789abcdef0123"));
+    }
+
+    #[test]
+    fn publish_routes_to_associated_session_only() {
+        let hub = McpHub::new();
+        hub.associate(42, "sess-9".to_string());
+        let mut rx = hub.subscribe("sess-9").unwrap();
+        let note = mcp_run_status_notification(&sample_run());
+        hub.publish(42, note.clone());
+        assert_eq!(rx.try_recv().unwrap(), note);
+        // A different run id (unassociated) is a no-op.
+        hub.publish(999, "ignored".into());
+        assert!(rx.try_recv().is_err());
     }
 }
 
