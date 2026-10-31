@@ -105,6 +105,14 @@ The chart deploys Redis (`dependencies.redis`) and pinned LiteLLM (`litellm`) wh
 enabled; the LiteLLM `budget_manager` hook that calls `Consume` is documented in the
 chart's `litellm-config` ConfigMap.
 
+### Authorization policy (§11.8)
+
+Run creation, approval, and budget management are authorization decisions enforced by
+an embedded RBAC/ABAC policy engine (`docs/design/policy.md`). These endpoints now
+require an authenticated session (`401`/`403` otherwise). The policy is a JSON value in
+the `policy` setting (RBAC minimum roles per decision + attribute-based rules); a
+built-in default applies when unset.
+
 ### GitHub OAuth SSO
 
 When all of `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and

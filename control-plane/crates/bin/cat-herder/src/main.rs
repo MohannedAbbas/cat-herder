@@ -11,14 +11,15 @@ use cat_herder_api_http::{
     AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
     BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, EventBusImpl,
     EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo, KeySecretStore, ModelRepo,
-    OAuthConfig, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo, ToolRepo,
-    TransitionRepo, grpc_serve, router,
+    OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, RunRepo, SessionRepo, SettingRepo,
+    ToolRepo, TransitionRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
 use cat_herder_credential_broker::{CredentialBrokerService, Issuer};
 use cat_herder_credential_broker_rpc::{RemoteCredentialBroker, tls as broker_tls};
 use cat_herder_credentials_github::{GitHubApp, GitHubAppConfig};
 use cat_herder_domain::api::default_git_hosts;
+use cat_herder_domain::policy::Policy;
 use cat_herder_domain::ports::{
     DomainResult, GitRepoRepository, LeaseManager, ProviderRepository, SettingRepository,
 };
@@ -363,6 +364,16 @@ async fn main() {
         eprintln!("warning: failed to seed git hosts: {e}");
     }
 
+    // Authorization policy (§11.8): load from settings (JSON) or use the built-in
+    // default (RBAC minimum roles per decision; no ABAC rules).
+    let policy: Policy = match repos.settings.get(POLICY_SETTING).await {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            eprintln!("warning: invalid policy setting ({e}); using the default policy");
+            Policy::default()
+        }),
+        _ => Policy::default(),
+    };
+
     // Fan-out event bus (NATS JetStream). Optional: when CAT_HERDER_NATS_URL is unset
     // the bus is a no-op and the event log still works (Postgres is the authority).
     let bus = match std::env::var("CAT_HERDER_NATS_URL")
@@ -645,6 +656,7 @@ async fn main() {
         broker,
         budgets: repos.budgets,
         budget_counter,
+        policy,
         bus,
         agents: repos.agents,
         providers: repos.providers,

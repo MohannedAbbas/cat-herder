@@ -9,6 +9,7 @@ use axum::{
     response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::{get, post, put},
 };
+use axum_extra::extract::cookie::CookieJar;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
@@ -23,6 +24,7 @@ use cat_herder_domain::api::{
 };
 use cat_herder_domain::entities::{ApprovalStatus, Run, RunId, RunState, Usage};
 use cat_herder_domain::events::{Event, event_type};
+use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize};
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, ApprovalRepository, CredentialBroker, EventBus, EventRepository,
     GitRepoRepository, MintedCredential, RunRepository, RunRequest, SessionRepository,
@@ -65,6 +67,9 @@ pub const WEBHOOK_SECRET_KEY: &str = "webhook_secret";
 
 /// Settings key for the supported git hosts (a JSON array of `{host,label}`).
 pub const GIT_HOSTS_SETTING: &str = "git_hosts";
+
+/// Settings key for the authorization policy (a JSON [`Policy`], §11.8).
+pub const POLICY_SETTING: &str = "policy";
 
 /// The concrete credential broker wired into the application (`PLAN.md` §11.3): either
 /// the remote broker service over gRPC ([`RemoteCredentialBroker`]), or — when no broker
@@ -134,6 +139,8 @@ pub struct AppState {
     pub budgets: BudgetRepo,
     /// The atomic, real-time budget counter (Redis in production, in-memory otherwise).
     pub budget_counter: BudgetCounterImpl,
+    /// The authorization policy (§11.8): RBAC minimum roles + ABAC rules.
+    pub policy: Policy,
     pub bus: EventBusImpl,
     pub audit: AuditRepo,
     pub settings: SettingRepo,
@@ -194,6 +201,7 @@ impl Default for AppState {
             broker,
             budgets: BudgetRepo::InMemory(Default::default()),
             budget_counter: BudgetCounterImpl::InMemory(Default::default()),
+            policy: Policy::default(),
             bus,
             audit: AuditRepo::InMemory(Default::default()),
             settings: SettingRepo::InMemory(Default::default()),
@@ -305,11 +313,59 @@ async fn resolve_model(
     }
 }
 
+/// Resolve the session's role and authorize `decision` against the policy (§11.8).
+/// Returns the authenticated role on success; `401` when unauthenticated, `403` when
+/// the role fails the RBAC/ABAC check.
+async fn require_role(
+    state: &AppState,
+    jar: &CookieJar,
+    decision: Decision,
+    attributes: std::collections::BTreeMap<String, String>,
+) -> Result<Role, (StatusCode, String)> {
+    let token = jar.get("session").map(|c| c.value().to_string());
+    let role = match token {
+        Some(t) => state.auth.session_role(&t).await,
+        None => None,
+    }
+    .ok_or((StatusCode::UNAUTHORIZED, "authentication required".into()))?;
+    let request = AccessRequest {
+        decision,
+        role,
+        attributes,
+    };
+    if authorize(&state.policy, &request) {
+        Ok(role)
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            "not authorized for this action".into(),
+        ))
+    }
+}
+
 /// Accept a task, orchestrate it through the lifecycle, and spawn a Sandbox.
 async fn create_run(
     State(state): State<AppState>,
+    jar: CookieJar,
     Json(req): Json<CreateRunRequest>,
 ) -> Result<(StatusCode, Json<RunResponse>), (StatusCode, String)> {
+    // §11.8: run creation (and its clone-credential mint) are authorization decisions.
+    require_role(&state, &jar, Decision::RunCreate, Default::default()).await?;
+    if let Some(repo) = req.repo.as_deref()
+        && let Some(identity) = repo_identity_from_url(repo)
+    {
+        require_role(
+            &state,
+            &jar,
+            Decision::CredentialMint,
+            std::collections::BTreeMap::from([
+                ("target".into(), identity.id()),
+                ("action".into(), "clone".into()),
+                ("scope".into(), "read".into()),
+            ]),
+        )
+        .await?;
+    }
     let runtime = state.runtime.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "execution runtime not configured".into(),
@@ -384,9 +440,13 @@ pub struct RaiseBudgetRequest {
 
 async fn raise_budget_handler(
     State(state): State<AppState>,
+    jar: CookieJar,
     Path(id): Path<u64>,
     Json(req): Json<RaiseBudgetRequest>,
 ) -> Result<Json<RunResponse>, (StatusCode, String)> {
+    // Budget management is a run-management decision (§12); gate it like run creation.
+    require_role(&state, &jar, Decision::RunCreate, Default::default()).await?;
+
     let run_id = RunId(id);
     raise_budget_for_run(&state, run_id, req.cap)
         .await
@@ -527,9 +587,13 @@ pub struct RespondApprovalRequest {
 /// or cancel (reject).
 async fn respond_approval_handler(
     State(state): State<AppState>,
+    jar: CookieJar,
     Path(id): Path<String>,
     Json(req): Json<RespondApprovalRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // §11.8: approval is an authorization decision ("who may approve what").
+    require_role(&state, &jar, Decision::Approval, Default::default()).await?;
+
     // 404 for unknown, 409 for an already-decided approval.
     let existing = state
         .approvals

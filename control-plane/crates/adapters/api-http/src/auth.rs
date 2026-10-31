@@ -11,14 +11,18 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
+use cat_herder_domain::policy::Role;
+
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// A stored session: when it expires and, for SSO sessions, the signed-in login.
+/// A stored session: when it expires, the signed-in login (for SSO), and the RBAC role.
 #[derive(Clone, Debug)]
 struct SessionEntry {
     expiry: Instant,
     /// Provider login (GitHub/GitLab) for SSO sessions; `None` for password logins.
     login: Option<String>,
+    /// The session's RBAC role (§11.8). Password/SSO logins are `Admin` by default.
+    role: Role,
 }
 
 /// Session lifetime, overridable via `CAT_HERDER_SESSION_TTL_SECS` (e.g. `3600`).
@@ -82,23 +86,25 @@ impl Auth {
 
     /// Issue a session without a password check. Used by SSO providers (e.g. GitHub
     /// OAuth) *after* they have independently authenticated the identity against an
-    /// allow-list. Reuses the same in-memory session store as password login.
+    /// allow-list. Reuses the same in-memory session store as password login. The
+    /// session carries the `Admin` role.
     pub async fn create_session(&self) -> String {
-        self.insert_session(None).await
+        self.insert_session(None, Role::Admin).await
     }
 
     /// Issue a session for an already-authenticated SSO identity, remembering the
     /// provider login so `me()` can report who signed in. Like [`Self::create_session`],
     /// the caller must have independently authenticated (and allow-listed) the login.
     pub async fn create_session_for(&self, login: impl Into<String>) -> String {
-        self.insert_session(Some(login.into())).await
+        self.insert_session(Some(login.into()), Role::Admin).await
     }
 
-    async fn insert_session(&self, login: Option<String>) -> String {
+    async fn insert_session(&self, login: Option<String>, role: Role) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         let entry = SessionEntry {
             expiry: Instant::now() + self.session_ttl,
             login,
+            role,
         };
         self.sessions.write().await.insert(token.clone(), entry);
         token
@@ -127,6 +133,14 @@ impl Auth {
 
     pub async fn logout(&self, token: &str) {
         self.sessions.write().await.remove(token);
+    }
+
+    /// The session's RBAC role (§11.8), or `None` when the token is unknown/expired.
+    pub async fn session_role(&self, token: &str) -> Option<Role> {
+        match self.sessions.read().await.get(token) {
+            Some(entry) if entry.expiry > Instant::now() => Some(entry.role),
+            _ => None,
+        }
     }
 }
 
@@ -178,5 +192,21 @@ mod tests {
     async fn unknown_token_is_invalid() {
         let auth = Auth::new("admin", "hunter2");
         assert!(!auth.valid_session("nope").await);
+    }
+
+    #[tokio::test]
+    async fn sessions_carry_the_admin_role() {
+        let auth = Auth::new("admin", "hunter2");
+        let pw = auth.login("admin", "hunter2").await.unwrap();
+        assert_eq!(
+            auth.session_role(&pw).await,
+            Some(cat_herder_domain::policy::Role::Admin)
+        );
+        let sso = auth.create_session_for("octocat").await;
+        assert_eq!(
+            auth.session_role(&sso).await,
+            Some(cat_herder_domain::policy::Role::Admin)
+        );
+        assert_eq!(auth.session_role("nope").await, None);
     }
 }

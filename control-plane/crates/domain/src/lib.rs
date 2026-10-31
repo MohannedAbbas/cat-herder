@@ -14,10 +14,12 @@ pub mod api;
 pub mod catalog;
 pub mod entities;
 pub mod events;
+pub mod policy;
 pub mod ports;
 pub mod reconcile;
 pub mod shard;
 pub mod state;
 
 pub use entities::*;
+pub use policy::*;
 pub use ports::*;

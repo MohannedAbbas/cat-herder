@@ -100,6 +100,36 @@ async fn post_json(app: Router, uri: &str, body: &str) -> (StatusCode, Vec<u8>) 
     (status, body)
 }
 
+/// Log in as the default admin and return the session token (for the `Cookie` header).
+async fn login_token(state: &AppState) -> String {
+    state.auth.login("admin", "admin").await.expect("login")
+}
+
+/// POST with an authenticated session cookie (the authorization decisions in §11.8
+/// require it).
+async fn post_json_authed(
+    app: Router,
+    token: &str,
+    uri: &str,
+    body: &str,
+) -> (StatusCode, Vec<u8>) {
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("cookie", format!("session={token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, body)
+}
+
 #[tokio::test]
 async fn list_runs_starts_empty() {
     let (status, body) = send(app(), "/v1/runs").await;
@@ -110,8 +140,11 @@ async fn list_runs_starts_empty() {
 
 #[tokio::test]
 async fn create_run_without_runtime_returns_503() {
-    let (status, _) = post_json(
-        app(),
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
+        router(state),
+        &token,
         "/v1/runs",
         r#"{"task_spec":"hello","kind":"agent","max_concurrency":1}"#,
     )
@@ -224,7 +257,15 @@ async fn stream_run_events_without_nats_returns_501() {
 
 #[tokio::test]
 async fn respond_approval_unknown_id_returns_404() {
-    let (status, _) = post_json(app(), "/v1/approvals/nope/respond", r#"{"approve":true}"#).await;
+    let state = AppState::default();
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
+        router(state),
+        &token,
+        "/v1/approvals/nope/respond",
+        r#"{"approve":true}"#,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -247,8 +288,10 @@ async fn respond_approval_already_decided_returns_409() {
     };
     state.approvals.create(&approval).await.unwrap();
 
-    let (status, _) = post_json(
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
         router(state),
+        &token,
         "/v1/approvals/decided-1/respond",
         r#"{"approve":false}"#,
     )
@@ -302,8 +345,10 @@ async fn respond_approval_approves_and_resumes_run() {
         .await
         .unwrap();
 
-    let (status, _) = post_json(
+    let token = login_token(&state).await;
+    let (status, _) = post_json_authed(
         router(state.clone()),
+        &token,
         "/v1/approvals/pending-1/respond",
         r#"{"approve":true,"response":"go ahead"}"#,
     )

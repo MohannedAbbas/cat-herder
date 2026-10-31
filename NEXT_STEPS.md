@@ -183,11 +183,26 @@ Brokered credentials and a real budget hard-stop; both are called out as
   the chart's `config.yaml`); harness pre-call fast-path (optimization, not authority);
   token `settle` (DECRBY the estimate-vs-actual delta).
 
-- [ ] **9. Policy engine — RBAC/ABAC decision points (§11.8).**
+- [x] **9. Policy engine — RBAC/ABAC decision points (§11.8).**
   Auth today is a single admin session; no roles, no policies, no per-decision checks.
   *Done when:* the five decision points (run creation, tool invocation, credential
   minting, approval, result review) are enforced by a small declarative policy DSL over
   the domain entities, with RBAC roles (viewer/operator/admin) + ABAC rules.
+  *Status:* ✅ landed — ✅ `domain/src/policy.rs` (a declarative, JSON-serializable
+  policy DSL): `Role` (`viewer`/`operator`/`admin`, ordered) + `Decision`
+  (`RunCreate`/`ToolInvoke`/`CredentialMint`/`Approval`/`ResultReview`) + `Policy`
+  (RBAC `min_roles` + `AbacRule { decision, attribute, value, requires }`) + `authorize`
+  (deny-by-default, strictest matching ABAC rule wins); ✅ `Auth` sessions carry a
+  `Role` (seeded admin + SSO → `admin`; `session_role`); ✅ `policy` on `AppState`,
+  loaded from the `policy` setting (JSON) or the built-in default; ✅ **wired decision
+  points** — `POST /v1/runs` requires `authorize(RunCreate)` + `authorize(CredentialMint)`
+  (with `{target, action, scope}` for the clone credential), `POST /v1/approvals/{id}/
+  respond` requires `authorize(Approval)`, `POST /v1/runs/{id}/budget` is gated as a
+  run-management decision (all now return `401`/`403` instead of acting unauthenticated).
+  See `docs/design/policy.md`. ⬜ Deferred: `ToolInvoke` (enforcement point is the
+  harness tool set + `interrupt_on`; a control-plane per-call gate slots in later) and
+  `ResultReview` (lands with #11); webhook (HMAC) / MCP paths folded into the engine;
+  `viewer`/`operator` role assignment via a user directory (§11.2 SCIM).
 
 ---
 
