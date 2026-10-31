@@ -372,7 +372,17 @@ Brokered credentials and a real budget hard-stop; both are called out as
   event envelope + pod labels), and pattern/deny-list redaction for arbitrary tool I/O
   shapes.
 
-- [x] **18. Retention & deletion (§11.7).** Configurable retention + a deletion API
+- [ ] **18. Agent run logs → run UI (§16).**
+  Today the harness reports lifecycle events (started/finished/stuck/heartbeat/interrupt)
+  plus a final markdown report, but the agent's live logs — streaming LLM output, tool
+  invocations, and shell stdout/stderr — stay inside the sandbox pod and never reach the
+  run detail page.
+  *Done when:* the harness streams (redacted) run logs over the control channel to the
+  control plane, they're spooled/persisted alongside the event log, and
+  `GET /v1/runs/{id}/logs` (with an SSE live tail) + the run detail page surface them, so
+  an operator can watch a run without `kubectl logs`.
+
+- [x] **19. Retention & deletion (§11.7).** Configurable retention + a deletion API
   that hard-deletes a run's events, checkpoints, snapshots, and artifacts.
   *Status:* ✅ landed — ✅ `DELETE /v1/runs/{id}` (admin-gated, audited `run.delete`)
   hard-deletes a run and all its data via `purge_run`: revoke still-active credentials,
@@ -386,7 +396,7 @@ Brokered credentials and a real budget hard-stop; both are called out as
   Deferred: workspace snapshot/artifact deletion (with #5's MinIO slice) and the
   per-run PVC subpath reclaim, plus an admin-UI retention setting (env-driven for now).
 
-- [x] **19. Evaluation harness (§17).** Task-completion scoring (SWE-bench-style),
+- [x] **20. Evaluation harness (§17).** Task-completion scoring (SWE-bench-style),
   deterministic replay, broker "secret never reaches model" tests, and a budgeted
   canary run per deploy.
   *Status:* ✅ landed — ✅ **SWE-bench-style scoring** — `domain/src/eval.rs`
@@ -401,7 +411,7 @@ Brokered credentials and a real budget hard-stop; both are called out as
   (apply patch → run held-out tests → feed `Eval`), the deterministic LLM-stub replay
   (Python test infra), and proptest for the pure core.
 
-- [ ] **20. HA/DR, chaos, compliance (§20 Phase 5).** Load + chaos testing,
+- [ ] **21. HA/DR, chaos, compliance (§20 Phase 5).** Load + chaos testing,
   cold-start optimization, codebase indexing/LSP (deferred follow-on), SOC2/GDPR
   attestation.
 
