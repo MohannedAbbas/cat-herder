@@ -71,6 +71,12 @@ workspace:
   storageClassName: ""
   storage: 5Gi
   pvcName: cat-herder-workspaces
+  # Access mode for the shared workspace PVC. Defaults to ReadWriteMany, which needs
+  # an RWX-capable StorageClass (a network/FUSE CSI driver). On single-node dev
+  # clusters whose only StorageClass is `local-path` (RWO-only), override to
+  # `["ReadWriteOnce"]` (e.g. in dev-values.yaml).
+  accessModes:
+    - ReadWriteMany
 
 ui:
   image: ghcr.io/your-org/cat-herder-ui:0.1.0

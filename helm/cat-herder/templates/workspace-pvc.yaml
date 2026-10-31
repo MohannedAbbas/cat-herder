@@ -13,7 +13,9 @@ metadata:
     app.kubernetes.io/part-of: cat-herder
 spec:
   accessModes:
-    - ReadWriteMany
+    {{- range .Values.workspace.accessModes | default (list "ReadWriteMany") }}
+    - {{ . | quote }}
+    {{- end }}
   resources:
     requests:
       storage: {{ .Values.workspace.storage }}
