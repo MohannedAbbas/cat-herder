@@ -1275,5 +1275,222 @@ scoring harness; attribution via budget-accounting events.
 
 ---
 
+## 24. Configuration & secrets management (file-based)
+
+### 24.1 Why not env vars
+
+The control plane and broker read ~50 ad-hoc env vars (`CAT_HERDER_*`, `GITHUB_OAUTH_*`,
+`GITLAB_OAUTH_*`, `PORT`, `LLM_API_KEY`, …) via scattered `std::env::var` /
+`parse_env_u32` / `parse_bool_env` calls. This works for a first pass but scales poorly:
+
+- **No schema.** A typo (`CAT_HERDER_LEASE_TTL_SECS` vs `LEASE_TTL_SECS`) silently
+  falls back to a default — there is no validation, no editor autocomplete, no single
+  place that documents every knob.
+- **Secrets and config are the same mechanism.** Both are env vars; the only
+  distinction is where the Helm chart injects them from (`value:` vs `secretKeyRef`).
+  This means secrets are not naturally gitignored and there is no GitOps story for
+  them.
+- **The surface is split across code + chart.** `main.rs` parses one set, `values.yaml`
+  documents another, `api-deployment.yaml` maps between them. Adding a setting touches
+  all three.
+
+### 24.2 Target: two files, layered, schema-validated
+
+- **`cat-herder.toml`** — non-secret configuration. Committed (as an example/template)
+  and mounted into the pod. A predefined, documented schema.
+- **`secrets.toml`** — secret values (passwords, tokens, private keys). **Gitignored**;
+  in-cluster it is mounted from a Kubernetes Secret. Same schema, secret-bearing keys
+  only.
+- The app loads `defaults → cat-herder.toml → secrets.toml → (env overrides)`, then
+  validates the merged result and fails fast with an actionable message.
+
+Only two "entry point" env vars remain: `CAT_HERDER_CONFIG` and `CAT_HERDER_SECRETS`
+(the paths), both optional with defaults (`./cat-herder.toml` and `./secrets.toml`, or
+`/etc/cat-herder/…` in-cluster).
+
+### 24.3 `cat-herder.toml` schema (non-secret)
+
+```toml
+[server]
+port = 8080
+grpc_port = 50051
+namespace = "cat-herder"
+
+[control_plane]
+stuck_timeout_secs = 900
+run_timeout_secs = 3600
+shard_count = 16
+lease_ttl_secs = 30
+reconcile_interval_secs = 10
+retention_days = 0
+session_ttl_secs = 86400
+review_deadline_secs = 259200
+
+[harness]
+image = "ghcr.io/you/cat-herder-agent-harness:0.1.0"
+rust_image = "ghcr.io/you/cat-herder-agent-harness-rust:0.1.0"
+
+[workspace]
+pvc = "cat-herder-workspaces"
+
+[agents]
+# agent id -> model
+models = { "agent-codeact" = "deepseek:deepseek-chat" }
+
+[nats]
+enabled = false
+url = "nats://cat-herder-nats:4222"
+
+[redis]
+enabled = false
+url = "redis://cat-herder-redis:6379"
+
+[llm]
+enabled = false
+proxy_url = "http://cat-herder-litellm:4000"
+
+[oauth.github]
+enabled = true
+client_id = "Iv1.…"            # not secret
+redirect_url = "https://cat.example.com"
+allowed_users = ["octocat"]
+role_mapping = { admin_teams = ["acme/platform"], operator_orgs = ["acme"] }
+
+[broker]
+enabled = false
+url = "http://cat-herder-broker:50052"
+[broker.github]
+app_id = 123456
+api_base = ""                  # empty = public GitHub; override for GHE
+```
+
+### 24.4 `secrets.toml` (gitignored)
+
+Same structure, secret-bearing keys only. This is what `.gitignore` excludes and what
+the cluster supplies from a Secret:
+
+```toml
+[database]
+url = "postgres://cat_herder:…@cat-herder-postgres:5432/cat_herder"
+
+[admin]
+username = "admin"
+password = "…"                 # bcrypt-hashed at boot (unchanged behaviour)
+
+[encryption]
+key = "…"                      # AES-256 key (base64); the app may still self-generate
+
+[oauth.github]
+client_secret = "…"
+[oauth.gitlab]
+client_secret = "…"
+
+[broker.github]
+private_key = """-----BEGIN RSA PRIVATE KEY-----…"""
+[broker.tls]
+ca = "…"
+client_cert = "…"
+client_key = "…"
+
+[webhook]
+github_secret = "…"
+gitlab_token = "…"
+slack_signing_secret = "…"
+```
+
+`client_id`/`app_id`/redirect URLs stay in `cat-herder.toml` (they are not secret);
+only the values that must not leave the Secret store live in `secrets.toml`.
+
+### 24.5 Loading & precedence
+
+1. Compiled-in defaults (every key optional → zero-config dev still boots).
+2. `cat-herder.toml`.
+3. `secrets.toml` (overrides config for secret keys).
+4. `CAT_HERDER_*` env overrides — kept **only during migration** (§24.8), then removed.
+
+Merge is deep (per-section), so `secrets.toml` can contain only `[oauth.github]` without
+restating the rest of `cat-herder.toml`.
+
+### 24.6 Rust implementation
+
+- **`figment`** (crates.io `figment`) for layered providers: `Toml::file(config)`,
+  `Toml::file(secrets)`, optional `Env`. It is the de-facto layered-config crate
+  (`config-rs` is the main alternative; `figment`'s provider model fits the two-file +
+  override shape best).
+- **`serde`** into a typed `Config` struct — that struct *is* the schema. Use
+  `#[serde(deny_unknown_fields)]` so a misspelled key is a hard startup error, not a
+  silent default.
+- **`schemars`** derive to emit `docs/cat-herder.schema.json`, so editors can
+  autocomplete/validate the TOML via `taplo` (`#:schema` comment in the example file).
+- Ship **`cat-herder.example.toml`** (committed, every key + a doc comment) as the
+  human-readable schema; generate the JSON Schema from the struct so they never drift.
+
+### 24.7 Kubernetes-native tooling (investigation)
+
+The file-based model maps 1:1 onto two k8s primitives — **ConfigMap** (`cat-herder.toml`)
+and **Secret** (`secrets.toml`) — both mounted as files. The choice is how those get
+produced.
+
+**Non-secret config — pick a producer:**
+
+| Tool | How | Notes |
+|---|---|---|
+| **Helm** | template `cat-herder.toml` from a new `config:` block in `values.yaml` | keep Helm as the interface; the ~50 `env:` entries collapse into one ConfigMap + two mounts |
+| **Kustomize `configMapGenerator`** | generate the ConfigMap straight from the checked-in `cat-herder.toml` | single source of truth; hash-suffixed names trigger rollouts |
+| **Flux / Argo CD** | GitOps: commit `cat-herder.toml`, render via Kustomize/Helm | pairs with either of the above |
+
+**Secrets — pick a backend for `secrets.toml`:**
+
+| Tool | Model | In git? | External manager? | Best for |
+|---|---|---|---|---|
+| **Sealed Secrets** (Bitnami) | `kubeseal` encrypts → commit → controller decrypts in-cluster | encrypted | no | self-contained GitOps, no Vault |
+| **SOPS + age/KMS** | encrypt the file in git; decrypt via Flux Kustomize or `sops-secrets-operator` | encrypted | no (age/cloud KMS) | teams already on SOPS/age |
+| **External Secrets Operator (ESO)** | `SecretStore` + `ExternalSecret` CRs sync Vault/AWS/GCP/Azure → k8s Secret | no | yes | orgs with a central secret manager |
+| **Vault + Secrets Store CSI** | app/Vault injector pulls directly | no | yes (Vault) | enterprise, dynamic/short-lived secrets |
+| plain k8s Secret + `kubectl` | manual create | no | no | quickstart only |
+
+**Validation & reload (defense in depth):**
+
+- **Helm `values.schema.json`** — validate the chart's own interface (native, no extra
+  controller).
+- **`taplo`** — TOML lint/format + JSON-Schema-driven autocomplete for contributors.
+- **Kyverno / OPA Gatekeeper** — admission-time policy on the ConfigMap/Secret shape
+  (e.g. "a `secrets.toml` Secret must have the expected keys").
+- **Reloader** (Stakater) — rolls the pod when the ConfigMap/Secret changes; or the app
+  hot-reloads via `notify` (figment doesn't watch natively).
+
+**Recommendation (default profile):** Helm generates the `cat-herder.toml` ConfigMap and
+mounts a `secrets.toml` Secret; **Sealed Secrets** is the default for the secret file
+(git-safe, no external dependency), upgrading to **ESO** when the org already runs a
+secret manager. Schema via `schemars` + a committed example, validated at startup.
+
+### 24.8 Migration (non-breaking)
+
+- **Phase 1 — foundation.** Add `figment` + typed `Config`; load both files; keep the
+  existing `env::var` reads as an override layer so current Helm/env deployments keep
+  working. Add `.gitignore` entries for `secrets.toml` / `cat-herder.toml` (local).
+- **Phase 2 — schema & docs.** Ship `cat-herder.example.toml` + generated JSON Schema +
+  `#[serde(deny_unknown_fields)]` validation; fail fast on unknown/mistyped keys.
+- **Phase 3 — chart flip.** Helm emits one ConfigMap + one Secret mount instead of the
+  per-key `env:` block; delete the env-var override layer; only the two path env vars
+  remain.
+- **Phase 4 — secret backend.** Wire Sealed Secrets / ESO per deployment profile and
+  document the workflow (`kubeseal`/`ExternalSecret` for `secrets.toml`).
+
+### 24.9 Open questions
+
+- **Provider/LLM keys** are already per-provider Secrets managed via the Providers admin
+  UI (read by the runtime, not the control-plane config). Keep that model, or fold the
+  fallback `LLM_API_KEY` into `secrets.toml`? (Leaning: keep per-provider, move only the
+  fallback.)
+- **Encryption key** is currently self-generated into a k8s Secret by the app. In the
+  file model it can stay app-managed (read/write `secrets.toml`) or become an operator
+  seed. (Leaning: keep app-managed, mounted as a writable Secret-backed file.)
+- **Single `secrets.toml` vs per-secret files.** One file is simpler; per-secret files
+  (a Secret's keys mounted into a directory) are more granular for ESO sync and rotation.
+  (Leaning: single file first; split later if rotation demands it.)
+
+---
+
 *Generated as the planning deliverable for the Cat Herder project; revised in
 response to `PLAN_REVIEW.md`.*

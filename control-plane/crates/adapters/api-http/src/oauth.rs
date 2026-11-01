@@ -16,6 +16,7 @@
 //! [`OAuthClient`] (the generic HTTP client). `GitHubOAuth` / `GitLabOAuth` are thin
 //! newtypes over the shared client so the two providers stay identical in behaviour.
 
+use cat_herder_domain::policy::Role;
 use cat_herder_domain::ports::IdentityProvider;
 
 /// Static description of an OAuth provider's endpoints and identity semantics.
@@ -34,6 +35,14 @@ pub struct OAuthProvider {
     pub authorize_path: &'static str,
     pub token_path: &'static str,
     pub user_path: &'static str,
+    /// Org-membership endpoint (`read:org`); empty when the provider has no org
+    /// concept worth mapping.
+    pub orgs_url: &'static str,
+    pub orgs_path: &'static str,
+    /// Team-membership endpoint (`read:org`); empty when the provider has no team
+    /// concept worth mapping.
+    pub teams_url: &'static str,
+    pub teams_path: &'static str,
     /// Space-separated OAuth scopes requested at authorize time.
     pub scope: &'static str,
     /// Router path of the callback endpoint (also appended to the redirect base).
@@ -46,6 +55,8 @@ pub struct OAuthProvider {
 pub const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 pub const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 pub const GITHUB_USER_URL: &str = "https://api.github.com/user";
+pub const GITHUB_ORGS_URL: &str = "https://api.github.com/user/orgs";
+pub const GITHUB_TEAMS_URL: &str = "https://api.github.com/user/teams";
 
 pub const GITHUB: OAuthProvider = OAuthProvider {
     name: "GITHUB",
@@ -55,7 +66,11 @@ pub const GITHUB: OAuthProvider = OAuthProvider {
     authorize_path: "/login/oauth/authorize",
     token_path: "/login/oauth/access_token",
     user_path: "/user",
-    scope: "read:user",
+    orgs_url: GITHUB_ORGS_URL,
+    orgs_path: "/user/orgs",
+    teams_url: GITHUB_TEAMS_URL,
+    teams_path: "/user/teams",
+    scope: "read:user read:org",
     callback_path: "/v1/auth/github/callback",
     state_cookie: "gh_oauth_state",
 };
@@ -75,6 +90,10 @@ pub const GITLAB: OAuthProvider = OAuthProvider {
     // GitLab's API base differs from the web/oauth base; a self-managed instance
     // served from `<base>` exposes the API under `<base>/api/v4`.
     user_path: "/api/v4/user",
+    orgs_url: "",
+    orgs_path: "",
+    teams_url: "",
+    teams_path: "",
     scope: "read_user",
     callback_path: "/v1/auth/gitlab/callback",
     state_cookie: "gl_oauth_state",
@@ -103,6 +122,8 @@ pub struct OAuthConfig {
     pub redirect_url: String,
     /// Provider user logins permitted to become admin (case-insensitive).
     pub allowed_users: Vec<String>,
+    /// Maps org/team membership to a [`Role`] (see [`RoleMapping`]).
+    pub role_mapping: RoleMapping,
     /// Which provider this config belongs to.
     pub provider: &'static OAuthProvider,
     /// Optional base-URL override (e.g. a self-managed GitLab or GitHub Enterprise
@@ -137,6 +158,32 @@ impl OAuthConfig {
             self.provider.user_path,
             self.provider.user_url,
         )
+    }
+
+    /// The org-membership endpoint, or `None` when the provider has no org concept
+    /// worth mapping (e.g. GitLab).
+    pub fn orgs_url(&self) -> Option<String> {
+        if self.provider.orgs_path.is_empty() {
+            return None;
+        }
+        Some(resolve_url(
+            self.base_url.as_deref(),
+            self.provider.orgs_path,
+            self.provider.orgs_url,
+        ))
+    }
+
+    /// The team-membership endpoint, or `None` when the provider has no team concept
+    /// worth mapping (e.g. GitLab).
+    pub fn teams_url(&self) -> Option<String> {
+        if self.provider.teams_path.is_empty() {
+            return None;
+        }
+        Some(resolve_url(
+            self.base_url.as_deref(),
+            self.provider.teams_path,
+            self.provider.teams_url,
+        ))
     }
 
     /// Load GitHub config from `GITHUB_OAUTH_*`.
@@ -177,6 +224,7 @@ impl OAuthConfig {
         };
         let allowed_users =
             parse_allowed_users(lookup(&provider.env_key("ALLOWED_USERS")).as_deref());
+        let role_mapping = parse_role_mapping(lookup(&provider.env_key("ROLE_MAPPING")).as_deref());
         let base_url = lookup(&provider.base_url_env_key())
             .map(|v| v.trim().trim_end_matches('/').to_string())
             .filter(|v| !v.is_empty());
@@ -185,6 +233,7 @@ impl OAuthConfig {
             client_secret: required(&provider.env_key("CLIENT_SECRET"))?,
             redirect_url: required(&provider.env_key("REDIRECT_URL"))?,
             allowed_users,
+            role_mapping,
             provider,
             base_url,
         })
@@ -242,6 +291,68 @@ pub fn parse_allowed_users(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// GitHub org/team membership the provider reports for a user (via the `read:org`
+/// scope). Team entries are `org/team` slugs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Memberships {
+    /// Org logins the user belongs to.
+    pub orgs: Vec<String>,
+    /// Team slugs (`org/team`) the user belongs to.
+    pub teams: Vec<String>,
+}
+
+/// Maps GitHub org/team membership to a [`Role`] — the role source for SSO users
+/// (§11.8). Parsed from `<PROVIDER>_OAUTH_ROLE_MAPPING` (JSON), e.g.
+/// `{"admin_teams":["acme/platform"],"operator_orgs":["acme"]}`.
+///
+/// When no mapping is configured an allow-listed user is `Admin` (backward-compatible
+/// with the original SSO behaviour); once any entry is set, users who match nothing
+/// fall back to `Viewer` (least privilege).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct RoleMapping {
+    pub admin_orgs: Vec<String>,
+    pub admin_teams: Vec<String>,
+    pub operator_orgs: Vec<String>,
+    pub operator_teams: Vec<String>,
+}
+
+impl RoleMapping {
+    /// Whether no org/team → role entries are configured.
+    pub fn is_empty(&self) -> bool {
+        self.admin_orgs.is_empty()
+            && self.admin_teams.is_empty()
+            && self.operator_orgs.is_empty()
+            && self.operator_teams.is_empty()
+    }
+
+    /// Resolve a user's role from their memberships — highest match wins.
+    pub fn resolve(&self, m: &Memberships) -> Role {
+        if self.admin_orgs.iter().any(|o| m.orgs.contains(o))
+            || self.admin_teams.iter().any(|t| m.teams.contains(t))
+        {
+            return Role::Admin;
+        }
+        if self.operator_orgs.iter().any(|o| m.orgs.contains(o))
+            || self.operator_teams.iter().any(|t| m.teams.contains(t))
+        {
+            return Role::Operator;
+        }
+        if self.is_empty() {
+            Role::Admin
+        } else {
+            Role::Viewer
+        }
+    }
+}
+
+/// Parse the `<PROVIDER>_OAUTH_ROLE_MAPPING` JSON into a [`RoleMapping`]. A missing,
+/// blank, or malformed value yields an empty mapping (→ `Admin` for allow-listed users).
+fn parse_role_mapping(raw: Option<&str>) -> RoleMapping {
+    raw.and_then(|s| serde_json::from_str(s.trim()).ok())
+        .unwrap_or_default()
+}
+
 /// Minimal percent-encoding for URL query components (RFC 3986 unreserved kept).
 fn urlencode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -261,6 +372,14 @@ fn urlencode(input: &str) -> String {
 pub struct OAuthUser {
     /// The user's login (GitHub `login` / GitLab `username`).
     pub login: String,
+}
+
+/// The result of a successful SSO login: the user's provider login plus the RBAC role
+/// resolved from their org/team membership (see [`RoleMapping`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthenticatedUser {
+    pub login: String,
+    pub role: Role,
 }
 
 /// Errors surfaced by the provider client.
@@ -303,6 +422,28 @@ struct UserResponse {
     login: Option<String>,
     #[serde(default)]
     username: Option<String>,
+}
+
+/// Org-membership payload entry (`GET /user/orgs`): the org `login`.
+#[derive(serde::Deserialize)]
+struct OrgResponse {
+    #[serde(default)]
+    login: Option<String>,
+}
+
+/// Team-membership payload entry (`GET /user/teams`): the team `slug` + parent org.
+#[derive(serde::Deserialize)]
+struct TeamResponse {
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    organization: Option<TeamOrgResponse>,
+}
+
+#[derive(serde::Deserialize)]
+struct TeamOrgResponse {
+    #[serde(default)]
+    login: Option<String>,
 }
 
 /// Generic OAuth client: performs the token exchange and user fetch over HTTP for
@@ -384,9 +525,75 @@ impl OAuthClient {
         }
     }
 
-    /// Run the full flow: exchange the code, fetch the user, enforce the allow-list.
-    /// Returns the provider login on success.
-    pub async fn authenticate(&self, code: &str) -> Result<String, AuthOutcome> {
+    /// Fetch the orgs the user belongs to (`read:org`). Best-effort: a provider
+    /// without orgs (or a refused scope) yields an empty list.
+    pub async fn fetch_orgs(&self, access_token: &str) -> Result<Vec<String>, OAuthError> {
+        let Some(url) = self.config.orgs_url() else {
+            return Ok(Vec::new());
+        };
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::USER_AGENT, "cat-herder")
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| OAuthError::Transport(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(OAuthError::UserFetch(format!("HTTP {}", resp.status())));
+        }
+        let orgs: Vec<OrgResponse> = resp
+            .json()
+            .await
+            .map_err(|e| OAuthError::Transport(e.to_string()))?;
+        Ok(orgs.into_iter().filter_map(|o| o.login).collect())
+    }
+
+    /// Fetch the teams the user belongs to (`read:org`), normalized to `org/team`
+    /// slugs. Best-effort: a provider without teams yields an empty list.
+    pub async fn fetch_teams(&self, access_token: &str) -> Result<Vec<String>, OAuthError> {
+        let Some(url) = self.config.teams_url() else {
+            return Ok(Vec::new());
+        };
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::USER_AGENT, "cat-herder")
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| OAuthError::Transport(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(OAuthError::UserFetch(format!("HTTP {}", resp.status())));
+        }
+        let teams: Vec<TeamResponse> = resp
+            .json()
+            .await
+            .map_err(|e| OAuthError::Transport(e.to_string()))?;
+        Ok(teams
+            .into_iter()
+            .filter_map(|t| {
+                let slug = t.slug?;
+                let org = t.organization.and_then(|o| o.login)?;
+                Some(format!("{org}/{slug}"))
+            })
+            .collect())
+    }
+
+    /// Fetch org + team memberships, degrading to empty on any error (membership is
+    /// best-effort: a refused `read:org` scope must not fail the login).
+    pub async fn fetch_memberships(&self, access_token: &str) -> Memberships {
+        Memberships {
+            orgs: self.fetch_orgs(access_token).await.unwrap_or_default(),
+            teams: self.fetch_teams(access_token).await.unwrap_or_default(),
+        }
+    }
+
+    /// Run the full flow: exchange the code, fetch the user, enforce the allow-list,
+    /// then resolve the user's role from their org/team membership.
+    pub async fn authenticate(&self, code: &str) -> Result<AuthenticatedUser, AuthOutcome> {
         let token = self
             .exchange_code(code)
             .await
@@ -398,7 +605,12 @@ impl OAuthClient {
         if !self.config.is_allowed(&user.login) {
             return Err(AuthOutcome::NotAllowed);
         }
-        Ok(user.login)
+        let memberships = self.fetch_memberships(&token).await;
+        let role = self.config.role_mapping.resolve(&memberships);
+        Ok(AuthenticatedUser {
+            login: user.login,
+            role,
+        })
     }
 }
 
@@ -444,7 +656,7 @@ impl GitHubOAuth {
         self.0.fetch_user(access_token).await
     }
 
-    pub async fn authenticate(&self, code: &str) -> Result<String, AuthOutcome> {
+    pub async fn authenticate(&self, code: &str) -> Result<AuthenticatedUser, AuthOutcome> {
         self.0.authenticate(code).await
     }
 }
@@ -476,7 +688,7 @@ impl GitLabOAuth {
         self.0.fetch_user(access_token).await
     }
 
-    pub async fn authenticate(&self, code: &str) -> Result<String, AuthOutcome> {
+    pub async fn authenticate(&self, code: &str) -> Result<AuthenticatedUser, AuthOutcome> {
         self.0.authenticate(code).await
     }
 }
@@ -497,6 +709,7 @@ mod tests {
             client_secret: "secret".into(),
             redirect_url: "https://cat-herder.example.com".into(),
             allowed_users: allowed.iter().map(|s| s.to_string()).collect(),
+            role_mapping: RoleMapping::default(),
             provider: &GITHUB,
             base_url: None,
         }
@@ -508,6 +721,7 @@ mod tests {
             client_secret: "gsecret".into(),
             redirect_url: "https://cat-herder.example.com".into(),
             allowed_users: allowed.iter().map(|s| s.to_string()).collect(),
+            role_mapping: RoleMapping::default(),
             provider: &GITLAB,
             base_url: None,
         }
@@ -526,6 +740,58 @@ mod tests {
         assert!(parse_allowed_users(None).is_empty());
         assert!(parse_allowed_users(Some("")).is_empty());
         assert!(parse_allowed_users(Some("  ,  ")).is_empty());
+    }
+
+    #[test]
+    fn role_mapping_resolves_admin_and_operator() {
+        let mapping = RoleMapping {
+            admin_teams: vec!["acme/platform".into()],
+            operator_orgs: vec!["acme".into()],
+            ..Default::default()
+        };
+        let admin = Memberships {
+            teams: vec!["acme/platform".into()],
+            orgs: vec!["acme".into()],
+        };
+        assert_eq!(mapping.resolve(&admin), Role::Admin);
+        let operator = Memberships {
+            teams: vec!["acme/other".into()],
+            orgs: vec!["acme".into()],
+        };
+        assert_eq!(mapping.resolve(&operator), Role::Operator);
+    }
+
+    #[test]
+    fn role_mapping_empty_defaults_to_admin() {
+        // No mapping configured: preserve the original "allow-listed SSO user is admin".
+        let mapping = RoleMapping::default();
+        assert_eq!(mapping.resolve(&Memberships::default()), Role::Admin);
+    }
+
+    #[test]
+    fn role_mapping_configured_but_unmatched_defaults_to_viewer() {
+        let mapping = RoleMapping {
+            admin_teams: vec!["acme/platform".into()],
+            ..Default::default()
+        };
+        assert_eq!(mapping.resolve(&Memberships::default()), Role::Viewer);
+    }
+
+    #[test]
+    fn parse_role_mapping_parses_json_and_tolerates_malformed() {
+        let parsed = parse_role_mapping(Some(
+            r#"{"admin_teams":["acme/platform"],"operator_orgs":["acme"]}"#,
+        ));
+        assert_eq!(
+            parsed,
+            RoleMapping {
+                admin_teams: vec!["acme/platform".into()],
+                operator_orgs: vec!["acme".into()],
+                ..Default::default()
+            }
+        );
+        assert!(parse_role_mapping(None).is_empty());
+        assert!(parse_role_mapping(Some("not json")).is_empty());
     }
 
     #[test]
@@ -861,7 +1127,13 @@ mod tests {
             base_url: Some(server.uri()),
             ..cfg(&["octocat"])
         });
-        assert_eq!(client.authenticate("code").await.unwrap(), "octocat");
+        assert_eq!(
+            client.authenticate("code").await.unwrap(),
+            AuthenticatedUser {
+                login: "octocat".into(),
+                role: Role::Admin,
+            }
+        );
     }
 
     #[tokio::test]
@@ -893,6 +1165,59 @@ mod tests {
         assert_eq!(
             client.authenticate("code").await,
             Err(AuthOutcome::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticate_resolves_role_from_org_team_membership() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "access_token": "tok" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "login": "octocat" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/user/orgs"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{ "login": "acme" }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/user/teams"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "slug": "platform", "organization": { "login": "acme" } }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = OAuthClient::new(OAuthConfig {
+            role_mapping: RoleMapping {
+                admin_teams: vec!["acme/platform".into()],
+                ..Default::default()
+            },
+            base_url: Some(server.uri()),
+            ..cfg(&["octocat"])
+        });
+        assert_eq!(
+            client.authenticate("code").await.unwrap(),
+            AuthenticatedUser {
+                login: "octocat".into(),
+                role: Role::Admin,
+            }
         );
     }
 }

@@ -165,8 +165,11 @@ pub async fn github_callback(
     let clear_state = Cookie::build(("gh_oauth_state", "")).path("/").build();
 
     match oauth.authenticate(&params.code).await {
-        Ok(login) => {
-            let token = state.auth.create_session_for(login).await;
+        Ok(user) => {
+            let token = state
+                .auth
+                .create_session_for_role(user.login, user.role)
+                .await;
             let response = Redirect::to("/").into_response();
             (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
         }
@@ -232,8 +235,11 @@ pub async fn gitlab_callback(
         .build();
 
     match oauth.authenticate(&params.code).await {
-        Ok(login) => {
-            let token = state.auth.create_session_for(login).await;
+        Ok(user) => {
+            let token = state
+                .auth
+                .create_session_for_role(user.login, user.role)
+                .await;
             let response = Redirect::to("/").into_response();
             (jar.remove(clear_state).add(session_cookie(token)), response).into_response()
         }

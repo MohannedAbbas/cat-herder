@@ -14,6 +14,7 @@ cat-herder-store-inmemory = { path = "../store-inmemory" }
 cat-herder-store-postgres = { path = "../store-postgres" }
 cat-herder-store-nats = { path = "../store-nats" }
 cat-herder-store-redis = { path = "../store-redis" }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 axum.workspace = true
 axum-extra.workspace = true
 bcrypt.workspace = true

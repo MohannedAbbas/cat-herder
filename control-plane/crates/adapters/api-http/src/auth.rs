@@ -99,6 +99,13 @@ impl Auth {
         self.insert_session(Some(login.into()), Role::Admin).await
     }
 
+    /// Issue a session for an already-authenticated SSO identity with an explicit RBAC
+    /// role (resolved from org/team membership by the SSO client). The caller must have
+    /// independently authenticated (and allow-listed) the login.
+    pub async fn create_session_for_role(&self, login: impl Into<String>, role: Role) -> String {
+        self.insert_session(Some(login.into()), role).await
+    }
+
     async fn insert_session(&self, login: Option<String>, role: Role) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         let entry = SessionEntry {

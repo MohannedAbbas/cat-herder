@@ -7,7 +7,10 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response, sse::{Event as SseEvent, KeepAlive, Sse}},
+    response::{
+        IntoResponse, Response,
+        sse::{Event as SseEvent, KeepAlive, Sse},
+    },
     routing::{get, post, put},
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -50,8 +53,8 @@ pub use crypto::AesGcmCipher;
 pub use grpc::{ControlLinks, grpc_serve, grpc_server};
 pub use key_store::KeySecretStore;
 pub use logs::{RunLogLine, RunLogs};
-pub use mcp_hub::McpHub;
-pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig};
+pub use mcp_hub::{McpHub, RunStatusNotifierImpl, mcp_run_status_notification};
+pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig, RoleMapping};
 pub use pr::{FileChange, PrClient, PrSpec, default_host_api_bases};
 pub use repo::{
     AgentRepo, ApprovalRepo, AuditRepo, CheckpointRepo, CredentialGrantRepo, EventRepo,
@@ -188,9 +191,12 @@ pub struct AppState {
     pub control_links: Arc<ControlLinks>,
     /// In-memory spool of harness log lines + live-tail broadcast (`NEXT_STEPS #18`).
     pub run_logs: RunLogs,
-    /// MCP server-to-client push hub: maps runs to MCP sessions and fans terminal
-    /// run-status notifications out to connected SSE clients (Streamable HTTP).
+    /// MCP server-to-client push hub: maps sessions to their open SSE stream (the
+    /// process-local last-mile, shared by the local and Redis notifiers).
     pub mcp_hub: McpHub,
+    /// The run-status notifier (MCP push): local in single-replica/dev, Redis pub/sub
+    /// in multi-replica.
+    pub run_status_notifier: RunStatusNotifierImpl,
     /// Encryption cipher for git tokens (always present; key lives in a Secret and is
     /// rotated via the admin API).
     pub cipher: Arc<RwLock<AesGcmCipher>>,
@@ -211,6 +217,7 @@ impl Default for AppState {
         let transitions = InMemoryTransitionRepository::new(run.clone(), events.clone());
         let grants = CredentialGrantRepo::InMemory(Default::default());
         let bus = EventBusImpl::Noop;
+        let mcp_hub = McpHub::new();
         // No GitHub App configured by default, so the broker has an empty issuer map
         // and `mint` fails gracefully.
         let broker = BrokerImpl::Local(CredentialBrokerService::new(
@@ -249,7 +256,8 @@ impl Default for AppState {
             runtime: None,
             control_links: Arc::new(ControlLinks::default()),
             run_logs: RunLogs::new(),
-            mcp_hub: McpHub::new(),
+            mcp_hub: mcp_hub.clone(),
+            run_status_notifier: RunStatusNotifierImpl::Local(mcp_hub),
             cipher: Arc::new(RwLock::new(
                 AesGcmCipher::generate().expect("rng available"),
             )),
@@ -536,6 +544,7 @@ async fn create_run(
         &state.transitions,
         &state.bus,
         &state.broker,
+        &state.run_status_notifier,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -788,15 +797,23 @@ async fn get_run_logs(
         .ok_or((StatusCode::NOT_FOUND, "run not found".to_string()))?;
 
     if !q.follow {
-        let buffered: Vec<RunLogEvent> =
-            state.run_logs.buffered(run_id).iter().map(RunLogEvent::from).collect();
+        let buffered: Vec<RunLogEvent> = state
+            .run_logs
+            .buffered(run_id)
+            .iter()
+            .map(RunLogEvent::from)
+            .collect();
         return Ok(Json(buffered).into_response());
     }
 
     // Subscribe before snapshotting the buffer so no line published in between is lost.
     let rx = state.run_logs.subscribe(run_id);
-    let buffered: Vec<RunLogEvent> =
-        state.run_logs.buffered(run_id).iter().map(RunLogEvent::from).collect();
+    let buffered: Vec<RunLogEvent> = state
+        .run_logs
+        .buffered(run_id)
+        .iter()
+        .map(RunLogEvent::from)
+        .collect();
 
     let replay = futures::stream::iter(buffered.into_iter().map(|ev| {
         let json = serde_json::to_string(&ev).unwrap_or_default();
@@ -867,6 +884,7 @@ async fn respond_approval_handler(
         &state.transitions,
         &state.bus,
         &state.broker,
+        &state.run_status_notifier,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -987,6 +1005,7 @@ async fn respond_review_handler(
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.run_status_notifier,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1051,6 +1070,7 @@ async fn spawn_review_followup(state: &AppState, review: &Review) {
         &state.transitions,
         &state.bus,
         &state.broker,
+        &state.run_status_notifier,
     )
     .await
     {
@@ -1101,10 +1121,7 @@ async fn get_run_diff(
     let view: Vec<serde_json::Value> = changes
         .iter()
         .map(|fc| {
-            let content = fc
-                .content_base64
-                .as_deref()
-                .and_then(decode_base64_text);
+            let content = fc.content_base64.as_deref().and_then(decode_base64_text);
             serde_json::json!({
                 "path": fc.path,
                 "status": fc.status,
@@ -1185,35 +1202,6 @@ async fn get_run_review(
     })))
 }
 
-/// Build the JSON-RPC notification pushed to an MCP client when a run it triggered
-/// reaches a terminal state (`notifications/run/status`). The report is redacted with
-/// the domain redactor before it leaves the control plane.
-fn mcp_run_status_notification(run: &Run) -> String {
-    let state_str = serde_json::to_value(run.state)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{:?}", run.state).to_lowercase());
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/run/status",
-        "params": {
-            "run_id": run.id.0,
-            "state": state_str,
-            "report": run.report.as_deref().map(redact),
-            "pr_url": run.pr_url,
-        },
-    })
-    .to_string()
-}
-
-/// Push a terminal run-status notification to the MCP session that triggered `run`
-/// (no-op when the run has no associated session).
-fn notify_mcp_run_status(state: &AppState, run: &Run) {
-    state
-        .mcp_hub
-        .publish(run.id.0, mcp_run_status_notification(run));
-}
-
 /// Ingest a harness-reported event (shared by the HTTP and gRPC adapters). Records the
 /// agent-projection event, then — for `finished`/`stuck` — advances the run's lifecycle,
 /// reclaims the sandbox, and (on success with a diff) opens a PR.
@@ -1267,6 +1255,7 @@ pub(crate) async fn ingest_harness_event(
                 &state.transitions,
                 &state.bus,
                 &state.broker,
+                &state.run_status_notifier,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1297,20 +1286,11 @@ pub(crate) async fn ingest_harness_event(
             // Re-fetch so the response reflects the review transition applied above
             // (Succeeded -> AwaitingReview); the PR link still lands async in the
             // background. A failure here leaves the already-recorded run unchanged.
-            let run = state
-                .repo
-                .get(run_id)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(run);
+            let run = state.repo.get(run_id).await.ok().flatten().unwrap_or(run);
 
             // Reply channel: if the run has a callback_url, POST the terminal result
             // back to the triggerer (best-effort; never affects the run lifecycle).
             delivery::deliver_result(state, &run).await;
-
-            // MCP push: notify a subscribed MCP client the run reached a terminal state.
-            notify_mcp_run_status(state, &run);
 
             Ok(RunResponse::from(&run))
         }
@@ -1339,6 +1319,7 @@ pub(crate) async fn ingest_harness_event(
                 &state.transitions,
                 &state.bus,
                 &state.broker,
+                &state.run_status_notifier,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1351,9 +1332,6 @@ pub(crate) async fn ingest_harness_event(
 
             // Reply channel: deliver the terminal (stuck) result if a callback is set.
             delivery::deliver_result(state, &run).await;
-
-            // MCP push: notify a subscribed MCP client the run reached a terminal state.
-            notify_mcp_run_status(state, &run);
 
             Ok(RunResponse::from(&run))
         }
@@ -1495,8 +1473,7 @@ fn pr_title(task_spec: &str) -> String {
 /// (default 72h). Best-effort — a failure here must not fail the already-recorded run.
 async fn request_review_for_run(state: &AppState, run: &Run) {
     let deadline_secs = env_u32_or("CAT_HERDER_REVIEW_DEADLINE_SECS", 72 * 60 * 60) as u64;
-    let deadline_at =
-        std::time::SystemTime::now() + std::time::Duration::from_secs(deadline_secs);
+    let deadline_at = std::time::SystemTime::now() + std::time::Duration::from_secs(deadline_secs);
     if let Err(e) = request_review(
         run.id,
         deadline_at,
@@ -1506,6 +1483,7 @@ async fn request_review_for_run(state: &AppState, run: &Run) {
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.run_status_notifier,
     )
     .await
     {
@@ -1583,8 +1561,8 @@ pub async fn retention_sweep(state: &AppState, retention_days: u64) -> usize {
     for run in runs {
         // Purge only "done" runs: terminal states, or `Succeeded` (a finished leaf with
         // no reviewable output). Runs still awaiting input/review are left alone.
-        let done = cat_herder_domain::state::is_terminal(run.state)
-            || run.state == RunState::Succeeded;
+        let done =
+            cat_herder_domain::state::is_terminal(run.state) || run.state == RunState::Succeeded;
         if !done {
             continue;
         }
@@ -1728,6 +1706,7 @@ async fn webhook_generic(
         &state.transitions,
         &state.bus,
         &state.broker,
+        &state.run_status_notifier,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1793,6 +1772,7 @@ async fn execute_source_run(
         &state.transitions,
         &state.bus,
         &state.broker,
+        &state.run_status_notifier,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1968,9 +1948,10 @@ fn header_str(headers: &HeaderMap, name: &axum::http::HeaderName) -> Option<Stri
 }
 
 /// `GET /mcp` — the server-to-client Streamable HTTP channel. When the client sends
-/// `Accept: text/event-stream` and an `mcp-session-id` matching a known session, this
-/// holds the connection open and streams each pushed JSON-RPC message as an SSE event
-/// (`event: message\ndata: <json>\n\n`). Returns `400` when the session is unknown.
+/// `Accept: text/event-stream` and an `mcp-session-id`, this holds the connection open
+/// and streams each pushed JSON-RPC message as an SSE event
+/// (`event: message\ndata: <json>\n\n`). The session channel is created lazily so the
+/// stream can land on any replica, regardless of which one served `initialize`.
 async fn mcp_sse_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1992,10 +1973,7 @@ async fn mcp_sse_handler(
         StatusCode::BAD_REQUEST,
         "missing mcp-session-id header".to_string(),
     ))?;
-    let rx = state.mcp_hub.subscribe(&session_id).ok_or((
-        StatusCode::BAD_REQUEST,
-        "unknown mcp-session-id".to_string(),
-    ))?;
+    let rx = state.mcp_hub.subscribe(&session_id);
 
     let stream = futures::stream::unfold(rx, |mut rx| async move {
         loop {
@@ -2052,9 +2030,7 @@ async fn get_agent(
 
 /// The configurable workflow catalog (`PLAN.md` §7) — public read, like the agent
 /// catalog. Write paths (`PUT`/`DELETE`) are admin-gated in `admin.rs`.
-async fn list_workflows(
-    State(state): State<AppState>,
-) -> Json<Vec<WorkflowDefinition>> {
+async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowDefinition>> {
     Json(state.workflows.list().await.unwrap_or_default())
 }
 
@@ -2141,7 +2117,10 @@ mod resolve_image_tests {
             .save(&template("agent-blank", ""))
             .await
             .unwrap();
-        assert_eq!(resolve_image(&state, Some("agent-blank")).await.unwrap(), None);
+        assert_eq!(
+            resolve_image(&state, Some("agent-blank")).await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -2215,7 +2194,7 @@ mod mcp_notification_tests {
     fn publish_routes_to_associated_session_only() {
         let hub = McpHub::new();
         hub.associate(42, "sess-9".to_string());
-        let mut rx = hub.subscribe("sess-9").unwrap();
+        let mut rx = hub.subscribe("sess-9");
         let note = mcp_run_status_notification(&sample_run());
         hub.publish(42, note.clone());
         assert_eq!(rx.try_recv().unwrap(), note);
@@ -2224,4 +2203,3 @@ mod mcp_notification_tests {
         assert!(rx.try_recv().is_err());
     }
 }
-

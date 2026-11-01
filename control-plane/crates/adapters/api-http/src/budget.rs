@@ -121,6 +121,7 @@ impl BudgetControl for BudgetControlService {
             &self.state.transitions,
             &self.state.bus,
             &self.state.events,
+            &self.state.run_status_notifier,
         )
         .await
         .map_err(|e| Status::internal(format!("budget consume failed: {e}")))?;
@@ -186,6 +187,7 @@ pub async fn raise_budget_for_run(state: &AppState, run_id: RunId, cap: u64) -> 
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.run_status_notifier,
     )
     .await
     .map(|_| ())

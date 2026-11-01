@@ -128,7 +128,12 @@ fn tools() -> Vec<Value> {
     ]
 }
 
-async fn call_tool(name: &str, args: &Value, state: &AppState, session_id: Option<&str>) -> (String, bool) {
+async fn call_tool(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+    session_id: Option<&str>,
+) -> (String, bool) {
     match name {
         "run_agent" => {
             let task_spec = args["task_spec"].as_str().unwrap_or("").to_string();
@@ -186,14 +191,19 @@ async fn call_tool(name: &str, args: &Value, state: &AppState, session_id: Optio
                 &state.transitions,
                 &state.bus,
                 &state.broker,
+                &state.run_status_notifier,
             )
             .await
             {
                 Ok(run) => {
-                    // Associate the new run with this MCP session so its terminal
-                    // state is pushed to the client's SSE stream (if it opened one).
+                    // Associate the new run with this MCP session so its subsequent
+                    // lifecycle transitions are pushed to the client's SSE stream (if it
+                    // opened one). Routed through the notifier backend (local or Redis).
                     if let Some(session_id) = session_id {
-                        state.mcp_hub.associate(run.id.0, session_id.to_string());
+                        state
+                            .run_status_notifier
+                            .associate(run.id.0, session_id)
+                            .await;
                     }
                     if let Err(e) =
                         super::issue_budget(&state.budgets, &state.budget_counter, run.id, budget)
@@ -245,7 +255,9 @@ mod tests {
     async fn initialize_returns_a_session_id() {
         let state = AppState::default();
         let resp = handle(init_request(), &state, None).await;
-        let session = resp["result"]["sessionId"].as_str().expect("sessionId present");
+        let session = resp["result"]["sessionId"]
+            .as_str()
+            .expect("sessionId present");
         assert!(!session.is_empty(), "session id must not be empty");
         // Protocol metadata is preserved for backward compatibility.
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);

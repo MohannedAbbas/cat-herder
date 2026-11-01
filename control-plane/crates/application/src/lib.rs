@@ -18,7 +18,7 @@ use cat_herder_domain::events::{Event, event_type};
 use cat_herder_domain::ports::{
     AgentRuntime, ApprovalRepository, BudgetCounter, BudgetRepository, ConsumeOutcome,
     CredentialBroker, DomainResult, EventBus, EventRepository, ReviewRepository, RunRepository,
-    RunRequest, SessionRepository, TransitionRepository,
+    RunRequest, RunStatusNotifier, SessionRepository, TransitionRepository,
 };
 use cat_herder_domain::reconcile::reconcile_run;
 use cat_herder_domain::shard::shard_for;
@@ -33,18 +33,23 @@ async fn publish_event<B: EventBus>(bus: &B, event: &Event) {
 }
 
 /// Persist a single lifecycle transition atomically — the state change and its event
-/// land in one transaction (`PLAN.md` §6/§9) — then fan the event out to the transport.
-async fn persist_transition<T: TransitionRepository, B: EventBus>(
+/// land in one transaction (`PLAN.md` §6/§9) — then fan the event out to the transport
+/// and push the new state to subscribed external clients (best-effort).
+async fn persist_transition<T: TransitionRepository, B: EventBus, N: RunStatusNotifier>(
     run: &mut Run,
     target: RunState,
     transitions: &T,
     bus: &B,
+    notifier: &N,
 ) -> DomainResult<()> {
     run.transition(target)?;
     let event = Event::lifecycle_for(run);
     let (stored_run, stored_event) = transitions.save_transition(run, &event).await?;
     *run = stored_run;
     publish_event(bus, &stored_event).await;
+    if let Err(e) = notifier.notify(run).await {
+        eprintln!("run status notify failed for run {}: {e}", run.id.0);
+    }
     Ok(())
 }
 
@@ -94,7 +99,7 @@ async fn revoke_run_credentials<C: CredentialBroker>(broker: &C, run_id: RunId) 
 ///
 /// Each run is auto-linked to a freshly created session (title derived from the
 /// task spec).
-pub async fn start_run<R, P, S, T, B, C>(
+pub async fn start_run<R, P, S, T, B, C, N>(
     req: RunRequest,
     runtime: &R,
     repo: &P,
@@ -102,6 +107,7 @@ pub async fn start_run<R, P, S, T, B, C>(
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<Run>
 where
     R: AgentRuntime,
@@ -110,6 +116,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     let run = Run {
         id: RunId(0), // assigned by the repository
@@ -141,6 +148,9 @@ where
     let event = Event::lifecycle_for(&run);
     let (mut run, stored_event) = transitions.save_transition(&run, &event).await?;
     publish_event(bus, &stored_event).await;
+    if let Err(e) = notifier.notify(&run).await {
+        eprintln!("run status notify failed for run {}: {e}", run.id.0);
+    }
 
     // Auto-create a session and link the run to it.
     let session_id = new_session_id();
@@ -150,8 +160,8 @@ where
     run.session_id = Some(session_id.clone());
     run = repo.save(&run).await?;
 
-    persist_transition(&mut run, RunState::Scheduled, transitions, bus).await?;
-    persist_transition(&mut run, RunState::PodPending, transitions, bus).await?;
+    persist_transition(&mut run, RunState::Scheduled, transitions, bus, notifier).await?;
+    persist_transition(&mut run, RunState::PodPending, transitions, bus, notifier).await?;
 
     // Project the run into the session's display rows (now `PodPending`).
     sessions
@@ -180,13 +190,14 @@ fn session_title(task_spec: &str) -> String {
 /// When the reconciler itself reaches a final state (e.g. the stuck-run watchdog maps a
 /// failed/liveness-killed or expired sandbox to `Stuck`/`TimedOut`), it also reclaims the
 /// execution — mirroring the `finished` event path — so a dead sandbox doesn't linger.
-pub async fn reconcile_once<R, P, S, T, B, C>(
+pub async fn reconcile_once<R, P, S, T, B, C, N>(
     runtime: &R,
     repo: &P,
     sessions: &S,
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -195,6 +206,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     reconcile_runs(
         repo.list_all().await?,
@@ -203,6 +215,7 @@ where
         transitions,
         bus,
         broker,
+        notifier,
     )
     .await
 }
@@ -213,7 +226,7 @@ where
 /// of how many it holds. Only runs whose `run_id` hashes to an owned shard are
 /// advanced/recovered.
 #[allow(clippy::too_many_arguments)]
-pub async fn reconcile_shards<R, P, S, T, B, C>(
+pub async fn reconcile_shards<R, P, S, T, B, C, N>(
     shards: &HashSet<u32>,
     shard_count: u32,
     runtime: &R,
@@ -222,6 +235,7 @@ pub async fn reconcile_shards<R, P, S, T, B, C>(
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -230,6 +244,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     let runs = repo
         .list_all()
@@ -237,7 +252,7 @@ where
         .into_iter()
         .filter(|r| shards.contains(&shard_for(r.id, shard_count)))
         .collect();
-    reconcile_runs(runs, runtime, sessions, transitions, bus, broker).await
+    reconcile_runs(runs, runtime, sessions, transitions, bus, broker, notifier).await
 }
 
 /// Core reconcile over an explicit set of runs (the caller already selected the runs
@@ -248,13 +263,14 @@ where
 /// run resumes from its last checkpoint (crash recovery, `PLAN.md` §6). The `finished`
 /// event remains the only terminal signal, so a missing sandbox never marks a run
 /// terminal here.
-pub async fn reconcile_runs<R, S, T, B, C>(
+pub async fn reconcile_runs<R, S, T, B, C, N>(
     runs: Vec<Run>,
     runtime: &R,
     sessions: &S,
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<usize>
 where
     R: AgentRuntime,
@@ -262,6 +278,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     let mut changed = 0;
 
@@ -290,7 +307,7 @@ where
                 for next in to_apply {
                     // One atomic transition per state change, so the log records the full
                     // walk (e.g. PodPending -> Running -> Succeeded) even on a fast-forward.
-                    persist_transition(&mut updated, next, transitions, bus).await?;
+                    persist_transition(&mut updated, next, transitions, bus, notifier).await?;
                     // Cold-start metric (§16/§23): trigger -> running latency.
                     if next == RunState::Running {
                         let elapsed = SystemTime::now()
@@ -340,7 +357,7 @@ pub struct Completion {
 /// or `Failed` (from `Running`, or `PodPending` → `Running` → terminal). Idempotent
 /// for runs that already reached a final state. Also syncs the session display row.
 #[allow(clippy::too_many_arguments)]
-pub async fn complete_run<P, S, T, B, C>(
+pub async fn complete_run<P, S, T, B, C, N>(
     run_id: RunId,
     outcome: Outcome,
     completion: Completion,
@@ -349,6 +366,7 @@ pub async fn complete_run<P, S, T, B, C>(
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<Run>
 where
     P: RunRepository,
@@ -356,6 +374,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     let Completion { report, usage } = completion;
 
@@ -410,12 +429,12 @@ where
 
     match run.state {
         RunState::Running => {
-            persist_transition(&mut run, target, transitions, bus).await?;
+            persist_transition(&mut run, target, transitions, bus, notifier).await?;
             revoke_run_credentials(broker, run.id).await;
         }
         RunState::PodPending => {
-            persist_transition(&mut run, RunState::Running, transitions, bus).await?;
-            persist_transition(&mut run, target, transitions, bus).await?;
+            persist_transition(&mut run, RunState::Running, transitions, bus, notifier).await?;
+            persist_transition(&mut run, target, transitions, bus, notifier).await?;
             revoke_run_credentials(broker, run.id).await;
         }
         // queued/scheduled/awaiting-input/etc. — not a runnable state; leave alone.
@@ -433,7 +452,7 @@ where
 // `#[allow]`: six injected dependencies (approval/event/run/session/transition/bus)
 // plus the interrupt data exceed clippy's default arity threshold.
 #[allow(clippy::too_many_arguments)]
-pub async fn interrupt_run<A, E, P, S, T, B>(
+pub async fn interrupt_run<A, E, P, S, T, B, N>(
     run_id: RunId,
     resume_token: String,
     payload: serde_json::Value,
@@ -443,6 +462,7 @@ pub async fn interrupt_run<A, E, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    notifier: &N,
 ) -> DomainResult<ApprovalRequest>
 where
     A: ApprovalRepository,
@@ -451,6 +471,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    N: RunStatusNotifier,
 {
     let approval = ApprovalRequest {
         id: uuid::Uuid::new_v4().to_string(),
@@ -485,11 +506,25 @@ where
     let mut run = run;
     match run.state {
         RunState::Running => {
-            persist_transition(&mut run, RunState::AwaitingInput, transitions, bus).await?;
+            persist_transition(
+                &mut run,
+                RunState::AwaitingInput,
+                transitions,
+                bus,
+                notifier,
+            )
+            .await?;
         }
         RunState::PodPending => {
-            persist_transition(&mut run, RunState::Running, transitions, bus).await?;
-            persist_transition(&mut run, RunState::AwaitingInput, transitions, bus).await?;
+            persist_transition(&mut run, RunState::Running, transitions, bus, notifier).await?;
+            persist_transition(
+                &mut run,
+                RunState::AwaitingInput,
+                transitions,
+                bus,
+                notifier,
+            )
+            .await?;
         }
         _ => return Ok(approval),
     }
@@ -501,7 +536,7 @@ where
 /// the run (`AwaitingInput -> Running`); rejecting cancels it. The decision and response
 /// are persisted on the `ApprovalRequest`; an `approval.responded` event is appended.
 #[allow(clippy::too_many_arguments)]
-pub async fn respond_approval<A, E, P, S, T, B, C>(
+pub async fn respond_approval<A, E, P, S, T, B, C, N>(
     approval_id: &str,
     approved: bool,
     response: Option<String>,
@@ -512,6 +547,7 @@ pub async fn respond_approval<A, E, P, S, T, B, C>(
     transitions: &T,
     bus: &B,
     broker: &C,
+    notifier: &N,
 ) -> DomainResult<ApprovalRequest>
 where
     A: ApprovalRepository,
@@ -521,6 +557,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     C: CredentialBroker,
+    N: RunStatusNotifier,
 {
     let approval = approvals.get(approval_id).await?.ok_or_else(|| {
         std::io::Error::new(
@@ -572,7 +609,7 @@ where
         RunState::Cancelled
     };
     if run.state == RunState::AwaitingInput {
-        persist_transition(&mut run, target, transitions, bus).await?;
+        persist_transition(&mut run, target, transitions, bus, notifier).await?;
         sessions.sync_run(&run).await?;
         // Rejection cancels the run: tear down its clone credential.
         if !approved {
@@ -616,7 +653,7 @@ pub fn review_feedback_task_spec(
 /// re-delivered `finished` event whose run is already `AwaitingReview` — so a review
 /// is never created twice for the same run.
 #[allow(clippy::too_many_arguments)]
-pub async fn request_review<R, E, P, S, T, B>(
+pub async fn request_review<R, E, P, S, T, B, N>(
     run_id: RunId,
     deadline_at: SystemTime,
     reviews: &R,
@@ -625,6 +662,7 @@ pub async fn request_review<R, E, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    notifier: &N,
 ) -> DomainResult<Option<Review>>
 where
     R: ReviewRepository,
@@ -633,6 +671,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    N: RunStatusNotifier,
 {
     // Only a run in `Succeeded` can enter review. Guard before creating the durable
     // review so a duplicate `finished` event is a no-op.
@@ -677,7 +716,14 @@ where
     publish_event(bus, &stored).await;
 
     let mut run = run;
-    persist_transition(&mut run, RunState::AwaitingReview, transitions, bus).await?;
+    persist_transition(
+        &mut run,
+        RunState::AwaitingReview,
+        transitions,
+        bus,
+        notifier,
+    )
+    .await?;
     sessions.sync_run(&run).await?;
     Ok(Some(review))
 }
@@ -687,7 +733,7 @@ where
 /// reviewer, and feedback are persisted on the `Review`; a `review.decided` event is
 /// appended. Returns the decided review.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide_review<R, E, P, S, T, B>(
+pub async fn decide_review<R, E, P, S, T, B, N>(
     review_id: &str,
     verdict: ReviewVerdict,
     reviewer: Option<String>,
@@ -698,6 +744,7 @@ pub async fn decide_review<R, E, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    notifier: &N,
 ) -> DomainResult<Review>
 where
     R: ReviewRepository,
@@ -706,6 +753,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    N: RunStatusNotifier,
 {
     let review = reviews.get(review_id).await?.ok_or_else(|| {
         std::io::Error::new(
@@ -752,7 +800,7 @@ where
         ReviewVerdict::Rejected | ReviewVerdict::ChangesRequested => RunState::Rejected,
     };
     if run.state == RunState::AwaitingReview {
-        persist_transition(&mut run, target, transitions, bus).await?;
+        persist_transition(&mut run, target, transitions, bus, notifier).await?;
         sessions.sync_run(&run).await?;
     }
 
@@ -788,7 +836,7 @@ pub async fn issue_budget<BD: BudgetRepository, CT: BudgetCounter>(
 /// `budget.exceeded` event is emitted (the notification is the event + deep link, as
 /// with §10). Returns the consumption outcome.
 #[allow(clippy::too_many_arguments)]
-pub async fn consume_budget<CT, BD, P, S, T, B, E>(
+pub async fn consume_budget<CT, BD, P, S, T, B, E, N>(
     run_id: RunId,
     tokens: u64,
     counter: &CT,
@@ -798,6 +846,7 @@ pub async fn consume_budget<CT, BD, P, S, T, B, E>(
     transitions: &T,
     bus: &B,
     events: &E,
+    notifier: &N,
 ) -> DomainResult<ConsumeOutcome>
 where
     CT: BudgetCounter,
@@ -807,6 +856,7 @@ where
     T: TransitionRepository,
     B: EventBus,
     E: EventRepository,
+    N: RunStatusNotifier,
 {
     let Some(budget) = budgets.get(run_id).await? else {
         return Ok(ConsumeOutcome::Ok { consumed: 0 });
@@ -826,7 +876,8 @@ where
             && run.state == RunState::Running
         {
             let mut run = run;
-            persist_transition(&mut run, RunState::BudgetPaused, transitions, bus).await?;
+            persist_transition(&mut run, RunState::BudgetPaused, transitions, bus, notifier)
+                .await?;
             sessions.sync_run(&run).await?;
         }
     }
@@ -838,7 +889,7 @@ where
 /// the durable cap and zeroing the counter lets a `BudgetPaused` run continue;
 /// otherwise the new cap applies from the next model call. Returns the updated run.
 #[allow(clippy::too_many_arguments)]
-pub async fn raise_budget<BD, CT, P, S, T, B>(
+pub async fn raise_budget<BD, CT, P, S, T, B, N>(
     run_id: RunId,
     cap: u64,
     budgets: &BD,
@@ -847,6 +898,7 @@ pub async fn raise_budget<BD, CT, P, S, T, B>(
     sessions: &S,
     transitions: &T,
     bus: &B,
+    notifier: &N,
 ) -> DomainResult<Run>
 where
     BD: BudgetRepository,
@@ -855,6 +907,7 @@ where
     S: SessionRepository,
     T: TransitionRepository,
     B: EventBus,
+    N: RunStatusNotifier,
 {
     let run = repo.get(run_id).await?.ok_or_else(|| {
         std::io::Error::new(
@@ -875,7 +928,7 @@ where
     // Resume a budget-paused run back to Running.
     let mut run = run;
     if run.state == RunState::BudgetPaused {
-        persist_transition(&mut run, RunState::Running, transitions, bus).await?;
+        persist_transition(&mut run, RunState::Running, transitions, bus, notifier).await?;
         sessions.sync_run(&run).await?;
     }
     Ok(run)
@@ -942,6 +995,35 @@ mod tests {
 
     impl EventBus for StubBus {
         async fn publish(&self, _event: &Event) -> DomainResult<()> {
+            Ok(())
+        }
+    }
+
+    /// No-op run-status notifier for tests.
+    struct StubNotifier;
+
+    impl RunStatusNotifier for StubNotifier {
+        async fn notify(&self, _run: &Run) -> DomainResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Recording run-status notifier: captures the `(run_id, state)` of every
+    /// notification so tests can assert the exact lifecycle walk that was pushed.
+    #[derive(Default)]
+    struct RecordingNotifier {
+        seen: std::sync::Mutex<Vec<(RunId, RunState)>>,
+    }
+
+    impl RecordingNotifier {
+        fn seen(&self) -> Vec<(RunId, RunState)> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl RunStatusNotifier for RecordingNotifier {
+        async fn notify(&self, run: &Run) -> DomainResult<()> {
+            self.seen.lock().unwrap().push((run.id, run.state));
             Ok(())
         }
     }
@@ -1074,6 +1156,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1101,13 +1184,17 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
 
         assert_eq!(run.callback_url.as_deref(), Some("https://example.com/cb"));
         let stored = repo.get(run.id).await.unwrap().unwrap();
-        assert_eq!(stored.callback_url.as_deref(), Some("https://example.com/cb"));
+        assert_eq!(
+            stored.callback_url.as_deref(),
+            Some("https://example.com/cb")
+        );
     }
 
     #[tokio::test]
@@ -1124,6 +1211,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1149,6 +1237,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1181,6 +1270,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1195,6 +1285,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1218,6 +1309,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1260,6 +1352,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1272,6 +1365,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1296,6 +1390,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1307,6 +1402,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1314,9 +1410,17 @@ mod tests {
         // The sandbox vanishes (crash). The reconciler must re-spawn, not mark the
         // run terminal.
         let rt = StubRuntime::new(None);
-        let n = reconcile_once(&rt, &repo, &sessions, &transitions, &StubBus, &StubBroker)
-            .await
-            .unwrap();
+        let n = reconcile_once(
+            &rt,
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+            &StubNotifier,
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 1);
         assert_eq!(rt.spawn_count(), 1);
         // Still Running — `finished` is the only terminal signal.
@@ -1346,6 +1450,7 @@ mod tests {
                     &transitions,
                     &StubBus,
                     &StubBroker,
+                    &StubNotifier,
                 )
                 .await
                 .unwrap(),
@@ -1366,6 +1471,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1390,6 +1496,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1410,6 +1517,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1422,6 +1530,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1442,6 +1551,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1473,6 +1583,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1483,6 +1594,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1496,6 +1608,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1516,6 +1629,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1526,6 +1640,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1539,7 +1654,8 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
-                &StubBroker
+                &StubBroker,
+                &StubNotifier
             )
             .await
             .unwrap()
@@ -1555,7 +1671,8 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
-                &StubBroker
+                &StubBroker,
+                &StubNotifier
             )
             .await
             .unwrap()
@@ -1579,7 +1696,8 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
-                &StubBroker
+                &StubBroker,
+                &StubNotifier
             )
             .await
             .is_err()
@@ -1601,6 +1719,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1612,6 +1731,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1626,6 +1746,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1663,6 +1784,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1673,6 +1795,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1686,6 +1809,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1701,6 +1825,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1728,6 +1853,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1738,6 +1864,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1751,6 +1878,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1766,6 +1894,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1795,7 +1924,8 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
-                &StubBroker
+                &StubBroker,
+                &StubNotifier
             )
             .await
             .is_err()
@@ -1822,6 +1952,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1832,6 +1963,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1847,6 +1979,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1888,6 +2021,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap()
@@ -1924,6 +2058,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap()
@@ -1940,6 +2075,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -1976,6 +2112,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap()
@@ -1992,6 +2129,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2027,6 +2165,7 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
+                &StubNotifier
             )
             .await
             .is_err()
@@ -2051,6 +2190,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap()
@@ -2066,6 +2206,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2082,6 +2223,7 @@ mod tests {
                 &sessions,
                 &transitions,
                 &StubBus,
+                &StubNotifier
             )
             .await
             .is_err()
@@ -2102,6 +2244,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2121,6 +2264,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2145,6 +2289,7 @@ mod tests {
             &transitions,
             &StubBus,
             &broker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2175,6 +2320,7 @@ mod tests {
             &transitions,
             &StubBus,
             &broker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2189,6 +2335,7 @@ mod tests {
             &transitions,
             &StubBus,
             &broker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2201,6 +2348,7 @@ mod tests {
             &transitions,
             &StubBus,
             &broker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2225,6 +2373,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2236,6 +2385,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2255,6 +2405,7 @@ mod tests {
             &transitions,
             &StubBus,
             &events,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2269,6 +2420,7 @@ mod tests {
             &transitions,
             &StubBus,
             &events,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2285,6 +2437,7 @@ mod tests {
             &transitions,
             &StubBus,
             &events,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2327,6 +2480,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2337,6 +2491,7 @@ mod tests {
             &transitions,
             &StubBus,
             &StubBroker,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2354,6 +2509,7 @@ mod tests {
             &transitions,
             &StubBus,
             &events,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2372,6 +2528,7 @@ mod tests {
             &sessions,
             &transitions,
             &StubBus,
+            &StubNotifier,
         )
         .await
         .unwrap();
@@ -2388,6 +2545,7 @@ mod tests {
                 &transitions,
                 &StubBus,
                 &events,
+                &StubNotifier
             )
             .await
             .unwrap(),
@@ -2417,10 +2575,80 @@ mod tests {
                 ),
                 &StubBus,
                 &InMemoryEventRepository::default(),
+                &StubNotifier
             )
             .await
             .unwrap(),
             ConsumeOutcome::Ok { consumed: 0 }
+        );
+    }
+
+    #[tokio::test]
+    async fn notifier_observes_every_lifecycle_transition() {
+        let repo = InMemoryRunRepository::new();
+        let sessions = InMemorySessionRepository::default();
+        let events = InMemoryEventRepository::default();
+        let transitions = InMemoryTransitionRepository::new(repo.clone(), events.clone());
+        let notifier = RecordingNotifier::default();
+
+        let run = start_run(
+            req(),
+            &StubRuntime::new(None),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+            &notifier,
+        )
+        .await
+        .unwrap();
+
+        // start_run pushes queued, scheduled, pod_pending — in order.
+        assert_eq!(
+            notifier.seen(),
+            vec![
+                (run.id, RunState::Queued),
+                (run.id, RunState::Scheduled),
+                (run.id, RunState::PodPending),
+            ]
+        );
+
+        // Reconciler advances PodPending -> Running; complete_run -> Succeeded.
+        reconcile_once(
+            &StubRuntime::new(Some(RuntimeStatus::Ready)),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+            &notifier,
+        )
+        .await
+        .unwrap();
+        complete_run(
+            run.id,
+            Outcome::Succeeded,
+            Completion::default(),
+            &repo,
+            &sessions,
+            &transitions,
+            &StubBus,
+            &StubBroker,
+            &notifier,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            notifier.seen(),
+            vec![
+                (run.id, RunState::Queued),
+                (run.id, RunState::Scheduled),
+                (run.id, RunState::PodPending),
+                (run.id, RunState::Running),
+                (run.id, RunState::Succeeded),
+            ]
         );
     }
 }

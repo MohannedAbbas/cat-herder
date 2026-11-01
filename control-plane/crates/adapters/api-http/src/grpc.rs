@@ -213,6 +213,7 @@ async fn ingest_interrupt(state: &AppState, run_id: RunId, interrupt: control::v
         &state.sessions,
         &state.transitions,
         &state.bus,
+        &state.run_status_notifier,
     )
     .await;
     if let Err(e) = result {

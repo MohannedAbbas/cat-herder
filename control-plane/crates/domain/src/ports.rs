@@ -227,6 +227,14 @@ pub trait EventBus {
     async fn publish(&self, event: &Event) -> DomainResult<()>;
 }
 
+/// Outbound (driven): notify an external client (e.g. an MCP session) that a run's
+/// lifecycle state changed. Fire-and-forget — the durable authority is the transition
+/// repository; a failed notify must not fail the transition it follows (mirrors
+/// [`EventBus`]).
+pub trait RunStatusNotifier {
+    async fn notify(&self, run: &Run) -> DomainResult<()>;
+}
+
 /// Lease primitive for the sharded, lease-based reconciler (`PLAN.md` §6).
 ///
 /// A lease is the mutual-exclusion token that grants a leader ownership of a shard

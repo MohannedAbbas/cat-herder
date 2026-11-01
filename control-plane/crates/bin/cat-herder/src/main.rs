@@ -588,6 +588,31 @@ async fn main() {
         });
     }
 
+    // MCP server-to-client push (§14): Redis pub/sub (association + fan-out shared
+    // across replicas) when CAT_HERDER_REDIS_URL is set; otherwise the local in-memory
+    // hub (single-replica dev). The McpHub is the process-local SSE last-mile either way.
+    let mcp_hub = cat_herder_api_http::McpHub::new();
+    let run_status_notifier = match std::env::var("CAT_HERDER_REDIS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(url) => {
+            match cat_herder_api_http::RunStatusNotifierImpl::connect_redis(&url, mcp_hub.clone())
+                .await
+            {
+                Ok(n) => {
+                    eprintln!("Redis MCP push connected");
+                    n
+                }
+                Err(e) => {
+                    eprintln!("warning: Redis MCP push unavailable ({e}); using in-memory");
+                    cat_herder_api_http::RunStatusNotifierImpl::Local(mcp_hub.clone())
+                }
+            }
+        }
+        None => cat_herder_api_http::RunStatusNotifierImpl::Local(mcp_hub.clone()),
+    };
+
     // Background reconciler: a sharded, lease-based leader loop (PLAN.md §6). The
     // process leases shards (each a bucket of run_id hashes) and reconciles only the
     // runs those shards own. A shard whose lease lapses is re-acquired by a survivor
@@ -600,6 +625,7 @@ async fn main() {
         let transitions = repos.transitions.clone();
         let bus = bus.clone();
         let broker = broker.clone();
+        let run_status_notifier = run_status_notifier.clone();
         let shard_count = parse_env_u32("CAT_HERDER_SHARD_COUNT", 16).max(1);
         let interval = parse_env_secs("CAT_HERDER_RECONCILE_INTERVAL_SECS", 10);
         // Stable per-process owner id: the pod name in-cluster, else a fresh UUID.
@@ -638,6 +664,7 @@ async fn main() {
                         &transitions,
                         &bus,
                         &broker,
+                        &run_status_notifier,
                     )
                     .await
                 {
@@ -761,7 +788,8 @@ async fn main() {
         runtime,
         control_links: Arc::new(ControlLinks::default()),
         run_logs: cat_herder_api_http::RunLogs::new(),
-        mcp_hub: cat_herder_api_http::McpHub::new(),
+        mcp_hub,
+        run_status_notifier,
         cipher,
         key_store: Some(key_store),
         pr_client: Arc::new(PrClient::from_env()),

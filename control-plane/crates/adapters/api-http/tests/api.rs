@@ -7,7 +7,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use cat_herder_api_http::{
-    AppState, GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig, router,
+    AppState, GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig, RoleMapping, router,
 };
 use cat_herder_domain::api::{AgentTemplate, Session, SessionSummary};
 use http_body_util::BodyExt;
@@ -131,12 +131,7 @@ async fn post_json_authed(
 }
 
 /// PUT with an authenticated session cookie (workflow catalog edits).
-async fn put_json_authed(
-    app: Router,
-    token: &str,
-    uri: &str,
-    body: &str,
-) -> (StatusCode, Vec<u8>) {
+async fn put_json_authed(app: Router, token: &str, uri: &str, body: &str) -> (StatusCode, Vec<u8>) {
     let res = app
         .oneshot(
             Request::builder()
@@ -401,7 +396,10 @@ async fn get_run_logs_follow_streams_sse() {
 }
 
 /// Collect SSE chunks until one contains a `data:` line; return that chunk text.
-async fn recv_event(rx: &mut tokio::sync::mpsc::Receiver<String>, timeout: std::time::Duration) -> String {
+async fn recv_event(
+    rx: &mut tokio::sync::mpsc::Receiver<String>,
+    timeout: std::time::Duration,
+) -> String {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -587,7 +585,7 @@ async fn respond_review_already_decided_returns_409() {
 #[tokio::test]
 async fn respond_review_approves_and_reviews_run() {
     use cat_herder_domain::entities::{
-        Review, ReviewStatus, Run, RunId, RunKind, RunState, ReviewVerdict,
+        Review, ReviewStatus, ReviewVerdict, Run, RunId, RunKind, RunState,
     };
     use cat_herder_domain::ports::{ReviewRepository, RunRepository};
     use std::time::SystemTime;
@@ -797,7 +795,9 @@ async fn get_run_diff_unknown_run_returns_404() {
 
 #[tokio::test]
 async fn get_run_approval_returns_pending_approval() {
-    use cat_herder_domain::entities::{ApprovalRequest, ApprovalStatus, Run, RunId, RunKind, RunState};
+    use cat_herder_domain::entities::{
+        ApprovalRequest, ApprovalStatus, Run, RunId, RunKind, RunState,
+    };
     use cat_herder_domain::ports::{ApprovalRepository, RunRepository};
     use std::time::SystemTime;
 
@@ -1074,7 +1074,10 @@ async fn delete_run_purges_all_run_data() {
     state.repo.save(&run).await.unwrap();
     state
         .events
-        .append(run_id, &Event::new(run_id, "run.queued", None, serde_json::json!({})))
+        .append(
+            run_id,
+            &Event::new(run_id, "run.queued", None, serde_json::json!({})),
+        )
         .await
         .unwrap();
     state
@@ -1247,9 +1250,10 @@ async fn resolve_tier_uses_agent_runtime_tier() {
 
     let state = AppState::default();
     // The seeded catalog: agent-reviewer is gVisor, agent-codeact/agent-docs default.
-    let reviewer = cat_herder_api_http::resolve_tier(&state, RunKind::Agent, Some("agent-reviewer"))
-        .await
-        .unwrap();
+    let reviewer =
+        cat_herder_api_http::resolve_tier(&state, RunKind::Agent, Some("agent-reviewer"))
+            .await
+            .unwrap();
     assert_eq!(reviewer, RuntimeTier::Gvisor);
 
     let codeact = cat_herder_api_http::resolve_tier(&state, RunKind::Agent, Some("agent-codeact"))
@@ -2113,6 +2117,7 @@ fn oauth_app() -> Router {
         client_secret: "test-secret".into(),
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
+        role_mapping: RoleMapping::default(),
         provider: &GITHUB,
         base_url: None,
     };
@@ -2173,6 +2178,7 @@ fn oauth_cfg(provider_kind: &str) -> OAuthConfig {
         client_secret: "test-secret".into(),
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
+        role_mapping: RoleMapping::default(),
         provider: if provider_kind == "gitlab" {
             &GITLAB
         } else {
@@ -2304,6 +2310,7 @@ fn gitlab_oauth_app() -> Router {
         client_secret: "test-secret".into(),
         redirect_url: "https://cat.example.com".into(),
         allowed_users: vec!["octocat".into()],
+        role_mapping: RoleMapping::default(),
         provider: &GITLAB,
         base_url: None,
     };
