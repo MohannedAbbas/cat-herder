@@ -4,3 +4,12 @@ description: "Cat Herder — Kubernetes-native control plane and governance laye
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+
+# agent-sandbox is the execution substrate: the Sandbox CRDs + controller that run
+# the agent harness pods. It is vendored as a subchart (charts/agent-sandbox) and
+# installed by default; set `agentSandbox.installController: false` to bring your own.
+dependencies:
+  - name: agent-sandbox
+    version: "0.1.4"
+    repository: "file://charts/agent-sandbox"
+    condition: agentSandbox.installController

@@ -2,6 +2,23 @@
 
 namespace: cat-herder
 
+# agent-sandbox execution substrate (Sandbox CRDs + controller) — see Chart.yaml
+# `dependencies`. Installed as a subchart by default; set `installController: false`
+# to bring your own pre-installed agent-sandbox.
+agentSandbox:
+  installController: true
+
+# Values passed through to the vendored agent-sandbox subchart.
+agent-sandbox:
+  image:
+    # Pin the controller image to the vendored CRD version (see Chart.yaml dep).
+    tag: "v1.0.9"
+  controller:
+    # The extension CRDs (SandboxTemplate / SandboxClaim / SandboxWarmPool) are
+    # required by cat-herder — it creates a SandboxTemplate and its RBAC references
+    # extensions.agents.x-k8s.io.
+    extensions: true
+
 # LLM configuration for the harness.
 # Models are agent-specific — each agent template carries its own `model` (see the
 # Agents admin tab / `agents.models` below); there is no global fallback model.

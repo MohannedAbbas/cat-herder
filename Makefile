@@ -30,6 +30,7 @@ canary:
 	./scripts/canary.sh
 
 chart:
+	helm dependency update helm/cat-herder
 	helm lint helm/cat-herder
 
 # Enable the gitleaks pre-commit hook (runs on `git commit`).
