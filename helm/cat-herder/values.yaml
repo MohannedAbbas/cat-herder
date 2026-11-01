@@ -45,15 +45,16 @@ agents:
     agent-docs: "deepseek:deepseek-reasoner"
 
 # Admin login (local auth). The control plane bcrypt-hashes `password` at startup;
-# it lives only in a Secret. Override in production.
+# it lives only in a Secret. Leave empty to generate a random one (kept out of git);
+# override to pin it. Override in production.
 admin:
   username: admin
-  password: admin-change-me
+  password: ""
 
 # Image refs are single strings so Tilt can inject locally-built images
 # (see Tiltfile `image_keys`).
 controlPlane:
-  image: ghcr.io/your-org/cat-herder:0.1.0
+  image: 127.0.0.1:5000/cat-herder:dev
   replicas: 1
   port: 8080
   # gRPC control-channel port (harness -> control plane event stream, PLAN.md §6/§9).
@@ -77,11 +78,11 @@ controlPlane:
 
 harness:
   # Python-only base harness image (the SandboxTemplate default).
-  image: ghcr.io/your-org/cat-herder-agent-harness:0.1.0
+  image: 127.0.0.1:5000/cat-herder-agent-harness:dev
   # Rust-capable variant (same base + cargo/rustc/linker). Agents that must build or
   # test a Rust repo opt in per-agent by setting their template `image` to this ref
   # (the control plane exposes it to the catalog's default agents).
-  rustImage: ghcr.io/your-org/cat-herder-agent-harness-rust:0.1.0
+  rustImage: 127.0.0.1:5000/cat-herder-agent-harness-rust:dev
 
 # Durable workspace (PLAN.md §6/§13): a shared ReadWriteMany PVC holds each run's
 # working tree (per-run subpath), so file edits survive pod recreation and a resumed
@@ -101,7 +102,7 @@ workspace:
     - ReadWriteMany
 
 ui:
-  image: ghcr.io/your-org/cat-herder-ui:0.1.0
+  image: 127.0.0.1:5000/cat-herder-ui:dev
   replicas: 1
   port: 80
 
@@ -117,8 +118,9 @@ dependencies:
     image: postgres:16-alpine
     user: cat_herder
     database: cat_herder
-    # Internal ClusterIP-only; override in production via `--set` or a values file.
-    password: cat-herder-dev-password
+    # Internal ClusterIP-only. Leave empty to generate a random one; override in
+    # production via `--set` or a values file.
+    password: ""
     storage: 1Gi
     serviceName: cat-herder-postgres
   nats:
@@ -301,7 +303,7 @@ oauth:
 # the control plane runs the broker in-process (single-replica dev).
 broker:
   enabled: false
-  image: ghcr.io/your-org/cat-herder-broker:0.1.0
+  image: 127.0.0.1:5000/cat-herder-broker:dev
   replicas: 1
   grpcPort: 50052
   github:
