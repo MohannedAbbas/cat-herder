@@ -91,19 +91,3 @@ helm_resource(
     image_deps=['cat-herder', 'cat-herder-agent-harness', 'cat-herder-agent-harness-rust', 'cat-herder-ui', 'cat-herder-broker'],
 )
 
-# Expose the API and UI with explicit Service-targeted port-forwards. Tilt's
-# `port_forwards` is ambiguous across the multiple pods in one helm resource (it can
-# pick the wrong pod and flap with "lost connection to pod"), so target the Services.
-# The retry loop makes the forward self-heal across the pod replacements that Tilt's
-# image-tag churn causes on each reload/restart.
-local_resource(
-    'api-port-forward',
-    serve_cmd='sh -c "while true; do kubectl port-forward -n cat-herder svc/cat-herder-api 8080:80; sleep 2; done"',
-    resource_deps=['cat-herder'],
-)
-
-local_resource(
-    'ui-port-forward',
-    serve_cmd='sh -c "while true; do kubectl port-forward -n cat-herder svc/cat-herder-ui 8081:80; sleep 2; done"',
-    resource_deps=['cat-herder'],
-)
