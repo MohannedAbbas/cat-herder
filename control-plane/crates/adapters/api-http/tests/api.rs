@@ -1666,7 +1666,7 @@ async fn admin_upsert_provider_with_session() {
                 .header("content-type", "application/json")
                 .header("cookie", cookie)
                 .body(Body::from(
-                    r#"{"id":"deepseek","name":"DeepSeek","baseUrl":"https://api.deepseek.com","apiKeySecret":"cat-herder-deepseek","apiKeySecretKey":"api-key","enabled":true}"#,
+                    r#"{"id":"deepseek","name":"DeepSeek","baseUrl":"https://api.deepseek.com","apiKeySecret":"cat-herder-ai-providers-deepseek","apiKeySecretKey":"api-key","enabled":true}"#,
                 ))
                 .unwrap(),
         )
@@ -1676,7 +1676,7 @@ async fn admin_upsert_provider_with_session() {
     let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
     let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert_eq!(v["id"], "deepseek");
-    assert_eq!(v["apiKeySecret"], "cat-herder-deepseek");
+    assert_eq!(v["apiKeySecret"], "cat-herder-ai-providers-deepseek");
 }
 
 #[tokio::test]

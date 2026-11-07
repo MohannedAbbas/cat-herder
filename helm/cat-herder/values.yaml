@@ -23,12 +23,12 @@ agent-sandbox:
 # Models are agent-specific — each agent template carries its own `model` (see the
 # Agents admin tab / `agents.models` below); there is no global fallback model.
 # Each provider uses its OWN Secret (see the Providers admin tab): by convention
-# `cat-herder-<provider-id>` with key `api-key`, e.g.
-#   kubectl -n cat-herder create secret generic cat-herder-deepseek --from-literal=api-key=sk-...
-#   kubectl -n cat-herder create secret generic cat-herder-openai   --from-literal=api-key=sk-...
+# `cat-herder-ai-providers-<provider-id>` with key `api-key`, e.g.
+#   kubectl -n cat-herder create secret generic cat-herder-ai-providers-deepseek --from-literal=api-key=sk-...
+#   kubectl -n cat-herder create secret generic cat-herder-ai-providers-openai   --from-literal=api-key=sk-...
 # `llmApiKeySecret` below is only a fallback when a run's model has no matching
 # provider.
-llmApiKeySecret: cat-herder-llm
+llmApiKeySecret: cat-herder-ai-providers-llm
 
 # Encryption-key Secret: the control plane generates a random key into this Secret on
 # first boot (no operator initialization) and rewrites it on rotation. Tokens are
@@ -276,14 +276,14 @@ karpenter:
 oauth:
   github:
     enabled: false
-    secret: cat-herder-github-oauth
+    secret: cat-herder-auth-github-oauth
     redirectUrl: ""
     allowedUsers: []
   # GitLab SSO mirrors GitHub. For local dev set redirectUrl to
   # "http://localhost:8080" and register http://localhost:8080/v1/auth/gitlab/callback.
   gitlab:
     enabled: false
-    secret: cat-herder-gitlab-oauth
+    secret: cat-herder-auth-gitlab-oauth
     redirectUrl: ""
     allowedUsers: []
   # DEV-ONLY mock OAuth. When enabled, the control plane pretends GitHub and GitLab
@@ -310,7 +310,7 @@ broker:
     enabled: false
     # The GitHub App's numeric id and its private key Secret (PEM, key `private-key`).
     appId: ""
-    secret: cat-herder-github-app
+    secret: cat-herder-code-creds-github-app
     # API base (defaults to the public GitHub API; override for GHE).
     apiBase: ""
   # mTLS (optional; plaintext when unset). Name of a Secret holding the broker's

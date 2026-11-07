@@ -33,16 +33,17 @@ repos/toolchains.
 ## Each provider needs its OWN API-key Secret
 
 Models are agent-specific and the runtime resolves the API key from the **provider's**
-Secret (default convention `cat-herder-<provider-id>`, key `api-key`):
+Secret (default convention `cat-herder-ai-providers-<provider-id>`, key `api-key`),
+sourced from OpenBao via ESO:
 
 ```sh
-kubectl -n cat-herder create secret generic cat-herder-deepseek --from-literal=api-key=...
-kubectl -n cat-herder create secret generic cat-herder-openai   --from-literal=api-key=...
+kubectl -n cat-herder create secret generic cat-herder-ai-providers-deepseek --from-literal=api-key=...
+kubectl -n cat-herder create secret generic cat-herder-ai-providers-openai   --from-literal=api-key=...
 ```
 
-`llmApiKeySecret` (`cat-herder-llm`) is only a **fallback** used when a run's model has no
-matching provider. If the model's provider has no (enabled) provider row/Secret, the
-sandbox may be spawned without a key.
+`llmApiKeySecret` (`cat-herder-ai-providers-llm`) is only a **fallback** used when a
+run's model has no matching provider. If the model's provider has no (enabled) provider
+row/Secret, the sandbox may be spawned without a key.
 
 ## Egress NetworkPolicy uses CIDRs, not hostnames
 

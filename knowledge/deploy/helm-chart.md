@@ -29,7 +29,7 @@ control plane, UI, bundled Postgres, RBAC, the sandbox egress NetworkPolicy, and
 | Key | Notes |
 |---|---|
 | `namespace` | target namespace, default `cat-herder` |
-| `llmApiKeySecret` | fallback Secret `cat-herder-llm` (key `api-key`) only when a run's model has no matching provider |
+| `llmApiKeySecret` | fallback Secret `cat-herder-ai-providers-llm` (key `api-key`) only when a run's model has no matching provider |
 | `encryptionKeySecret` / `encryptionKeySecretKey` | `cat-herder-encryption` / `key` (see [encryption](/concepts/encryption.md)) |
 | `agents.models` | per-agent model overrides (JSON → `CAT_HERDER_AGENT_MODELS`) |
 | `admin.username` / `admin.password` | seeded admin (lives only in a Secret) |
