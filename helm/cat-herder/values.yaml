@@ -260,18 +260,23 @@ karpenter:
   onDemandCpuLimit: "1000"
   spotCpuLimit: "1000"
 
-# GitHub OAuth SSO (optional; password login still works when disabled).
-# When enabled the API exposes /v1/auth/github/login and
-# /v1/auth/github/callback. The client id/secret come from the Secret named in
-# `secret` (keys `client-id` and `client-secret`); the allow-list is the comma
-# separated set of GitHub logins permitted to become admin. `redirectUrl` is the
-# public base URL of the control plane (the callback path is appended), and must
-# match the OAuth App's registered callback exactly.
+# GitHub SSO (optional; password login still works when disabled). When enabled the
+# API exposes /v1/auth/github/login and /v1/auth/github/callback. The client
+# id/secret come from the Secret named in `secret` (keys `client-id` and
+# `client-secret`); the allow-list is the comma separated set of GitHub logins
+# permitted to become admin. `redirectUrl` is the public base URL of the control
+# plane (the callback path is appended), and must match the App's registered
+# callback exactly.
+#
+# This is the SAME GitHub App that powers the JIT credential broker below — one App
+# provides both the OAuth `client_id`/`client_secret` (SSO, here) and the App ID +
+# private key (broker, §11.3). The client credentials live in OpenBao at
+# secret/cat-herder/auth/github-oauth.
 #
 # Local dev (Tilt exposes the API on :8080 and the UI proxies /v1 to it): set
 #   redirectUrl: "http://localhost:8080"
 # and register the callback URL http://localhost:8080/v1/auth/github/callback with
-# the GitHub OAuth App. The UI detects enabled providers via GET /v1/auth/sso-providers
+# the GitHub App. The UI detects enabled providers via GET /v1/auth/sso-providers
 # and shows a "Sign in with GitHub" button.
 oauth:
   github:
@@ -308,7 +313,9 @@ broker:
   grpcPort: 50052
   github:
     enabled: false
-    # The GitHub App's numeric id and its private key Secret (PEM, key `private-key`).
+    # The GitHub App's numeric App ID and its private key Secret (PEM, key
+    # `private-key`). This is the SAME App used for SSO above; its private key lives
+    # in OpenBao at secret/cat-herder/code-creds/github-app.
     appId: ""
     secret: cat-herder-code-creds-github-app
     # API base (defaults to the public GitHub API; override for GHE).

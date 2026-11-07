@@ -74,7 +74,7 @@ The control plane is configured via environment variables:
 | Variable | Purpose |
 |---|---|
 | `CAT_HERDER_ADMIN_USER` / `CAT_HERDER_ADMIN_PASSWORD` | Seeded admin for the username/password login (`POST /v1/auth/login`). |
-| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App credentials. |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub App OAuth credentials (same App powers the broker). |
 | `GITHUB_OAUTH_REDIRECT_URL` | Public base URL of the control plane; the callback path `/v1/auth/github/callback` is appended. |
 | `GITHUB_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to become admin. |
 | `GITLAB_OAUTH_CLIENT_ID` / `GITLAB_OAUTH_CLIENT_SECRET` | GitLab OAuth application credentials. |
@@ -151,7 +151,7 @@ instead of) the username/password login:
   authenticated GitHub user, and — **only if that user's login is in
   `GITHUB_OAUTH_ALLOWED_USERS`** — issues a normal admin session.
 
-Register the OAuth App callback URL as
+Register the GitHub App callback URL as
 `<GITHUB_OAUTH_REDIRECT_URL>/v1/auth/github/callback`. With Helm, set
 `oauth.github.enabled=true` (see `values.yaml`); client id/secret are read from a
 Secret with keys `client-id` / `client-secret`.
