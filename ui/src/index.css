@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+/*
+ * Dark mode uses the class strategy: toggling `dark` on <html> swaps the theme.
+ * This overrides Tailwind v4's default `prefers-color-scheme` variant so the
+ * in-app light/dark toggle controls it instead of the OS setting.
+ */
+@custom-variant dark (&:where(.dark, .dark *));

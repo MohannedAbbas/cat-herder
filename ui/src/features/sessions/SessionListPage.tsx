@@ -17,9 +17,9 @@ export default function SessionListPage() {
       {error && <ErrorState message={error.message} />}
 
       {data && (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
               <tr>
                 <th className="px-4 py-3">Session</th>
                 <th className="px-4 py-3">Status</th>
@@ -27,23 +27,23 @@ export default function SessionListPage() {
                 <th className="px-4 py-3">Updated</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
               {data.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50">
+                <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                   <td className="px-4 py-3">
                     <Link
                       to={`/sessions/${s.id}`}
-                      className="font-medium text-slate-900 hover:underline"
+                      className="font-medium text-slate-900 dark:text-slate-100 hover:underline"
                     >
                       {s.title}
                     </Link>
-                    <div className="text-xs text-slate-400">{s.id}</div>
+                    <div className="text-xs text-slate-400 dark:text-slate-500">{s.id}</div>
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={s.status} />
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{s.runCount}</td>
-                  <td className="px-4 py-3 text-slate-500">{formatDate(s.updatedAt)}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{s.runCount}</td>
+                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{formatDate(s.updatedAt)}</td>
                 </tr>
               ))}
             </tbody>

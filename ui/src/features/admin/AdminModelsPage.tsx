@@ -53,7 +53,7 @@ export default function AdminModelsPage() {
     <div>
       <PageHeader title="Admin · Models" subtitle="Models within each provider." />
       <div className="mb-4">
-        <button onClick={startNew} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+        <button onClick={startNew} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
           New model
         </button>
       </div>
@@ -63,26 +63,26 @@ export default function AdminModelsPage() {
 
       {models && (
         <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
                   <th className="px-4 py-3">Model</th>
                   <th className="px-4 py-3">Provider</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
                 {models.map((m) => (
-                  <tr key={m.id} className="hover:bg-slate-50">
+                  <tr key={m.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">{m.displayName || m.id}</div>
-                      <div className="text-xs text-slate-400">{m.providerId}:{m.id}</div>
+                      <div className="font-medium text-slate-900 dark:text-slate-100">{m.displayName || m.id}</div>
+                      <div className="text-xs text-slate-400 dark:text-slate-500">{m.providerId}:{m.id}</div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{m.providerId}</td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{m.providerId}</td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => startEdit(m)} className="text-sm text-slate-600 hover:underline">Edit</button>
-                      <button onClick={() => remove.mutate(m.id)} className="ml-3 text-sm text-red-600 hover:underline">Delete</button>
+                      <button onClick={() => startEdit(m)} className="text-sm text-slate-600 dark:text-slate-300 hover:underline">Edit</button>
+                      <button onClick={() => remove.mutate(m.id)} className="ml-3 text-sm text-red-600 dark:text-red-400 hover:underline">Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -92,7 +92,7 @@ export default function AdminModelsPage() {
 
           {editingId && (
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">{editingId === '__new__' ? 'New model' : `Editing ${editingId}`}</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{editingId === '__new__' ? 'New model' : `Editing ${editingId}`}</h2>
               <div className="mt-4 space-y-3">
                 <Field label="ID (e.g. deepseek-chat)">
                   <input value={form.id} disabled={editingId !== '__new__'} onChange={(e) => setForm({ ...form, id: e.target.value })} className={inputCls} />
@@ -107,10 +107,10 @@ export default function AdminModelsPage() {
                 <Field label="Display name">
                   <input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} className={inputCls} />
                 </Field>
-                {message && <p className="text-sm text-emerald-600">{message}</p>}
+                {message && <p className="text-sm text-emerald-600 dark:text-emerald-400">{message}</p>}
                 <div className="flex gap-2 pt-1">
-                  <button onClick={submit} disabled={save.isPending} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">Save</button>
-                  <button onClick={() => setEditingId(null)} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+                  <button onClick={submit} disabled={save.isPending} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">Save</button>
+                  <button onClick={() => setEditingId(null)} className="rounded-lg px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
                 </div>
               </div>
             </Card>
@@ -121,12 +121,12 @@ export default function AdminModelsPage() {
   )
 }
 
-const inputCls = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400'
+const inputCls = 'w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:ring-slate-600'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
       {children}
     </label>
   )

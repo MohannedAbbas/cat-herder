@@ -1,11 +1,12 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
+import ThemeToggle from '@/components/ThemeToggle'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `block rounded-md px-3 py-2 text-sm font-medium transition ${
     isActive
-      ? 'bg-slate-900 text-white'
-      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100'
   }`
 
 export default function Layout() {
@@ -18,14 +19,14 @@ export default function Layout() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="flex">
-        <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col border-r border-slate-200 bg-white p-4">
+        <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col border-r border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <Link to="/" className="mb-6 flex items-center gap-2 px-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white dark:bg-slate-100 dark:text-slate-900">
               CH
             </span>
-            <span className="text-lg font-semibold text-slate-900">Cat Herder</span>
+            <span className="text-lg font-semibold text-slate-900 dark:text-slate-100">Cat Herder</span>
           </Link>
           <nav className="flex flex-col gap-1">
             <NavLink to="/runs" className={navLinkClass}>
@@ -40,7 +41,7 @@ export default function Layout() {
                 <NavLink to="/agents" className={navLinkClass}>
                   Agents
                 </NavLink>
-                <div className="mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                <div className="mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
                   Admin
                 </div>
                 <NavLink to="/admin/agents" className={navLinkClass}>
@@ -71,11 +72,15 @@ export default function Layout() {
             )}
           </nav>
 
-          <div className="mt-auto border-t border-slate-200 pt-3">
+          <div className="mt-auto border-t border-slate-200 pt-3 dark:border-slate-800">
+            <ThemeToggle className="mb-2 w-full" />
             {authenticated ? (
               <div className="flex items-center justify-between px-2">
-                <span className="text-sm text-slate-600">{username}</span>
-                <button onClick={onLogout} className="text-sm text-slate-500 hover:underline">
+                <span className="text-sm text-slate-600 dark:text-slate-300">{username}</span>
+                <button
+                  onClick={onLogout}
+                  className="text-sm text-slate-500 hover:underline dark:text-slate-400 dark:hover:text-slate-200"
+                >
                   Sign out
                 </button>
               </div>

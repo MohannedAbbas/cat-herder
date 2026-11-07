@@ -19,7 +19,7 @@ export default function AgentDetailPage() {
       {agent && (
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
-            <h2 className="text-sm font-semibold text-slate-900">Configuration</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Configuration</h2>
             <div className="mt-3 space-y-2 text-sm">
               <Row label="Image" value={agent.image} />
               <Row label="Runtime tier" value={agent.runtimeTier} />
@@ -28,12 +28,12 @@ export default function AgentDetailPage() {
             </div>
           </Card>
           <Card>
-            <h2 className="text-sm font-semibold text-slate-900">Tools</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Tools</h2>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {agent.tools.map((t) => (
                 <span
                   key={t}
-                  className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                  className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300"
                 >
                   {t}
                 </span>
@@ -49,8 +49,8 @@ export default function AgentDetailPage() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-medium text-slate-900">{value}</span>
+      <span className="text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="font-medium text-slate-900 dark:text-slate-100">{value}</span>
     </div>
   )
 }
