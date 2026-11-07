@@ -61,34 +61,34 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center">
       <Card className="w-full max-w-sm">
-        <h1 className="text-lg font-semibold text-slate-900">Admin sign in</h1>
-        <p className="mt-1 text-sm text-slate-500">Manage agents, models, and providers.</p>
+        <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Admin sign in</h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage agents, models, and providers.</p>
 
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Username</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-950 dark:text-slate-100"
               autoComplete="username"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Password</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-950 dark:text-slate-100"
               autoComplete="current-password"
             />
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50"
           >
             {submitting ? 'Signing in…' : 'Sign in'}
           </button>
@@ -98,10 +98,10 @@ export default function LoginPage() {
           <div className="mt-6">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200" />
+                <div className="w-full border-t border-slate-200 dark:border-slate-800" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-slate-400">or sign in with</span>
+                <span className="bg-white px-2 text-slate-400 dark:bg-slate-900 dark:text-slate-500">or sign in with</span>
               </div>
             </div>
             <div className="mt-4 space-y-2">
@@ -112,7 +112,7 @@ export default function LoginPage() {
                     key={provider}
                     type="button"
                     onClick={() => signInWith(provider)}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-medium text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60"
                   >
                     Sign in with {label}
                   </button>

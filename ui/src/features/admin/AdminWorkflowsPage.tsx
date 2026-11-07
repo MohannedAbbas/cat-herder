@@ -129,53 +129,53 @@ export default function AdminWorkflowsPage() {
       <div className="mb-4">
         <button
           onClick={startNew}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
         >
           New workflow
         </button>
       </div>
 
-      {errorMsg && <p className="mb-4 text-sm text-red-600">{errorMsg}</p>}
-      {message && <p className="mb-4 text-sm text-emerald-600">{message}</p>}
+      {errorMsg && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{errorMsg}</p>}
+      {message && <p className="mb-4 text-sm text-emerald-600 dark:text-emerald-400">{message}</p>}
 
       {isLoading && <Loading />}
       {error && <ErrorState message={error.message} />}
 
       {workflows && (
         <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
                   <th className="px-4 py-3">Workflow</th>
                   <th className="px-4 py-3">Pipeline</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
                 {workflows.map((w) => (
-                  <tr key={w.id} className="hover:bg-slate-50">
+                  <tr key={w.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">
+                      <div className="font-medium text-slate-900 dark:text-slate-100">
                         {w.name}
                         {w.isDefault && (
-                          <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                          <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                             default
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-400">{w.id}</div>
+                      <div className="text-xs text-slate-400 dark:text-slate-500">{w.id}</div>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                    <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
                       {w.steps.map((s) => s.agentType).join(' → ')}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => startEdit(w)} className="text-sm text-slate-600 hover:underline">
+                      <button onClick={() => startEdit(w)} className="text-sm text-slate-600 dark:text-slate-300 hover:underline">
                         Edit
                       </button>
                       <button
                         onClick={() => remove.mutate(w.id)}
-                        className="ml-3 text-sm text-red-600 hover:underline"
+                        className="ml-3 text-sm text-red-600 dark:text-red-400 hover:underline"
                       >
                         Delete
                       </button>
@@ -188,7 +188,7 @@ export default function AdminWorkflowsPage() {
 
           {editingId && (
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 {editingId === '__new__' ? 'New workflow' : `Editing ${form.name || editingId}`}
               </h2>
               <div className="mt-4 space-y-3">
@@ -200,7 +200,7 @@ export default function AdminWorkflowsPage() {
                     className={inputCls}
                   />
                 </Field>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                   <input
                     type="checkbox"
                     checked={form.isDefault}
@@ -210,11 +210,11 @@ export default function AdminWorkflowsPage() {
                 </label>
 
                 <div>
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Steps</span>
+                  <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Steps</span>
                   <div className="space-y-2">
                     {form.steps.map((s, i) => (
-                      <div key={i} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
-                        <span className="w-5 shrink-0 text-center text-xs font-semibold text-slate-400">
+                      <div key={i} className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 p-2">
+                        <span className="w-5 shrink-0 text-center text-xs font-semibold text-slate-400 dark:text-slate-500">
                           {i + 1}
                         </span>
                         <select
@@ -231,7 +231,7 @@ export default function AdminWorkflowsPage() {
                         <button
                           onClick={() => moveStep(i, -1)}
                           disabled={i === 0}
-                          className="rounded px-1.5 py-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                          className="rounded px-1.5 py-1 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
                           title="Move up"
                         >
                           ↑
@@ -239,7 +239,7 @@ export default function AdminWorkflowsPage() {
                         <button
                           onClick={() => moveStep(i, 1)}
                           disabled={i === form.steps.length - 1}
-                          className="rounded px-1.5 py-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                          className="rounded px-1.5 py-1 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
                           title="Move down"
                         >
                           ↓
@@ -247,7 +247,7 @@ export default function AdminWorkflowsPage() {
                         <button
                           onClick={() => removeStep(i)}
                           disabled={form.steps.length === 1}
-                          className="rounded px-1.5 py-1 text-red-500 hover:bg-red-50 disabled:opacity-30"
+                          className="rounded px-1.5 py-1 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950/40"
                           title="Remove step"
                         >
                           ✕
@@ -257,25 +257,25 @@ export default function AdminWorkflowsPage() {
                   </div>
                   <button
                     onClick={addStep}
-                    className="mt-2 text-sm text-blue-600 hover:underline"
+                    className="mt-2 text-sm text-blue-600 hover:underline dark:text-blue-400"
                   >
                     + Add step
                   </button>
                 </div>
 
-                {dup && <p className="text-sm text-amber-600">{dup}</p>}
+                {dup && <p className="text-sm text-amber-600 dark:text-amber-400">{dup}</p>}
 
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={submit}
                     disabled={save.isPending}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50"
                   >
                     {save.isPending ? 'Saving…' : 'Save'}
                   </button>
                   <button
                     onClick={() => setEditingId(null)}
-                    className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
+                    className="rounded-lg px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     Cancel
                   </button>
@@ -290,12 +290,12 @@ export default function AdminWorkflowsPage() {
 }
 
 const inputCls =
-  'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400'
+  'w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:ring-slate-600'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
       {children}
     </label>
   )

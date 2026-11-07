@@ -38,11 +38,11 @@ function RunRow({ run }: { run: Run }) {
     <Card>
       <div className="flex items-center gap-2">
         <StatusBadge status={run.state} />
-        <span className="text-xs uppercase tracking-wide text-slate-400">{run.kind}</span>
+        <span className="text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">{run.kind}</span>
       </div>
-      <p className="mt-2 text-sm font-medium text-slate-900">{run.taskSpec}</p>
-      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-        <Link to={`/agents/${run.agentId}`} className="text-slate-600 hover:underline">
+      <p className="mt-2 text-sm font-medium text-slate-900 dark:text-slate-100">{run.taskSpec}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+        <Link to={`/agents/${run.agentId}`} className="text-slate-600 dark:text-slate-300 hover:underline">
           {run.agentName}
         </Link>
         <span>Started {formatDate(run.startedAt)}</span>

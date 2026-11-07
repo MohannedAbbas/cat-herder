@@ -18,16 +18,17 @@ function orDash(value: string | null | undefined): string {
 
 /** Minimal prose styling for rendered markdown (headings, lists, code, links). */
 const markdownClass =
-  'text-sm text-slate-700 space-y-3 ' +
-  '[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-slate-900 ' +
-  '[&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-slate-900 ' +
-  '[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-slate-900 ' +
+  'text-sm text-slate-700 dark:text-slate-300 space-y-3 ' +
+  '[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-slate-900 dark:[&_h1]:text-slate-100 ' +
+  '[&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-slate-900 dark:[&_h2]:text-slate-100 ' +
+  '[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-slate-900 dark:[&_h3]:text-slate-100 ' +
   '[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 ' +
-  '[&_a]:text-blue-600 [&_a]:underline ' +
-  '[&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs ' +
+  '[&_a]:text-blue-600 [&_a]:underline dark:[&_a]:text-blue-400 ' +
+  '[&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs dark:[&_code]:bg-slate-800 ' +
   '[&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-slate-900 [&_pre]:p-3 ' +
   '[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-slate-100 ' +
-  '[&_blockquote]:border-l-4 [&_blockquote]:border-slate-200 [&_blockquote]:pl-3 [&_blockquote]:text-slate-500'
+  '[&_blockquote]:border-l-4 [&_blockquote]:border-slate-200 [&_blockquote]:pl-3 [&_blockquote]:text-slate-500 ' +
+  'dark:[&_blockquote]:border-slate-700 dark:[&_blockquote]:text-slate-400'
 
 function MarkdownBlock({ children }: { children: string }) {
   return (
@@ -38,9 +39,9 @@ function MarkdownBlock({ children }: { children: string }) {
 }
 
 function fileStatusClass(status: string): string {
-  if (status === 'added') return 'rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700'
-  if (status === 'deleted') return 'rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700'
-  return 'rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700'
+  if (status === 'added') return 'rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+  if (status === 'deleted') return 'rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-950/50 dark:text-red-300'
+  return 'rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
 }
 
 /** The workspace diff — the changed files a reviewer must see before responding. */
@@ -49,24 +50,24 @@ function DiffPanel({ diff }: { diff: RunDiff }) {
   return (
     <Card>
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Workspace diff</h2>
-        <span className="text-xs text-slate-400">
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Workspace diff</h2>
+        <span className="text-xs text-slate-400 dark:text-slate-500">
           {diff.changes.length} file{diff.changes.length === 1 ? '' : 's'} changed
         </span>
       </div>
       <div className="mt-3 space-y-3">
         {diff.changes.map((fc) => (
-          <div key={fc.path} className="overflow-hidden rounded-lg border border-slate-200">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2">
-              <code className="truncate font-mono text-xs text-slate-700">{fc.path}</code>
+          <div key={fc.path} className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50 px-3 py-2 dark:bg-slate-950/60">
+              <code className="truncate font-mono text-xs text-slate-700 dark:text-slate-300">{fc.path}</code>
               <span className={`shrink-0 ${fileStatusClass(fc.status)}`}>{fc.status}</span>
             </div>
             {fc.content != null ? (
-              <pre className="max-h-80 overflow-auto p-3 font-mono text-xs leading-relaxed text-slate-700">
+              <pre className="max-h-80 overflow-auto p-3 font-mono text-xs leading-relaxed text-slate-700 dark:text-slate-300">
                 {fc.content}
               </pre>
             ) : (
-              <div className="px-3 py-2 text-xs italic text-slate-400">No content (deleted file)</div>
+              <div className="px-3 py-2 text-xs italic text-slate-400 dark:text-slate-500">No content (deleted file)</div>
             )}
           </div>
         ))}
@@ -75,17 +76,18 @@ function DiffPanel({ diff }: { diff: RunDiff }) {
   )
 }
 
-/** Per-stream color for a live log line's label. */
+/** Per-stream color for a live log line's label. The log panel is always dark
+ * (bg-slate-950) in both themes, so these use light shades readable on it. */
 function logStreamClass(stream: RunLogStream): string {
   switch (stream) {
     case 'llm':
-      return 'text-violet-700'
+      return 'text-violet-400'
     case 'tool':
-      return 'text-amber-700'
+      return 'text-amber-400'
     case 'stderr':
-      return 'text-red-700'
+      return 'text-red-400'
     case 'stdout':
-      return 'text-emerald-700'
+      return 'text-emerald-400'
     default:
       return 'text-slate-500'
   }
@@ -119,10 +121,10 @@ function LogsPanel({ runId }: { runId: number }) {
   return (
     <Card>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Logs</h2>
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Logs</h2>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-slate-400">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
-          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          <span className="text-xs text-slate-400 dark:text-slate-500">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
             <input
               type="checkbox"
               checked={follow}
@@ -168,14 +170,14 @@ function ApprovalPanel({ approval, runId }: { approval: Approval; runId: number 
   })
 
   return (
-    <Card className="border-violet-200">
+    <Card className="border-violet-200 dark:border-violet-900">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Awaiting your approval</h2>
-        <span className="font-mono text-xs text-slate-400">checkpoint {approval.resume_token.slice(0, 8)}…</span>
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Awaiting your approval</h2>
+        <span className="font-mono text-xs text-slate-400 dark:text-slate-500">checkpoint {approval.resume_token.slice(0, 8)}…</span>
       </div>
 
       <div className="mt-3">
-        <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Pending action</div>
+        <div className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Pending action</div>
         <pre className="mt-1 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
           {JSON.stringify(approval.payload, null, 2)}
         </pre>
@@ -183,7 +185,7 @@ function ApprovalPanel({ approval, runId }: { approval: Approval; runId: number 
 
       <div className="mt-3">
         <label className="block">
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
             Response (optional)
           </span>
           <textarea
@@ -191,25 +193,25 @@ function ApprovalPanel({ approval, runId }: { approval: Approval; runId: number 
             onChange={(e) => setResponse(e.target.value)}
             rows={2}
             placeholder="A note to send back to the agent (e.g. 'go ahead')"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
           />
         </label>
       </div>
 
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <div className="mt-3 flex gap-2">
         <button
           onClick={() => decide.mutate(true)}
           disabled={decide.isPending}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50"
         >
           {decide.isPending ? 'Saving…' : 'Approve'}
         </button>
         <button
           onClick={() => decide.mutate(false)}
           disabled={decide.isPending}
-          className="rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+          className="rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
         >
           Reject
         </button>
@@ -235,15 +237,15 @@ function ReviewPanel({ review, runId }: { review: Review; runId: number }) {
   })
 
   return (
-    <Card className="border-cyan-200">
+    <Card className="border-cyan-200 dark:border-cyan-900">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Awaiting your review</h2>
-        <span className="text-xs text-slate-400">due {formatDate(new Date(review.deadline_at).toISOString())}</span>
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Awaiting your review</h2>
+        <span className="text-xs text-slate-400 dark:text-slate-500">due {formatDate(new Date(review.deadline_at).toISOString())}</span>
       </div>
 
       <div className="mt-3">
         <label className="block">
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
             Feedback (required for change requests)
           </span>
           <textarea
@@ -251,12 +253,12 @@ function ReviewPanel({ review, runId }: { review: Review; runId: number }) {
             onChange={(e) => setFeedback(e.target.value)}
             rows={3}
             placeholder="What should change before this is accepted?"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
           />
         </label>
       </div>
 
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -276,7 +278,7 @@ function ReviewPanel({ review, runId }: { review: Review; runId: number }) {
         <button
           onClick={() => decide.mutate('rejected')}
           disabled={decide.isPending}
-          className="rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+          className="rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
         >
           Reject
         </button>
@@ -313,10 +315,10 @@ export default function RunDetailPage() {
           <Card>
             <div className="flex items-center gap-3">
               <StatusBadge status={run.state} />
-              <span className="text-xs uppercase tracking-wide text-slate-400">{run.kind}</span>
-              <span className="text-xs text-slate-400">Runtime {formatDuration(run.startedAt, run.finishedAt)}</span>
+              <span className="text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">{run.kind}</span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">Runtime {formatDuration(run.startedAt, run.finishedAt)}</span>
             </div>
-            <h2 className="mt-3 text-sm font-semibold text-slate-900">Task spec</h2>
+            <h2 className="mt-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Task spec</h2>
             <div className="mt-1">
               <MarkdownBlock>{run.taskSpec}</MarkdownBlock>
             </div>
@@ -324,7 +326,7 @@ export default function RunDetailPage() {
 
           {run.report && run.report.trim().length > 0 && (
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">Report</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Report</h2>
               <div className="mt-3">
                 <MarkdownBlock>{run.report}</MarkdownBlock>
               </div>
@@ -335,7 +337,7 @@ export default function RunDetailPage() {
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">Trigger</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Trigger</h2>
               <div className="mt-3 space-y-2 text-sm">
                 <Row label="Channel" value={run.trigger} />
                 <Row label="Actor" value={orDash(run.actor)} />
@@ -345,7 +347,7 @@ export default function RunDetailPage() {
                     run.sessionId ? (
                       <Link
                         to={`/sessions/${run.sessionId}`}
-                        className="font-medium text-slate-900 hover:underline"
+                        className="font-medium text-slate-900 dark:text-slate-100 hover:underline"
                       >
                         {run.sessionId}
                       </Link>
@@ -358,7 +360,7 @@ export default function RunDetailPage() {
             </Card>
 
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">Context</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Context</h2>
               <div className="mt-3 space-y-2 text-sm">
                 <Row label="Model" value={orDash(run.model)} />
                 <Row label="Repository" value={orDash(run.repo)} />
@@ -370,7 +372,7 @@ export default function RunDetailPage() {
                         href={run.prUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="font-medium text-blue-600 hover:underline"
+                        className="font-medium text-blue-600 hover:underline dark:text-blue-400"
                       >
                         {run.prUrl}
                       </a>
@@ -384,7 +386,7 @@ export default function RunDetailPage() {
             </Card>
 
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">Timing</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Timing</h2>
               <div className="mt-3 space-y-2 text-sm">
                 <Row label="Triggered" value={formatDate(run.createdAt)} />
                 <Row label="Started" value={formatDate(run.startedAt)} />
@@ -393,7 +395,7 @@ export default function RunDetailPage() {
             </Card>
 
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">Usage</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Usage</h2>
               <div className="mt-3 space-y-2 text-sm">
                 <Row label="Input tokens" value={formatTokens(run.inputTokens)} />
                 <Row label="Output tokens" value={formatTokens(run.outputTokens)} />
@@ -409,8 +411,8 @@ export default function RunDetailPage() {
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex justify-between gap-4">
-      <span className="shrink-0 text-slate-500">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium text-slate-900">{value}</span>
+      <span className="shrink-0 text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium text-slate-900 dark:text-slate-100">{value}</span>
     </div>
   )
 }

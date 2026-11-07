@@ -80,46 +80,46 @@ export default function AdminReposPage() {
       <div className="mb-4 flex items-center gap-3">
         <button
           onClick={startNew}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
         >
           New repo
         </button>
       </div>
 
-      {errorMsg && <p className="mb-4 text-sm text-red-600">{errorMsg}</p>}
-      {message && <p className="mb-4 text-sm text-emerald-600">{message}</p>}
+      {errorMsg && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{errorMsg}</p>}
+      {message && <p className="mb-4 text-sm text-emerald-600 dark:text-emerald-400">{message}</p>}
 
       {isLoading && <Loading />}
       {error && <ErrorState message={error.message} />}
 
       {repos && (
         <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="lg:col-span-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
                   <th className="px-4 py-3">Repo</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
                 {repos.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-50">
+                  <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/60">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">
-                        <span className="mr-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                      <div className="font-medium text-slate-900 dark:text-slate-100">
+                        <span className="mr-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                           {r.host}
                         </span>
                         {r.name}
-                        {!r.enabled && <span className="ml-2 text-xs text-slate-400">(disabled)</span>}
+                        {!r.enabled && <span className="ml-2 text-xs text-slate-400 dark:text-slate-500">(disabled)</span>}
                       </div>
-                      <div className="font-mono text-xs text-slate-400">{r.url}</div>
+                      <div className="font-mono text-xs text-slate-400 dark:text-slate-500">{r.url}</div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => startEdit(r)} className="text-sm text-slate-600 hover:underline">
+                      <button onClick={() => startEdit(r)} className="text-sm text-slate-600 dark:text-slate-300 hover:underline">
                         Edit
                       </button>
-                      <button onClick={() => remove.mutate(r.id)} className="ml-3 text-sm text-red-600 hover:underline">
+                      <button onClick={() => remove.mutate(r.id)} className="ml-3 text-sm text-red-600 dark:text-red-400 hover:underline">
                         Delete
                       </button>
                     </td>
@@ -131,7 +131,7 @@ export default function AdminReposPage() {
 
           {editingId && (
             <Card>
-              <h2 className="text-sm font-semibold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 {editingId === '__new__' ? 'New repo' : `Editing ${form.repo || editingId}`}
               </h2>
               <div className="mt-4 space-y-3">
@@ -155,12 +155,12 @@ export default function AdminReposPage() {
                     placeholder="org/repo"
                     className={inputCls}
                   />
-                  <span className="mt-1 block text-xs text-slate-400">
+                  <span className="mt-1 block text-xs text-slate-400 dark:text-slate-500">
                     e.g. <code className="font-mono">octocat/hello-world</code> — the URL and
                     identifier are derived for you.
                   </span>
                 </Field>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                   <input
                     type="checkbox"
                     checked={form.enabled}
@@ -172,13 +172,13 @@ export default function AdminReposPage() {
                   <button
                     onClick={submit}
                     disabled={save.isPending}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
                   >
                     Save
                   </button>
                   <button
                     onClick={() => setEditingId(null)}
-                    className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
+                    className="rounded-lg px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     Cancel
                   </button>
@@ -193,12 +193,12 @@ export default function AdminReposPage() {
 }
 
 const inputCls =
-  'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400'
+  'w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:ring-slate-600'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
       {children}
     </label>
   )

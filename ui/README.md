@@ -8,6 +8,15 @@ their **status**, and **agent information**.
 - React 19 + TypeScript (strict) + Vite 6
 - TanStack Query (server state) · React Router (routing) · Tailwind CSS 4
 
+## Theming
+
+Light/dark mode is controlled by the sidebar toggle (defaults to the OS
+`prefers-color-scheme`, persisted in `localStorage` under `ch-theme`). It uses
+Tailwind's **class** strategy — `src/index.css` overrides the `dark` variant with
+`@custom-variant dark (&:where(.dark, .dark *))`, and `src/theme/ThemeContext.tsx`
+toggles the `dark` class on `<html>`. Style new UI with the base (light) class
+plus a `dark:` counterpart — e.g. `bg-white dark:bg-slate-900`.
+
 ## Run
 
 ```sh
@@ -37,5 +46,6 @@ src/
   features/   sessions/ + agents/ pages
   hooks/      TanStack Query hooks
   lib/        queryClient, formatters
+  theme/      ThemeContext (light/dark provider + useTheme hook)
   types/      domain types (mirrors PLAN.md §15)
 ```
