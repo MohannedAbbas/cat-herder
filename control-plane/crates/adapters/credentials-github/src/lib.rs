@@ -17,8 +17,9 @@ use serde::Deserialize;
 /// Configuration for a GitHub App.
 #[derive(Debug, Clone)]
 pub struct GitHubAppConfig {
-    /// The GitHub App's numeric id (`iss` in the JWT).
-    pub app_id: u64,
+    /// The GitHub App's client id (`iss` in the JWT). GitHub recommends the client id
+    /// over the numeric app id, which is deprecated for JWT minting.
+    pub client_id: String,
     /// The App's RSA private key, PEM-encoded (PKCS#1 or PKCS#8).
     pub private_key_pem: String,
     /// API base URL (defaults to `https://api.github.com`; overridable for GHE/tests).
@@ -28,7 +29,7 @@ pub struct GitHubAppConfig {
 impl Default for GitHubAppConfig {
     fn default() -> Self {
         Self {
-            app_id: 0,
+            client_id: String::new(),
             private_key_pem: String::new(),
             api_base: "https://api.github.com".into(),
         }
@@ -159,7 +160,7 @@ impl GitHubApp {
         let claims = serde_json::json!({
             "iat": iat,
             "exp": iat + JWT_TTL_SECS,
-            "iss": config.app_id.to_string(),
+            "iss": config.client_id,
         });
         jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &key)
             .map_err(|e| format!("JWT signing failed: {e}"))
@@ -179,7 +180,7 @@ mod tests {
 
     fn config(api_base: String) -> GitHubAppConfig {
         GitHubAppConfig {
-            app_id: 456,
+            client_id: "Iv1.test-client-id".into(),
             private_key_pem: test_key(),
             api_base,
         }
@@ -203,7 +204,7 @@ mod tests {
         assert_eq!(header["typ"], "JWT");
 
         let payload = decode_segment(segments[1]);
-        assert_eq!(payload["iss"], "456");
+        assert_eq!(payload["iss"], "Iv1.test-client-id");
         let exp = payload["exp"].as_u64().expect("exp is a number");
         let iat = payload["iat"].as_u64().expect("iat is a number");
         assert!(exp > iat, "exp is after iat");
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn new_rejects_malformed_key() {
         let result = GitHubApp::new(GitHubAppConfig {
-            app_id: 456,
+            client_id: "Iv1.test-client-id".into(),
             private_key_pem: "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----"
                 .into(),
             ..Default::default()

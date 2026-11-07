@@ -173,12 +173,12 @@ async fn ensure_git_hosts(
 }
 
 /// The GitHub App config for the JIT credential broker, from the environment. `None`
-/// when the App id/private key are not both configured (the broker then mints nothing).
+/// when the App client id/private key are not both configured (the broker then mints nothing).
 fn github_app_config() -> Option<GitHubAppConfig> {
-    let app_id = std::env::var("CAT_HERDER_GITHUB_APP_ID")
+    let client_id = std::env::var("CAT_HERDER_GITHUB_CLIENT_ID")
         .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())?;
-    let private_key_pem = std::env::var("CAT_HERDER_GITHUB_APP_PRIVATE_KEY")
+        .filter(|s| !s.trim().is_empty())?;
+    let private_key_pem = std::env::var("CAT_HERDER_GITHUB_PRIVATE_KEY")
         .ok()
         .filter(|s| !s.trim().is_empty())?;
     let api_base = std::env::var("CAT_HERDER_GITHUB_API_BASE")
@@ -186,7 +186,7 @@ fn github_app_config() -> Option<GitHubAppConfig> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "https://api.github.com".into());
     Some(GitHubAppConfig {
-        app_id,
+        client_id,
         private_key_pem,
         api_base,
     })
@@ -213,7 +213,7 @@ fn build_local_broker(
             ),
         },
         None => {
-            eprintln!("JIT credential broker disabled (CAT_HERDER_GITHUB_APP_ID/PRIVATE_KEY unset)")
+            eprintln!("JIT credential broker disabled (CAT_HERDER_GITHUB_CLIENT_ID/PRIVATE_KEY unset)")
         }
     }
     BrokerImpl::Local(CredentialBrokerService::new(issuers, grants, events, bus))

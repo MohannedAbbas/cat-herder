@@ -154,7 +154,7 @@ Brokered credentials and a real budget hard-stop; both are called out as
   injects the short-lived secret into the pod (replacing whole-token injection; the
   runtime still falls back to a registered repo token when no App is configured), and
   `revoke_run` tears it down on terminal (reconcile terminal path, `complete_run`,
-  approval reject); wired via `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/`_API_BASE`
+  approval reject); wired via `CAT_HERDER_GITHUB_CLIENT_ID`/`_PRIVATE_KEY`/`_API_BASE`
   (+ Helm values); ✅ **separate broker service** — `bin/cat-herder-broker` serves the
   broker over gRPC (`proto/credential.proto`) with optional mTLS (tonic + rustls): the
   caller's CA-signed cert is verified and its SPIFFE-style URI SAN checked against an

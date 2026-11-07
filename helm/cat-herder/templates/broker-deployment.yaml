@@ -25,11 +25,14 @@ spec:
             - name: CAT_HERDER_BROKER_GRPC_PORT
               value: {{ .Values.broker.grpcPort | quote }}
             {{- if and .Values.broker.github.enabled }}
-            # The git-host App private key lives only in the broker trust boundary
+            # The client id + private key live only in the broker trust boundary
             # (PLAN.md §11.3), never in the sandbox or the control plane.
-            - name: CAT_HERDER_GITHUB_APP_ID
-              value: {{ .Values.broker.github.appId | quote }}
-            - name: CAT_HERDER_GITHUB_APP_PRIVATE_KEY
+            - name: CAT_HERDER_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.broker.github.secret }}
+                  key: client-id
+            - name: CAT_HERDER_GITHUB_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.broker.github.secret }}

@@ -237,7 +237,7 @@ mod tests {
     {
         CredentialBrokerService::github(
             GitHubAppConfig {
-                app_id: 456,
+                client_id: "Iv1.test-client-id".into(),
                 private_key_pem: test_key(),
                 api_base: api_base.to_string(),
             },

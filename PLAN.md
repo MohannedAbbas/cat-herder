@@ -1360,7 +1360,7 @@ role_mapping = { admin_teams = ["acme/platform"], operator_orgs = ["acme"] }
 enabled = false
 url = "http://cat-herder-broker:50052"
 [broker.github]
-app_id = 123456
+client_id = "Iv1..."            # the App's client id (used as the JWT `iss`)
 api_base = ""                  # empty = public GitHub; override for GHE
 ```
 
@@ -1398,7 +1398,7 @@ gitlab_token = "…"
 slack_signing_secret = "…"
 ```
 
-`client_id`/`app_id`/redirect URLs stay in `cat-herder.toml` (they are not secret);
+`client_id`/redirect URLs stay in `cat-herder.toml` (they are not secret);
 only the values that must not leave the Secret store live in `secrets.toml`.
 
 ### 24.5 Loading & precedence

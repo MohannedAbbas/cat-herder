@@ -131,7 +131,7 @@ mod tests {
     /// A GitHub-backed broker (mocked API) over the in-memory stores.
     async fn github_broker(api_base: &str) -> BrokerService {
         let app = GitHubApp::new(GitHubAppConfig {
-            app_id: 456,
+            client_id: "Iv1.test-client-id".into(),
             private_key_pem: test_key(),
             api_base: api_base.to_string(),
         })

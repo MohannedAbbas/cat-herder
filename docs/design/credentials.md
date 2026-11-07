@@ -30,7 +30,7 @@ One GitHub App covers **every repo it is installed on** (subject to the App's re
 access), so there is no per-repo or per-account credential config — the broker resolves
 the installation for a target repo dynamically. Minting is three steps:
 
-1. Sign an RS256 JWT with the App's private key (`{iat, exp, iss: app_id}`), `exp` < 10
+1. Sign an RS256 JWT with the App's private key (`{iat, exp, iss: client_id}`), `exp` < 10
    minutes per GitHub's requirement.
 2. `GET {api}/repos/{owner}/{repo}/installation` (JWT-auth) → `{id}` (the installation
    covering that repo).
@@ -112,7 +112,7 @@ so a forged `run_id` mints nothing.
   revoke on terminal.
 - `bin/cat-herder` — builds `BrokerImpl`: the remote gRPC client when
   `CAT_HERDER_BROKER_URL` is set (with optional TLS), else the in-process broker from
-  `CAT_HERDER_GITHUB_APP_ID`/`_PRIVATE_KEY`/`_API_BASE` (empty issuer map when unset).
+  `CAT_HERDER_GITHUB_CLIENT_ID`/`_PRIVATE_KEY`/`_API_BASE` (empty issuer map when unset).
 - `agent-harness/` — `credential_pb2.py`/`credential_pb2_grpc.py` stubs; `BrokerClient`
   (mint + out-of-band secret cache), the `credential` LangChain tool (returns an opaque
   handle), the `/credential/<id>` sidecar endpoint, and a git askpass helper.

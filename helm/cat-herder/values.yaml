@@ -313,10 +313,9 @@ broker:
   grpcPort: 50052
   github:
     enabled: false
-    # The GitHub App's numeric App ID and its private key Secret (PEM, key
-    # `private-key`). This is the SAME App used for SSO above; its private key lives
-    # in OpenBao at secret/cat-herder/code-creds/github-app.
-    appId: ""
+    # The GitHub App's client id + private key Secret. This is the SAME App used for
+    # SSO above; both live in OpenBao at secret/cat-herder/code-creds/github-app
+    # (keys `client-id` and `private-key`).
     secret: cat-herder-code-creds-github-app
     # API base (defaults to the public GitHub API; override for GHE).
     apiBase: ""

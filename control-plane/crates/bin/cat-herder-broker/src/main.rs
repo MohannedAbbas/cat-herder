@@ -23,10 +23,10 @@ use cat_herder_store_postgres::{
 
 /// The GitHub App config, from the environment (`None` when not configured).
 fn github_app_config() -> Option<GitHubAppConfig> {
-    let app_id = std::env::var("CAT_HERDER_GITHUB_APP_ID")
+    let client_id = std::env::var("CAT_HERDER_GITHUB_CLIENT_ID")
         .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())?;
-    let private_key_pem = std::env::var("CAT_HERDER_GITHUB_APP_PRIVATE_KEY")
+        .filter(|s| !s.trim().is_empty())?;
+    let private_key_pem = std::env::var("CAT_HERDER_GITHUB_PRIVATE_KEY")
         .ok()
         .filter(|s| !s.trim().is_empty())?;
     let api_base = std::env::var("CAT_HERDER_GITHUB_API_BASE")
@@ -34,7 +34,7 @@ fn github_app_config() -> Option<GitHubAppConfig> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "https://api.github.com".into());
     Some(GitHubAppConfig {
-        app_id,
+        client_id,
         private_key_pem,
         api_base,
     })
@@ -56,7 +56,7 @@ async fn main() {
         },
         None => eprintln!(
             "credential broker started with no issuers \
-             (CAT_HERDER_GITHUB_APP_ID/PRIVATE_KEY unset)"
+             (CAT_HERDER_GITHUB_CLIENT_ID/PRIVATE_KEY unset)"
         ),
     }
 
