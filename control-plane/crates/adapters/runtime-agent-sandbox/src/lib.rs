@@ -331,6 +331,15 @@ impl SandboxRuntime {
             env.push(serde_json::json!({ "name": "CAT_HERDER_LLM_PROXY_URL", "value": proxy_url }));
         }
 
+        // Human-in-the-loop tool interrupts (§10): the harness pauses for approval when
+        // the agent calls a tool named here (`{"edit_file": true}`). Forwarded verbatim
+        // from the control plane's env, so the interrupt set is a deploy-time policy.
+        if let Ok(interrupt_on) = std::env::var("CAT_HERDER_INTERRUPT_ON")
+            && !interrupt_on.trim().is_empty()
+        {
+            env.push(serde_json::json!({ "name": "CAT_HERDER_INTERRUPT_ON", "value": interrupt_on }));
+        }
+
         // The inactivity threshold the harness's own stuck watchdog uses (kept in lock
         // step with the pod liveness probe below via `self.pod`).
         env.push(serde_json::json!({

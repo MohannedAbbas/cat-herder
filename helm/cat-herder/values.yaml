@@ -70,6 +70,11 @@ controlPlane:
   leaseTtlSecs: 30
   reconcileIntervalSecs: 10
 
+# Human-in-the-loop tool interrupts (PLAN.md §10): a JSON object mapping a harness tool
+# name to `true`. When set, the agent pauses for approval before running a matching tool
+# (e.g. `{"edit_file": true}`). Forwarded to each sandbox's `CAT_HERDER_INTERRUPT_ON`.
+interruptOn: ""
+
 harness:
   # Python-only base harness image (the SandboxTemplate default).
   image: 127.0.0.1:5000/cat-herder-agent-harness:dev

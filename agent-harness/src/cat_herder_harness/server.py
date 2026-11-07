@@ -1147,7 +1147,14 @@ def main() -> None:
         signal = _control_channel.wait_for_signal()
         if signal is None or signal[0] != "resume":
             return None  # cancelled
-        return {interrupt.id: {"type": "approve"}}
+        # The human approved. Current deepagents emits a *batched* interrupt whose
+        # `value.action_requests` lists the gated calls; the resume decision must be
+        # `{"decisions": [{"type": "approve"}, ...]}` — one per action request — rather
+        # than the older per-interrupt `{interrupt.id: {...}}` shape.
+        value = interrupt.value if isinstance(interrupt.value, dict) else {}
+        requests = value.get("action_requests") or []
+        decisions = [{"type": "approve"} for _ in requests] or [{"type": "approve"}]
+        return {"decisions": decisions}
 
     report_event("started")
     set_agent_running(True)
