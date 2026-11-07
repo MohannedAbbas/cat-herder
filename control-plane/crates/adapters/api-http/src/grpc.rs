@@ -216,8 +216,11 @@ async fn ingest_interrupt(state: &AppState, run_id: RunId, interrupt: control::v
         &state.run_status_notifier,
     )
     .await;
-    if let Err(e) = result {
-        eprintln!("interrupt persist failed for run {}: {e}", run_id.0);
+    match result {
+        // Surface the approval to the triggerer: push the notification (done inside
+        // `interrupt_run`) and, if the client supports it, ask via MCP elicitation.
+        Ok(approval) => crate::mcp::elicit_approval(state, &approval).await,
+        Err(e) => eprintln!("interrupt persist failed for run {}: {e}", run_id.0),
     }
 }
 

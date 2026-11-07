@@ -529,6 +529,11 @@ where
         _ => return Ok(approval),
     }
     sessions.sync_run(&run).await?;
+    // Surface the pending approval to the run's trigger session (MCP) so the triggerer
+    // can approve/reject. Best-effort — the durable approval is already persisted.
+    if let Err(e) = notifier.notify_approval(&approval).await {
+        eprintln!("approval notify failed for run {}: {e}", run_id.0);
+    }
     Ok(approval)
 }
 

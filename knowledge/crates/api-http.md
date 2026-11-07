@@ -69,7 +69,11 @@ audit entry (best-effort).
   `ToolRepo`, `GitRepoRepo`, `SessionRepo`, `AuditRepo`, `SettingRepo`, each
   `InMemory | Postgres`.
 - **`mcp.rs`** — stateless MCP server: `initialize`, `tools/list`, `tools/call` with
-  tools `run_agent`, `list_runs`, `list_sessions`, `list_agents`.
+  tools `run_agent`, `list_runs`, `list_sessions`, `list_agents`,
+  `list_pending_approvals`, `respond_approval`. Pushes `notifications/run/status` and
+  `notifications/run/approval` over the session SSE stream, and — when the client
+  advertises elicitation — sends an `elicitation/create` request to ask the triggerer to
+  approve/reject a paused run.
 - **`webhook.rs`** — generic `WebhookPayload` → `RunRequest` normalization.
 
 ## Model resolution

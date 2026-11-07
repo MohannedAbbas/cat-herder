@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use futures::StreamExt;
 use tokio::sync::broadcast;
 
-use cat_herder_domain::entities::Run;
+use cat_herder_domain::entities::{ApprovalRequest, Run};
 use cat_herder_domain::ports::{DomainResult, RunStatusNotifier};
 use cat_herder_domain::redact::redact;
 
@@ -57,12 +57,38 @@ pub fn mcp_run_status_notification(run: &Run) -> String {
     .to_string()
 }
 
+/// Build the JSON-RPC `notifications/run/approval` message pushed to an MCP client when
+/// a run pauses for human-in-the-loop approval. Carries the approval id + the pending
+/// payload so the triggerer can see (and respond to) what needs approving.
+pub fn mcp_approval_notification(approval: &ApprovalRequest) -> String {
+    let created_ms = approval
+        .created_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/run/approval",
+        "params": {
+            "run_id": approval.run_id.0,
+            "approval_id": approval.id,
+            "payload": approval.payload,
+            "created_at": created_ms,
+        },
+    })
+    .to_string()
+}
+
 #[derive(Default)]
 struct HubInner {
     /// session id -> outbound channel (the local SSE last-mile).
     sessions: HashMap<String, broadcast::Sender<String>>,
     /// run id -> session id (single-replica association only).
     run_to_session: HashMap<u64, String>,
+    /// session id -> whether the client advertised MCP elicitation support.
+    elicit: HashMap<String, bool>,
+    /// elicitation request id -> (run id, approval id) of the pending request.
+    pending_elicitations: HashMap<String, (u64, String)>,
 }
 
 /// Process-local MCP SSE last-mile: maps sessions to their open SSE stream and (in
@@ -133,6 +159,40 @@ impl McpHub {
             .or_insert_with(|| broadcast::channel(BROADCAST_CAPACITY).0);
         let _ = tx.send(json);
     }
+
+    /// Record whether a session's client advertised MCP elicitation support (from its
+    /// `initialize` capabilities).
+    pub fn set_elicit(&self, session_id: &str, supports: bool) {
+        let mut inner = self.inner.lock().expect("mcp-hub mutex poisoned");
+        inner.elicit.insert(session_id.to_string(), supports);
+    }
+
+    /// Whether a session's client advertised MCP elicitation support.
+    pub fn supports_elicit(&self, session_id: &str) -> bool {
+        let inner = self.inner.lock().expect("mcp-hub mutex poisoned");
+        inner.elicit.get(session_id).copied().unwrap_or(false)
+    }
+
+    /// The session a run is associated with, if any (single-replica association).
+    pub fn session_for_run(&self, run_id: u64) -> Option<String> {
+        let inner = self.inner.lock().expect("mcp-hub mutex poisoned");
+        inner.run_to_session.get(&run_id).cloned()
+    }
+
+    /// Register a pending elicitation request id → (run id, approval id).
+    pub fn register_elicitation(&self, request_id: &str, run_id: u64, approval_id: &str) {
+        let mut inner = self.inner.lock().expect("mcp-hub mutex poisoned");
+        inner
+            .pending_elicitations
+            .insert(request_id.to_string(), (run_id, approval_id.to_string()));
+    }
+
+    /// Take (and remove) a pending elicitation by its request id, returning the
+    /// associated `(run_id, approval_id)`.
+    pub fn take_elicitation(&self, request_id: &str) -> Option<(u64, String)> {
+        let mut inner = self.inner.lock().expect("mcp-hub mutex poisoned");
+        inner.pending_elicitations.remove(request_id)
+    }
 }
 
 /// Cross-replica MCP push backend: Redis pub/sub. The run→session association and the
@@ -187,6 +247,14 @@ impl RedisMcpNotifier {
         });
         Ok(())
     }
+
+    /// The session a run is associated with (Redis-backed), if any.
+    pub async fn session_for_run(&self, run_id: u64) -> DomainResult<Option<String>> {
+        let key = format!("{MCP_RUN_KEY_PREFIX}{run_id}");
+        let mut conn = self.conn.clone();
+        let session: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await?;
+        Ok(session)
+    }
 }
 
 impl RunStatusNotifier for RedisMcpNotifier {
@@ -199,6 +267,23 @@ impl RunStatusNotifier for RedisMcpNotifier {
         };
         let channel = format!("{MCP_NOTIFY_PREFIX}{session_id}");
         let json = mcp_run_status_notification(run);
+        let _: i64 = redis::cmd("PUBLISH")
+            .arg(&channel)
+            .arg(&json)
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn notify_approval(&self, approval: &ApprovalRequest) -> DomainResult<()> {
+        let key = format!("{MCP_RUN_KEY_PREFIX}{}", approval.run_id.0);
+        let mut conn = self.conn.clone();
+        let session: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await?;
+        let Some(session_id) = session else {
+            return Ok(()); // the run has no associated MCP session
+        };
+        let channel = format!("{MCP_NOTIFY_PREFIX}{session_id}");
+        let json = mcp_approval_notification(approval);
         let _: i64 = redis::cmd("PUBLISH")
             .arg(&channel)
             .arg(&json)
@@ -237,6 +322,14 @@ impl RunStatusNotifierImpl {
         notifier.spawn_subscriber(hub).await?;
         Ok(Self::Redis(Arc::new(notifier)))
     }
+
+    /// The MCP session a run is associated with, if any (across both backends).
+    pub async fn session_for_run(&self, run_id: u64) -> Option<String> {
+        match self {
+            RunStatusNotifierImpl::Local(hub) => hub.session_for_run(run_id),
+            RunStatusNotifierImpl::Redis(n) => n.session_for_run(run_id).await.ok().flatten(),
+        }
+    }
 }
 
 impl RunStatusNotifier for RunStatusNotifierImpl {
@@ -249,11 +342,23 @@ impl RunStatusNotifier for RunStatusNotifierImpl {
             RunStatusNotifierImpl::Redis(n) => n.notify(run).await,
         }
     }
+
+    async fn notify_approval(&self, approval: &ApprovalRequest) -> DomainResult<()> {
+        match self {
+            RunStatusNotifierImpl::Local(hub) => {
+                hub.publish(approval.run_id.0, mcp_approval_notification(approval));
+                Ok(())
+            }
+            RunStatusNotifierImpl::Redis(n) => n.notify_approval(approval).await,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cat_herder_domain::entities::{ApprovalStatus, RunId};
+    use std::time::SystemTime;
 
     #[tokio::test]
     async fn associate_then_publish_reaches_subscriber() {
@@ -294,5 +399,50 @@ mod tests {
         hub.publish(2, "broadcast".to_string());
         assert_eq!(a.recv().await.unwrap(), "broadcast");
         assert_eq!(b.recv().await.unwrap(), "broadcast");
+    }
+
+    fn approval() -> ApprovalRequest {
+        ApprovalRequest {
+            id: "ap-1".into(),
+            run_id: RunId(7),
+            resume_token: "ckpt-1".into(),
+            payload: serde_json::json!({"tool": "shell", "cmd": "rm -rf /"}),
+            status: ApprovalStatus::Pending,
+            response: None,
+            created_at: SystemTime::UNIX_EPOCH,
+            responded_at: None,
+        }
+    }
+
+    #[test]
+    fn approval_notification_carries_approval_fields() {
+        let json = mcp_approval_notification(&approval());
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["method"], "notifications/run/approval");
+        assert_eq!(v["params"]["run_id"], 7);
+        assert_eq!(v["params"]["approval_id"], "ap-1");
+        assert_eq!(v["params"]["payload"]["tool"], "shell");
+    }
+
+    #[tokio::test]
+    async fn notify_approval_publishes_to_associated_session() {
+        let hub = McpHub::new();
+        hub.associate(7, "sess-1".to_string());
+        let mut rx = hub.subscribe("sess-1");
+        let notifier = RunStatusNotifierImpl::Local(hub);
+        notifier.notify_approval(&approval()).await.unwrap();
+        let msg = rx.recv().await.unwrap();
+        assert!(msg.contains("notifications/run/approval"));
+    }
+
+    #[tokio::test]
+    async fn elicit_registry_roundtrip() {
+        let hub = McpHub::new();
+        assert!(!hub.supports_elicit("s"));
+        hub.set_elicit("s", true);
+        assert!(hub.supports_elicit("s"));
+        hub.register_elicitation("req-1", 7, "ap-1");
+        assert_eq!(hub.take_elicitation("req-1"), Some((7, "ap-1".to_string())));
+        assert_eq!(hub.take_elicitation("req-1"), None);
     }
 }

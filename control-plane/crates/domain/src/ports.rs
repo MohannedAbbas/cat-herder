@@ -232,6 +232,14 @@ pub trait EventBus {
 /// [`EventBus`]).
 pub trait RunStatusNotifier {
     async fn notify(&self, run: &Run) -> DomainResult<()>;
+
+    /// Push a pending human-in-the-loop approval request to the run's trigger session
+    /// (MCP), so the triggerer can approve/reject it. Fire-and-forget like [`Self::notify`];
+    /// the durable authority is the [`ApprovalRequest`] repository. Defaults to a no-op so
+    /// notifiers that don't surface approvals need not implement it.
+    async fn notify_approval(&self, _approval: &ApprovalRequest) -> DomainResult<()> {
+        Ok(())
+    }
 }
 
 /// Lease primitive for the sharded, lease-based reconciler (`PLAN.md` §6).
