@@ -50,8 +50,7 @@ pub trait TriggerSource {
 pub trait AgentRuntime {
     /// Spawn the execution for `run`. `git_token` is an already-minted credential the
     /// runtime injects into the pod (out-of-band, e.g. `GIT_TOKEN` → git askpass);
-    /// `None` means no broker-minted credential is available (the runtime may fall back
-    /// to a registered repo token, or none for public repos).
+    /// `None` means no broker-minted credential is available (public repo or no broker).
     async fn spawn(&self, run: &Run, git_token: Option<&str>) -> DomainResult<()>;
     /// Report the execution's current status (`None` = gone).
     async fn status(&self, id: RunId) -> DomainResult<Option<RuntimeStatus>>;

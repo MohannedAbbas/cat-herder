@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cat_herder_api_http::{
-    AesGcmCipher, AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
+    AgentRepo, AppState, ApprovalRepo, AuditRepo, Auth, BrokerImpl,
     BudgetCounterImpl, BudgetRepo, CheckpointRepo, ControlLinks, CredentialGrantRepo, DedupRepo,
     EventBusImpl, EventRepo, GIT_HOSTS_SETTING, GitHubOAuth, GitLabOAuth, GitRepoRepo,
-    KeySecretStore, ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, ReviewRepo,
+    ModelRepo, OAuthConfig, POLICY_SETTING, PrClient, ProviderRepo, ReviewRepo,
     RunRepo, SessionRepo, SettingRepo, ToolRepo, TransitionRepo, WorkflowRepo, grpc_serve, router,
 };
 use cat_herder_application::reconcile_shards;
@@ -21,7 +21,7 @@ use cat_herder_credentials_github::{GitHubApp, GitHubAppConfig};
 use cat_herder_domain::api::default_git_hosts;
 use cat_herder_domain::policy::Policy;
 use cat_herder_domain::ports::{
-    AgentRepository, DomainResult, GitRepoRepository, LeaseManager, ProviderRepository,
+    AgentRepository, DomainResult, LeaseManager, ProviderRepository,
     SettingRepository, WorkflowRepository,
 };
 use cat_herder_runtime_agent_sandbox::SandboxRuntime;
@@ -43,7 +43,6 @@ use cat_herder_store_postgres::{
     PostgresTransitionRepository, PostgresWorkflowRepository,
 };
 use cat_herder_store_redis::{RedisBudgetCounter, RedisDedupRepository};
-use tokio::sync::RwLock;
 
 /// Per-agent model overrides from `CAT_HERDER_AGENT_MODELS` (a JSON `{id: model}`
 /// map injected by the chart from `agents.models`).
@@ -109,30 +108,6 @@ impl LeaseManager for LeaseManagerImpl {
     }
 }
 
-/// Decrypt each enabled repo's token and push a `repo id → token` map into the
-/// runtime. Tokens for disabled repos (or ones that fail to decrypt) are dropped, so
-/// a token is only ever made available for the repo it was registered against.
-async fn refresh_git_tokens(
-    runtime: &SandboxRuntime,
-    repos: &GitRepoRepo,
-    cipher: &Arc<RwLock<AesGcmCipher>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cipher = cipher.read().await;
-    let mut map = HashMap::new();
-    for repo in repos.list().await? {
-        if !repo.enabled {
-            continue;
-        }
-        if let Some(ct) = &repo.token_ciphertext
-            && let Ok(token) = cipher.decrypt(ct)
-        {
-            map.insert(repo.id, token);
-        }
-    }
-    runtime.update_git_tokens(map).await;
-    Ok(())
-}
-
 /// Resolve every workflow's steps into `(agent type, model)` pairs and push them to
 /// the runtime, so a `workflow` run's pod gets its `WORKFLOW_STEPS` (§7). Steps whose
 /// agent type isn't in the catalog resolve to an empty model (the harness then skips
@@ -195,7 +170,7 @@ fn github_app_config() -> Option<GitHubAppConfig> {
 /// Build the in-process (local) JIT credential broker (`PLAN.md` §11.3) — the fallback
 /// when no remote broker endpoint is configured. With a GitHub App configured it mints
 /// short-lived installation tokens on demand; otherwise its issuer map is empty and
-/// `mint` fails gracefully (the runtime falls back to a registered repo token).
+/// `mint` fails gracefully (the run proceeds without a clone credential).
 fn build_local_broker(
     grants: CredentialGrantRepo,
     events: EventRepo,
@@ -512,28 +487,6 @@ async fn main() {
         None => LeaseManagerImpl::InMemory(InMemoryLeaseManager::new(lease_ttl)),
     };
 
-    // Encryption key for git tokens — read from (or generated into) a Kubernetes
-    // Secret, so it's separated from the ciphertext and managed under k8s RBAC.
-    // Required: fail loudly if the key store is unavailable.
-    let secret_name = std::env::var("CAT_HERDER_ENCRYPTION_SECRET")
-        .unwrap_or_else(|_| "cat-herder-encryption".into());
-    let secret_key =
-        std::env::var("CAT_HERDER_ENCRYPTION_SECRET_KEY").unwrap_or_else(|_| "key".into());
-    let key_store = Arc::new(
-        KeySecretStore::connect(&namespace, &secret_name, &secret_key)
-            .await
-            .expect("failed to connect to the encryption-key Secret"),
-    );
-    let cipher = {
-        let key = key_store
-            .load_or_create()
-            .await
-            .expect("failed to initialize the encryption key");
-        Arc::new(RwLock::new(
-            AesGcmCipher::from_base64_key(&key).expect("generated encryption key is invalid"),
-        ))
-    };
-
     // Load providers into the runtime so it can resolve each provider's API key from
     // its Secret at spawn time, and keep the mapping fresh (admin edits).
     if let Some(rt) = runtime.clone() {
@@ -546,24 +499,6 @@ async fn main() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 if let Ok(list) = providers.list().await {
                     rt.update_providers(&list).await;
-                }
-            }
-        });
-    }
-
-    // Resolve repo-scoped git tokens (decrypt + map URL → token) into the runtime,
-    // refreshed so admin edits take effect without a restart.
-    if let Some(rt) = runtime.clone() {
-        let git_repos = repos.git_repos.clone();
-        let cipher = cipher.clone();
-        if let Err(e) = refresh_git_tokens(&rt, &git_repos, &cipher).await {
-            eprintln!("git token refresh error: {e}");
-        }
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                if let Err(e) = refresh_git_tokens(&rt, &git_repos, &cipher).await {
-                    eprintln!("git token refresh error: {e}");
                 }
             }
         });
@@ -790,8 +725,6 @@ async fn main() {
         run_logs: cat_herder_api_http::RunLogs::new(),
         mcp_hub,
         run_status_notifier,
-        cipher,
-        key_store: Some(key_store),
         pr_client: Arc::new(PrClient::from_env()),
     };
 

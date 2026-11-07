@@ -1,20 +1,20 @@
 ---
 type: Concept
 title: GitRepo
-description: A registered git repository with canonical host/path identity, encrypted read and write tokens, and per-run token scoping.
-tags: [git, credentials, security, identity, encryption]
+description: A registered git repository with a canonical host/path identity; clone and PR credentials are minted at run time by the credential broker.
+tags: [git, credentials, identity]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
 sources:
   - { id: api, resource: /control-plane/crates/domain/src/api.rs, title: api.rs (RepoIdentity, GitRepo) }
   - { id: entities, resource: /control-plane/crates/domain/src/entities.rs, title: GitRepo entity }
   - { id: admin, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: admin.rs (upsert_repo) }
-  - { id: bin, resource: /control-plane/crates/bin/cat-herder/src/main.rs, title: refresh_git_tokens }
 ---
 
 # GitRepo
 
 A repository an agent can clone, registered by an admin under `/v1/admin/repos`.
+The list is a convenience picker — access credentials are **not** stored here.
 
 ## Identity — host + path
 
@@ -30,38 +30,32 @@ A repository an agent can clone, registered by an admin under `/v1/admin/repos`.
 - `repo_identity_from_url` parses HTTPS, short SSH (`git@host:path`), and
   `ssh://git@host/path`, so HTTPS/SSH/`.git` spellings collapse to one identity.
 
-The runtime rewrites SSH/`.git` URLs to canonical HTTPS so the HTTPS PAT applies.
+The runtime rewrites SSH/`.git` URLs to canonical HTTPS so the broker-minted
+installation token (which only authenticates over HTTPS) applies.
 
-## Two tokens, both encrypted
+## Credentials are minted, not stored
 
-The entity ([entities.rs](/crates/domain.md)) stores **ciphertext only**:
+The entity ([entities.rs](/crates/domain.md)) stores only the identity:
 
-- `token_ciphertext` — **read** token, used to clone (injected into the sandbox as
-  `GIT_TOKEN`, via a git askpass helper so it never appears in argv/logs).
-- `write_token_ciphertext` — **write** token, used **only by the control plane** to open
-  PRs/MRs ([PR creation](/concepts/pr-creation.md)); never sent to the sandbox.
+- `id` (`{host}/{path}`), `name`, `url`, `enabled`.
 
-The API read model (`GitRepo` in api.rs) never returns tokens — only
-`has_token` / `has_write_token` booleans. `upsert_repo` encrypts non-empty submitted
-values with the [AES-256-GCM cipher](/concepts/encryption.md); omitting a field keeps the
-existing ciphertext.
+There are no token columns. Clone and PR credentials are minted on demand by the
+JIT credential broker ([§11.3](/concepts/catalog.md)):
 
-## Per-run scoping (read token)
+- **Clone**: `mint_clone_token` mints a short-lived, read-only installation token for
+  the run's repo, injected into the sandbox as `GIT_TOKEN` (via a git askpass helper
+  so it never appears in argv/logs).
+- **Push/PR**: the control plane mints a write credential to open the PR/MR
+  ([PR creation](/concepts/pr-creation.md)); never sent to the sandbox.
 
-On boot and every 30s, the [binary](/crates/bin-cat-herder.md) `refresh_git_tokens`
-decrypts each **enabled** repo's read token into a `repo id → token` map in the runtime
-([Sandbox](/concepts/sandbox.md)). At spawn, the runtime normalizes the run's `repo` to
-its identity and injects `GIT_TOKEN` only if that id matches — so a token is never
-broadened to a different repo, and disabled repos' tokens are dropped.
+For GitHub, the broker resolves the App's installation for the repo and mints an
+installation token.
 
 ## Storage
 
-Table `git_repos` (migration `0012`): `id` (PK = identity), `name`, `url`,
-`token_ciphertext`, `write_token_ciphertext` (added `0015`), `enabled`. Migration `0014`
-tried raw `write_token_secret`/`write_token_key` columns; `0015` dropped them in favor of
-encryption.
+Table `git_repos` (migration `0012`): `id` (PK = identity), `name`, `url`, `enabled`.
+Earlier token columns were removed by migration `0033`.
 
 ## Related
 
-- [Encryption key management](/concepts/encryption.md) · [PR/MR creation](/concepts/pr-creation.md)
-- [Agent harness](/harness/agent-harness.md) (clone + askpass)
+- [PR/MR creation](/concepts/pr-creation.md) · [Agent harness](/harness/agent-harness.md) (clone + askpass)

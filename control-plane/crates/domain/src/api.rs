@@ -105,8 +105,7 @@ pub struct Tool {
     pub description: String,
 }
 
-/// A git repository as exposed by the admin API. The tokens are never returned;
-/// `has_token`/`has_write_token` report whether each is stored (encrypted) server-side.
+/// A git repository as exposed by the admin API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepo {
@@ -115,8 +114,6 @@ pub struct GitRepo {
     pub host: String,
     pub url: String,
     pub enabled: bool,
-    pub has_token: bool,
-    pub has_write_token: bool,
 }
 
 impl From<&crate::entities::GitRepo> for GitRepo {
@@ -133,8 +130,6 @@ impl From<&crate::entities::GitRepo> for GitRepo {
             host,
             url: repo.url.clone(),
             enabled: repo.enabled,
-            has_token: repo.token_ciphertext.is_some(),
-            has_write_token: repo.write_token_ciphertext.is_some(),
         }
     }
 }

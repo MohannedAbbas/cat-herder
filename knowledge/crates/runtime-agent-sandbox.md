@@ -1,7 +1,7 @@
 ---
 type: Module
 title: runtime-agent-sandbox adapter
-description: Implements AgentRuntime by creating/reading/deleting agent-sandbox Sandbox resources via kube-rs, and resolving per-run provider keys and repo tokens.
+description: Implements AgentRuntime by creating/reading/deleting agent-sandbox Sandbox resources via kube-rs, and resolving per-run provider keys.
 tags: [rust, kubernetes, kube-rs, adapter, runtime, sandbox]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
@@ -20,9 +20,8 @@ project has no first-class Rust SDK).
 ## `SandboxRuntime`
 
 Fields: a dynamic `Api<DynamicObject>` for `sandboxes`, an `Api<Secret>` for provider
-keys, `namespace`, `harness_image`, and two `Arc<RwLock<HashMap>>` maps —
-`provider_secrets` (provider id → (Secret name, key)) and `git_tokens` (repo id →
-decrypted token).
+keys, `namespace`, `harness_image`, and an `Arc<RwLock<HashMap>>` map —
+`provider_secrets` (provider id → (Secret name, key)).
 
 Constructors: `new(namespace, harness_image)` (uses the default kube client) and
 `new_with_client(...)` (injectable/testable).
@@ -31,9 +30,7 @@ Constructors: `new(namespace, harness_image)` (uses the default kube client) and
 
 - `update_providers(&[Provider])` — rebuilds the enabled provider → Secret map (called on
   startup and every 30s by the [binary](/crates/bin-cat-herder.md)).
-- `update_git_tokens(HashMap)` — installs the repo-id → token map (refreshed every 30s).
 - `resolve_api_key(run)` — splits `MODEL` on `:` to find the provider, reads its Secret.
-- `resolve_git_token(run)` — normalizes `run.repo` to identity, looks it up.
 
 ## `AgentRuntime` impl
 

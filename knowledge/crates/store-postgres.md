@@ -28,8 +28,8 @@ edits survive restarts. Each repository is built from the shared store (one pool
 
 `run.rs`, `agent.rs`, `session.rs`, `provider.rs`, `model.rs`, `tool.rs`, `git_repo.rs`,
 `audit.rs`, `setting.rs` — each implements its `domain::ports` trait (`Postgres*Repository::new(&store)`).
-`git_repo.rs` persists `token_ciphertext` / `write_token_ciphertext` and never touches
-plaintext (see [GitRepo](/concepts/git-repo.md)).
+`git_repo.rs` persists only the repo identity (id/name/url/enabled); credentials are
+minted at run time (see [GitRepo](/concepts/git-repo.md)).
 
 ## `codec.rs`
 
@@ -54,7 +54,7 @@ DB values match the API's `snake_case`/`lowercase` (e.g. `decode_state` falls ba
 | 0011 | `settings` (key/value) |
 | 0012 | `git_repos` |
 | 0013 | `runs.pr_url` |
-| 0014 → 0015 | write-token columns: raw `write_token_secret`/`_key` **dropped** in favor of `write_token_ciphertext` |
+| 0033 | `git_repos` drops `token_ciphertext` / `write_token_ciphertext` |
 
 Timestamps on `runs`/`sessions` are unix-millis `BIGINT` (sessions use ISO text).
 
@@ -65,5 +65,5 @@ DB-backed integration tests run in CI (`test-postgres` job) with
 
 ## Related
 
-- [store-inmemory](/crates/store-inmemory.md) · [domain](/crates/domain.md) · [Encryption](/concepts/encryption.md)
+- [store-inmemory](/crates/store-inmemory.md) · [domain](/crates/domain.md)
 - [Build and test](/operations/build-and-test.md)

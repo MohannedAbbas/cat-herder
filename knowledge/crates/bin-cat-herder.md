@@ -1,7 +1,7 @@
 ---
 type: Module
 title: cat-herder binary (composition root)
-description: Wires adapters into the router, initializes encryption, OAuth, and Postgres, and runs background loops; binds :8080.
+description: Wires adapters into the router, initializes OAuth and Postgres, and runs background loops; binds :8080.
 tags: [rust, binary, composition-root, entrypoint, reconciler]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
@@ -25,21 +25,11 @@ the Axum router on `0.0.0.0:8080`.
    30×1s, else in-memory. Per-agent model overrides come from
    `CAT_HERDER_AGENT_MODELS` (JSON map).
 4. Seed `git_hosts` into settings if absent (github/gitlab/codeberg dropdown).
-5. Initialize the [encryption](/concepts/encryption.md) key store + cipher
-   (`CAT_HERDER_ENCRYPTION_SECRET` / `_KEY`; **fail-closed**: `expect` if unavailable).
-6. If a runtime exists, load providers into it and spawn a 30s refresh loop; also
-   `refresh_git_tokens` (decrypt enabled repos' read tokens into the runtime) with a 30s
-   loop.
-7. Spawn the **reconciler** loop (every 10s → `reconcile_once`).
-8. Build `Auth` from `CAT_HERDER_ADMIN_USER`/`_PASSWORD` (default `admin`/`admin`), and
+5. If a runtime exists, load providers into it and spawn a 30s refresh loop.
+6. Spawn the **reconciler** loop (every 10s → `reconcile_once`).
+7. Build `Auth` from `CAT_HERDER_ADMIN_USER`/`_PASSWORD` (default `admin`/`admin`), and
    optional GitHub/GitLab OAuth clients from `*_OAUTH_*` env.
-9. Assemble `AppState`, `router(state)`, bind and serve.
-
-## `refresh_git_tokens`
-
-Decrypts each **enabled** repo's `token_ciphertext` and pushes a `repo id → token` map
-into the runtime; disabled or undecryptable repos are dropped. See
-[GitRepo](/concepts/git-repo.md).
+8. Assemble `AppState`, `router(state)`, bind and serve.
 
 ## Image
 

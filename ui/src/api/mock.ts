@@ -626,8 +626,6 @@ export const mockApi: CatHerderApi = {
       host,
       url: `https://${host}/${path}`,
       enabled: write.enabled,
-      hasToken: Boolean(write.token) || (i >= 0 && repos[i]?.hasToken === true),
-      hasWriteToken: Boolean(write.writeToken) || (i >= 0 && repos[i]?.hasWriteToken === true),
     }
     if (i >= 0) repos[i] = saved
     else repos.push(saved)
@@ -646,9 +644,5 @@ export const mockApi: CatHerderApi = {
     webhookSecret = crypto.randomUUID()
     recordAudit('webhook-secret.regenerate', 'settings', 'webhook_secret')
     return delay({ secret: webhookSecret })
-  },
-  rotateEncryptionKey: () => {
-    recordAudit('encryption-key.rotate', 'settings', 'encryption_key')
-    return delay(undefined)
   },
 }

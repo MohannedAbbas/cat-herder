@@ -1018,19 +1018,13 @@ mod tests {
             id: "cat-herder".into(),
             name: "Cat Herder".into(),
             url: "https://github.com/org/cat-herder.git".into(),
-            token_ciphertext: Some("v1:abc".into()),
-            write_token_ciphertext: None,
             enabled: true,
         };
         repo.save(&r).await.unwrap();
         assert_eq!(repo.list().await.unwrap().len(), 1);
-        assert!(
-            repo.get("cat-herder")
-                .await
-                .unwrap()
-                .unwrap()
-                .token_ciphertext
-                .is_some()
+        assert_eq!(
+            repo.get("cat-herder").await.unwrap().unwrap().url,
+            "https://github.com/org/cat-herder.git"
         );
         repo.delete("cat-herder").await.unwrap();
         assert!(repo.get("cat-herder").await.unwrap().is_none());

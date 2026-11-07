@@ -29,9 +29,8 @@ to look up which Secret holds that provider's API key, and the
 `Provider { id, name, base_url, api_key_secret, api_key_secret_key, enabled }`. The API
 key is **referenced** (Secret name + key), never stored or returned. Defaults
 (`default_providers`): `deepseek`, `openai`, `anthropic`, each pointing at Secret
-`cat-herder-<id>` key `api-key`. See [gotchas](/operations/gotchas.md) and
-[encryption](/concepts/encryption.md). At spawn the runtime
-(`update_providers`, refreshed every 30s) reads the enabled provider's Secret.
+`cat-herder-<id>` key `api-key`. See [gotchas](/operations/gotchas.md). At spawn the
+runtime (`update_providers`, refreshed every 30s) reads the enabled provider's Secret.
 
 ## Models
 

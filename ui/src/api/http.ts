@@ -129,8 +129,5 @@ export const httpApi: CatHerderApi = {
   regenerateWebhookSecret: () =>
     request<{ secret: string }>('/v1/admin/settings/webhook-secret', { method: 'POST' }),
 
-  rotateEncryptionKey: () =>
-    request('/v1/admin/settings/encryption-key/rotate', { method: 'POST' }).then(() => undefined),
-
   listAudit: () => request<AuditEntry[]>('/v1/admin/audit'),
 }

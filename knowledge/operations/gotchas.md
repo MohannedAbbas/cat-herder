@@ -19,7 +19,7 @@ sources:
 The chart was changed to stop creating the (formerly chart-owned) namespace. If it owned
 it, `helm uninstall` — e.g. Tilt's force-update on file change — would delete the
 namespace and cascade-delete the Postgres PVC and every Secret (admin creds, OAuth,
-provider keys, encryption key). Always install with `--create-namespace` (Tilt already
+provider keys). Always install with `--create-namespace` (Tilt already
 passes it) and let the namespace outlive `helm uninstall`.
 
 ## Sandbox ephemeral-storage budget
@@ -51,13 +51,6 @@ The [egress policy](/concepts/egress-policy.md) allow-lists git hosts and the LL
 resolved IP CIDR (NetworkPolicy can't match DNS). Changing provider/git host requires
 editing `agentSandbox.networkPolicy.{gitHosts,llm}.cidrs` and re-deploying, or the agent
 can't reach it.
-
-## Encryption key Secret is critical
-
-The [encryption Secret](/concepts/encryption.md) (`cat-herder-encryption`) holds the
-AES-256-GCM key. Deleting it makes all stored git tokens undecryptable (re-enter them).
-Boot is fail-closed: the control plane `expect`s the key store and will not start without
-it. RBAC is scoped to this one Secret name via `resourceNames`.
 
 ## Sessions & auth are in-memory
 

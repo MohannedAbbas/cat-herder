@@ -12,8 +12,6 @@ const emptyForm = {
   host: 'github.com',
   repo: '',
   enabled: true,
-  token: '',
-  writeToken: '',
 }
 
 export default function AdminReposPage() {
@@ -44,27 +42,6 @@ export default function AdminReposPage() {
     mutationFn: (id: string) => api.deleteRepo(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['repos'] }),
   })
-  const rotate = useMutation({
-    mutationFn: () => api.rotateEncryptionKey(),
-    onSuccess: () => {
-      setMessage('Encryption key rotated.')
-      setErrorMsg(null)
-    },
-    onError: (err: Error) => {
-      setMessage(null)
-      setErrorMsg(err.message)
-    },
-  })
-
-  function onRotate() {
-    if (
-      window.confirm(
-        'Rotate the encryption key? All stored git tokens will be re-encrypted under a new key.',
-      )
-    ) {
-      rotate.mutate()
-    }
-  }
 
   function startNew() {
     setEditingId('__new__')
@@ -79,8 +56,6 @@ export default function AdminReposPage() {
       host: r.host,
       repo: r.name,
       enabled: r.enabled,
-      token: '',
-      writeToken: '',
     })
     setMessage(null)
     setErrorMsg(null)
@@ -92,8 +67,6 @@ export default function AdminReposPage() {
       host: form.host,
       repo: form.repo.trim(),
       enabled: form.enabled,
-      ...(form.token ? { token: form.token } : {}),
-      ...(form.writeToken ? { writeToken: form.writeToken } : {}),
     }
     save.mutate(payload)
   }
@@ -102,7 +75,7 @@ export default function AdminReposPage() {
     <div>
       <PageHeader
         title="Admin · Repos"
-        subtitle="Git repositories agents can clone, with per-repo access tokens (encrypted at rest)."
+        subtitle="Git repositories agents can clone. Credentials are minted at run time by the GitHub App broker."
       />
       <div className="mb-4 flex items-center gap-3">
         <button
@@ -110,13 +83,6 @@ export default function AdminReposPage() {
           className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
         >
           New repo
-        </button>
-        <button
-          onClick={onRotate}
-          disabled={rotate.isPending}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-        >
-          {rotate.isPending ? 'Rotating…' : 'Rotate encryption key'}
         </button>
       </div>
 
@@ -133,7 +99,6 @@ export default function AdminReposPage() {
               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3">Repo</th>
-                  <th className="px-4 py-3">Token</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -146,12 +111,9 @@ export default function AdminReposPage() {
                           {r.host}
                         </span>
                         {r.name}
+                        {!r.enabled && <span className="ml-2 text-xs text-slate-400">(disabled)</span>}
                       </div>
                       <div className="font-mono text-xs text-slate-400">{r.url}</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {r.hasToken ? '••••••••' : '—'}
-                      {!r.enabled && <span className="ml-2 text-xs text-slate-400">(disabled)</span>}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button onClick={() => startEdit(r)} className="text-sm text-slate-600 hover:underline">
@@ -196,32 +158,6 @@ export default function AdminReposPage() {
                   <span className="mt-1 block text-xs text-slate-400">
                     e.g. <code className="font-mono">octocat/hello-world</code> — the URL and
                     identifier are derived for you.
-                  </span>
-                </Field>
-                <Field label="Access token">
-                  <input
-                    type="password"
-                    value={form.token}
-                    onChange={(e) => setForm({ ...form, token: e.target.value })}
-                    placeholder={editingId === '__new__' ? 'ghp_…' : 'Leave blank to keep existing token'}
-                    className={inputCls}
-                  />
-                  <span className="mt-1 block text-xs text-slate-400">
-                    Read token (for cloning). Encrypted at rest with the control plane's
-                    encryption key. Never returned by the API.
-                  </span>
-                </Field>
-                <Field label="Write token">
-                  <input
-                    type="password"
-                    value={form.writeToken}
-                    onChange={(e) => setForm({ ...form, writeToken: e.target.value })}
-                    placeholder={editingId === '__new__' ? 'ghp_…' : 'Leave blank to keep existing token'}
-                    className={inputCls}
-                  />
-                  <span className="mt-1 block text-xs text-slate-400">
-                    Used to open PRs/MRs from the agent's output. Encrypted at rest like the
-                    read token. Never returned by the API.
                   </span>
                 </Field>
                 <label className="flex items-center gap-2 text-sm text-slate-700">

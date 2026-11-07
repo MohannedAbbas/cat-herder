@@ -1,7 +1,7 @@
 ---
 type: Module
 title: api-http adapter
-description: The Axum HTTP adapter — REST, MCP, webhook, auth, OAuth, admin, token encryption, and the host-aware PR client.
+description: The Axum HTTP adapter — REST, MCP, webhook, auth, OAuth, admin, and the host-aware PR client.
 tags: [rust, axum, rest, http, adapter, auth, oauth, admin, mcp]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
@@ -10,7 +10,6 @@ sources:
   - { id: admin, resource: /control-plane/crates/adapters/api-http/src/admin.rs, title: admin.rs }
   - { id: auth, resource: /control-plane/crates/adapters/api-http/src/auth.rs, title: auth.rs }
   - { id: oauth, resource: /control-plane/crates/adapters/api-http/src/oauth.rs, title: oauth.rs }
-  - { id: crypto, resource: /control-plane/crates/adapters/api-http/src/crypto.rs, title: crypto.rs }
   - { id: repo, resource: /control-plane/crates/adapters/api-http/src/repo.rs, title: repo.rs }
   - { id: mcp, resource: /control-plane/crates/adapters/api-http/src/mcp.rs, title: mcp.rs }
   - { id: webhook, resource: /control-plane/crates/adapters/api-http/src/webhook.rs, title: webhook.rs }
@@ -20,15 +19,14 @@ sources:
 # `cat-herder-api-http` (`control-plane/crates/adapters/api-http`)
 
 Serves the REST API (default `:8080`) and hosts the composition-time repository
-selectors, the cryptography, and the PR client. `lib.rs` defines `AppState` and `router`.
+selectors and the PR client. `lib.rs` defines `AppState` and `router`.
 
 ## `AppState`
 
 Holds repository selectors (`agents, providers, models, tools, git_repos, sessions, repo,
 audit, settings`), `auth`, optional `github_oauth`/`gitlab_oauth`, optional `runtime`
-(`SandboxRuntime`), the `cipher` (for git tokens), optional `key_store`, and the
-`pr_client`. `AppState::default()` builds an all in-memory instance (used by tests and as
-the mock).
+(`SandboxRuntime`), the `broker` (JIT credential broker), and the `pr_client`.
+`AppState::default()` builds an all in-memory instance (used by tests and as the mock).
 
 ## Routes (`router`)
 
@@ -48,7 +46,6 @@ the mock).
 | `GET|PUT|DELETE /v1/admin/{providers,models,tools}` | catalog CRUD |
 | `GET|PUT|DELETE /v1/admin/repos`, `GET /v1/admin/git-hosts` | repos + host dropdown |
 | `GET|POST /v1/admin/settings/webhook-secret` | view/regenerate webhook secret |
-| `POST /v1/admin/settings/encryption-key/rotate` | key rotation ([encryption](/concepts/encryption.md)) |
 | `GET /v1/admin/audit` | audit log |
 
 All `/v1/admin/*` handlers call `require_admin` (valid `session` cookie) and write an
@@ -60,15 +57,12 @@ audit entry (best-effort).
   `maybe_open_pr`, `webhook_generic` (constant-time secret compare), `mcp_handler`,
   sessions/agents handlers, `aggregate_status` (most-active state wins).
 - **`admin.rs`** — login/logout/me, OAuth login+callback (CSRF state cookie), all admin
-  CRUD, `upsert_repo` (encrypts tokens), `rotate_encryption_key`, webhook-secret
-  management, `require_admin`/`audit`.
+  CRUD, `upsert_repo`, webhook-secret management, `require_admin`/`audit`.
 - **`auth.rs`** — `Auth`: seeded admin (bcrypt hash), in-memory session tokens with 24h
   TTL; `create_session` also used by SSO.
 - **`oauth.rs`** — `OAuthProvider` descriptors (GITHUB/GITLAB), `OAuthConfig::from_env*`,
   `OAuthClient` (exchange/fetch/authenticate + allow-list), `GitHubOAuth`/`GitLabOAuth`
   newtypes. See [SSO](/concepts/sso.md).
-- **`crypto.rs`** — `AesGcmCipher` (AES-256-GCM, `v1:` format). See [encryption](/concepts/encryption.md).
-- **`key_store.rs`** — `KeySecretStore` (server-side apply to the encryption Secret).
 - **`pr.rs`** — `PrClient`, `PrSpec`, `FileChange`; host-dispatched PR/MR creation. See
   [PR/MR creation](/concepts/pr-creation.md).
 - **`repo.rs`** — enum selectors `RunRepo`, `AgentRepo`, `ProviderRepo`, `ModelRepo`,
@@ -88,7 +82,7 @@ no runtime is configured (the default/test `AppState`).
 
 `tests/api.rs` uses `tower::ServiceExt::oneshot` against the router with
 `AppState::default()`, covering health, sessions/agents, runs, events, webhook auth, MCP,
-admin auth + audit, OAuth redirects, and encryption-dependent admin flows.
+admin auth + audit, and OAuth redirects.
 
 ## Related
 

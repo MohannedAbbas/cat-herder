@@ -128,26 +128,22 @@ export interface GitHost {
   label: string
 }
 
-/** A git repository an agent can clone. The tokens are never returned; `hasToken` /
- * `hasWriteToken` report whether each is stored (encrypted) server-side. */
+/** A git repository an agent can clone. Credentials are minted at run time by the
+ * credential broker (GitHub App) — nothing is stored here. */
 export interface GitRepo {
   id: string
   name: string
   host: string
   url: string
   enabled: boolean
-  hasToken: boolean
-  hasWriteToken: boolean
 }
 
 /** Write model for a git repo. `host` + `repo` (path) are required; the canonical
- * id/name/url are derived server-side. Both tokens are write-only. */
+ * id/name/url are derived server-side. */
 export interface GitRepoWrite {
   host: string
   repo: string
   enabled: boolean
-  token?: string
-  writeToken?: string
 }
 
 /** A changed file in a run's workspace diff (`GET /v1/runs/{id}/diff`). */

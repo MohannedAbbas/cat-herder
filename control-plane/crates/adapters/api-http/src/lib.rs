@@ -16,7 +16,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::broadcast;
 
 use cat_herder_application::{
     Completion, Outcome, complete_run, decide_review, issue_budget, request_review,
@@ -37,7 +37,7 @@ use cat_herder_domain::policy::{AccessRequest, Decision, Policy, Role, authorize
 use cat_herder_domain::ports::{
     AgentRepository, AgentRuntime, ApprovalRepository, BudgetRepository, CheckpointRepository,
     CredentialBroker, CredentialGrantRepository, DedupRepository, EventBus, EventRepository,
-    GitRepoRepository, MintedCredential, ReviewRepository, RunRepository, RunRequest,
+    MintedCredential, ReviewRepository, RunRepository, RunRequest,
     SessionRepository, SettingRepository, WorkflowRepository,
 };
 use cat_herder_domain::redact::redact;
@@ -49,9 +49,7 @@ use cat_herder_store_inmemory::{
 pub use auth::Auth;
 pub use budget::{BudgetCounterImpl, BudgetRepo, budget_server, raise_budget_for_run};
 pub use bus::EventBusImpl;
-pub use crypto::AesGcmCipher;
 pub use grpc::{ControlLinks, grpc_serve, grpc_server};
-pub use key_store::KeySecretStore;
 pub use logs::{RunLogLine, RunLogs};
 pub use mcp_hub::{McpHub, RunStatusNotifierImpl, mcp_run_status_notification};
 pub use oauth::{GITHUB, GITLAB, GitHubOAuth, GitLabOAuth, OAuthConfig, RoleMapping};
@@ -71,10 +69,8 @@ mod admin;
 mod auth;
 mod budget;
 mod bus;
-mod crypto;
 mod delivery;
 mod grpc;
-mod key_store;
 mod logs;
 mod mcp;
 mod mcp_hub;
@@ -161,8 +157,7 @@ pub struct AppState {
     pub grants: CredentialGrantRepo,
     /// The JIT credential broker (`PLAN.md` §11.3). Remote (gRPC) when a broker endpoint
     /// is configured; otherwise the in-process service with an empty issuer map (whose
-    /// `mint` fails gracefully and the runtime falls back to a registered repo token or
-    /// none).
+    /// `mint` fails gracefully and the run proceeds without a clone credential).
     pub broker: BrokerImpl,
     /// Durable per-run budget caps (`PLAN.md` §12).
     pub budgets: BudgetRepo,
@@ -197,13 +192,8 @@ pub struct AppState {
     /// The run-status notifier (MCP push): local in single-replica/dev, Redis pub/sub
     /// in multi-replica.
     pub run_status_notifier: RunStatusNotifierImpl,
-    /// Encryption cipher for git tokens (always present; key lives in a Secret and is
-    /// rotated via the admin API).
-    pub cipher: Arc<RwLock<AesGcmCipher>>,
-    /// Secret-backed encryption-key store (present in the real binary; absent in tests).
-    pub key_store: Option<Arc<KeySecretStore>>,
-    /// Host-aware PR/MR client (stateless; the write token is read per-run from the
-    /// repo's referenced Secret). Opens a PR from the agent's diff when a run finishes.
+    /// Host-aware PR/MR client (stateless; the write credential is minted per-run via
+    /// the broker). Opens a PR from the agent's diff when a run finishes.
     pub pr_client: Arc<PrClient>,
 }
 
@@ -258,10 +248,6 @@ impl Default for AppState {
             run_logs: RunLogs::new(),
             mcp_hub: mcp_hub.clone(),
             run_status_notifier: RunStatusNotifierImpl::Local(mcp_hub),
-            cipher: Arc::new(RwLock::new(
-                AesGcmCipher::generate().expect("rng available"),
-            )),
-            key_store: None,
             pr_client: Arc::new(PrClient::from_env()),
         }
     }
@@ -336,10 +322,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/admin/settings/webhook-secret",
             get(admin::get_webhook_secret).post(admin::regenerate_webhook_secret),
-        )
-        .route(
-            "/v1/admin/settings/encryption-key/rotate",
-            post(admin::rotate_encryption_key),
         )
         .route("/v1/admin/audit", get(admin::list_audit))
         .route("/v1/admin/usage", get(admin::usage_rollup))
@@ -1381,8 +1363,9 @@ async fn post_run_event(
     Ok(Json(run))
 }
 
-/// Open a PR/MR from the agent's diff, if the repo has a write token and changes
-/// exist. The write token is decrypted here (control-plane only, never the sandbox).
+/// Open a PR/MR from the agent's diff, if there are changes and the broker can mint a
+/// short-lived write credential for the run's repo. The credential is minted on demand
+/// here (control-plane only, never the sandbox).
 async fn maybe_open_pr(
     state: &AppState,
     run: &Run,
@@ -1397,28 +1380,18 @@ async fn maybe_open_pr(
         return;
     };
 
-    // Resolve the repo identity and its encrypted write token.
+    // Resolve the repo identity and mint a write credential via the broker.
     let Some(identity) = repo_identity_from_url(repo_url) else {
         return;
     };
-    let repo_record = match state.git_repos.get(&identity.id()).await {
-        Ok(Some(r)) => r,
-        _ => return,
-    };
-    let Some(write_token_ciphertext) = repo_record.write_token_ciphertext else {
-        eprintln!("run {} has no write token; skipping PR", run.id.0);
-        return;
-    };
-
-    // Decrypt the write token (control-plane only).
-    let token = {
-        let cipher = state.cipher.read().await;
-        match cipher.decrypt(&write_token_ciphertext) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("failed to decrypt write token for run {}: {e}", run.id.0);
-                return;
-            }
+    let token = match state.broker.mint(run.id, &identity.id(), "push", "write").await {
+        Ok(minted) => minted.secret,
+        Err(e) => {
+            eprintln!(
+                "write credential mint failed for run {}: {e}; skipping PR",
+                run.id.0
+            );
+            return;
         }
     };
 

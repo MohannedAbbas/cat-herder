@@ -23,7 +23,7 @@ New here? Read [Architecture overview](/architecture/overview.md) then
 - [domain](/crates/domain.md) — entities, ports, state machine, API types, seed catalog.
 - [application](/crates/application.md) — `start_run`, `reconcile_once`, `complete_run`.
 - [cat-herder binary](/crates/bin-cat-herder.md) — composition root on :8080.
-- [api-http](/crates/api-http.md) — Axum REST/MCP/webhook, auth, OAuth, encryption, PR client.
+- [api-http](/crates/api-http.md) — Axum REST/MCP/webhook, auth, OAuth, PR client.
 - [runtime-agent-sandbox](/crates/runtime-agent-sandbox.md) — Sandbox CRD runtime.
 - [store-postgres](/crates/store-postgres.md) — Sqlx repositories + migrations.
 - [store-inmemory](/crates/store-inmemory.md) — in-memory repos for tests/dev.
@@ -33,7 +33,6 @@ New here? Read [Architecture overview](/architecture/overview.md) then
 - [Run](/concepts/run.md) · [Run lifecycle](/concepts/run-lifecycle.md)
 - [Sandbox](/concepts/sandbox.md) · [GitRepo](/concepts/git-repo.md)
 - [Provider/Model/Agent catalog](/concepts/catalog.md)
-- [Encryption key management](/concepts/encryption.md)
 - [Egress denial](/concepts/egress-policy.md) · [SSO](/concepts/sso.md)
 - [PR/MR creation](/concepts/pr-creation.md)
 

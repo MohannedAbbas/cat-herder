@@ -57,9 +57,8 @@ but currently only `AgentRuntime` and the repositories are wired.
 ## Where things are decided
 
 - The **composition root** ([bin](/crates/bin-cat-herder.md)) picks Postgres vs in-memory
-  (based on `CAT_HERDER_DATABASE_URL`), constructs the runtime, cryptographic cipher, and
-  OAuth clients, and starts background loops (reconcile, provider refresh, git-token
-  refresh).
+  (based on `CAT_HERDER_DATABASE_URL`), constructs the runtime, the credential broker, and
+  OAuth clients, and starts background loops (reconcile, provider refresh).
 - `api-http` is also the **driving** adapter (the Axum router) and holds the repo
   selector enums in `repo.rs`.
 

@@ -541,7 +541,8 @@ pub async fn delete_tool(
 // --- git repos -------------------------------------------------------------
 
 /// Write model for `PUT /v1/admin/repos`. Only the host + repo path are required; the
-/// canonical `id`/`name`/`url` are derived server-side. Both tokens are write-only.
+/// canonical `id`/`name`/`url` are derived server-side. Credentials are minted by the
+/// JIT credential broker at run time — no tokens are accepted here.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepoWrite {
@@ -551,12 +552,6 @@ pub struct GitRepoWrite {
     pub repo: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Read access token (for cloning). Blank/omitted on update keeps the existing token.
-    #[serde(default)]
-    pub token: Option<String>,
-    /// Write access token (for opening PRs/MRs). Blank/omitted on update keeps the existing token.
-    #[serde(default)]
-    pub write_token: Option<String>,
 }
 
 /// Query model for `DELETE /v1/admin/repos?id=HOST/PATH`.
@@ -614,45 +609,10 @@ pub async fn upsert_repo(
     let name = identity.path.clone();
     let url = identity.url();
 
-    // Fetch the existing repo once (for "keep existing" semantics on omitted fields).
-    let existing = state
-        .git_repos
-        .get(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // A provided read token is encrypted; otherwise the existing ciphertext is kept.
-    let token_ciphertext = match write.token.as_deref() {
-        Some(t) if !t.is_empty() => {
-            let encrypted = {
-                let cipher = state.cipher.read().await;
-                cipher.encrypt(t)
-            };
-            Some(encrypted.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?)
-        }
-        _ => existing.as_ref().and_then(|r| r.token_ciphertext.clone()),
-    };
-
-    // The write token is encrypted the same way; an omitted value keeps the existing.
-    let write_token_ciphertext = match write.write_token.as_deref() {
-        Some(t) if !t.is_empty() => {
-            let encrypted = {
-                let cipher = state.cipher.read().await;
-                cipher.encrypt(t)
-            };
-            Some(encrypted.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?)
-        }
-        _ => existing
-            .as_ref()
-            .and_then(|r| r.write_token_ciphertext.clone()),
-    };
-
     let entity = GitRepoEntity {
         id,
         name,
         url,
-        token_ciphertext,
-        write_token_ciphertext,
         enabled: write.enabled,
     };
     let saved = state
@@ -678,90 +638,6 @@ pub async fn delete_repo(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     audit(&state, &actor, "repo.delete", "repo", &id).await;
     Ok(StatusCode::NO_CONTENT)
-}
-
-// --- encryption key rotation -----------------------------------------------
-
-/// Rotate the encryption key: generate a fresh key, re-encrypt every stored git
-/// token under it, write the new key to its Secret, and swap the in-memory cipher.
-pub async fn rotate_encryption_key(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let actor = require_admin(&state, &jar).await?;
-
-    let store = state.key_store.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "encryption key store not configured".to_string(),
-    ))?;
-
-    let old_key = store
-        .load()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let old_cipher = old_key
-        .as_deref()
-        .map(super::crypto::AesGcmCipher::from_base64_key)
-        .transpose()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    let new_key = super::crypto::AesGcmCipher::generate_key_base64()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let new_cipher = super::crypto::AesGcmCipher::from_base64_key(&new_key)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    // Phase 1: decrypt + re-encrypt every stored token IN MEMORY (no persistence yet).
-    // If any step fails here, nothing has been written and the old key is untouched.
-    let mut reencrypted: Vec<GitRepoEntity> = Vec::new();
-    if let Some(old) = &old_cipher {
-        let repos = state
-            .git_repos
-            .list()
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        for repo in repos {
-            if let Some(ct) = &repo.token_ciphertext {
-                let plaintext = old
-                    .decrypt(ct)
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-                let new_ct = new_cipher
-                    .encrypt(&plaintext)
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-                let mut updated = repo.clone();
-                updated.token_ciphertext = Some(new_ct);
-                reencrypted.push(updated);
-            }
-        }
-    }
-
-    // Phase 2: persist the new key FIRST — a failure here (e.g. RBAC) leaves both
-    // the Secret and the stored tokens unchanged.
-    store
-        .store(&new_key)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Phase 3: save the re-encrypted tokens under the now-persisted new key.
-    for updated in reencrypted {
-        state
-            .git_repos
-            .save(&updated)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-
-    // Phase 4: make the new key the active in-memory cipher.
-    *state.cipher.write().await = new_cipher;
-
-    audit(
-        &state,
-        &actor,
-        "encryption-key.rotate",
-        "settings",
-        "encryption_key",
-    )
-    .await;
-    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // --- webhook secret --------------------------------------------------------

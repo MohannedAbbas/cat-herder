@@ -95,9 +95,6 @@ export interface CatHerderApi {
   getWebhookSecret(): Promise<{ secret: string | null }>
   regenerateWebhookSecret(): Promise<{ secret: string }>
 
-  // admin — encryption key
-  rotateEncryptionKey(): Promise<void>
-
   // admin — audit
   listAudit(): Promise<AuditEntry[]>
 }

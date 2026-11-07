@@ -1951,21 +1951,18 @@ async fn admin_repo_crud_roundtrip() {
             .is_empty()
     );
 
-    // Upsert a repo with both tokens (encrypted server-side; never returned).
+    // Upsert a repo (credentials are minted at run time by the broker, not stored).
     let (status, body) = authed(
         app.clone(),
         "PUT",
         "/v1/admin/repos",
         &cookie,
-        r#"{"host":"github.com","repo":"org/repo","token":"read-token","writeToken":"write-token"}"#,
+        r#"{"host":"github.com","repo":"org/repo"}"#,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["id"], "github.com/org/repo");
-    assert_eq!(v["hasToken"], true);
-    assert_eq!(v["hasWriteToken"], true);
-    assert!(v["token"].is_null(), "tokens are never returned");
 
     // Listed once.
     let (status, body) = authed(app.clone(), "GET", "/v1/admin/repos", &cookie, "").await;
@@ -2000,21 +1997,6 @@ async fn admin_repo_crud_roundtrip() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-}
-
-#[tokio::test]
-async fn admin_rotate_encryption_key_without_store_returns_503() {
-    let app = app();
-    let (_, cookie) = login(app.clone()).await;
-    let (status, _) = authed(
-        app,
-        "POST",
-        "/v1/admin/settings/encryption-key/rotate",
-        &cookie,
-        "",
-    )
-    .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

@@ -30,12 +30,6 @@ agent-sandbox:
 # provider.
 llmApiKeySecret: cat-herder-ai-providers-llm
 
-# Encryption-key Secret: the control plane generates a random key into this Secret on
-# first boot (no operator initialization) and rewrites it on rotation. Tokens are
-# encrypted at rest with this key, but stored separately in Postgres.
-encryptionKeySecret: cat-herder-encryption
-encryptionKeySecretKey: key
-
 # Per-agent model overrides (agent id -> model). Leave empty to use the built-in
 # catalog defaults. Example (DeepSeek):
 agents:

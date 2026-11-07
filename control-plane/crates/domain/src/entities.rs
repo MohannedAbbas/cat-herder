@@ -173,20 +173,13 @@ pub struct ApprovalRequest {
     pub responded_at: Option<SystemTime>,
 }
 
-/// A git repository an agent can clone and work on, with optional access tokens.
-///
-/// Both the read token (`token_ciphertext`) and the write token
-/// (`write_token_ciphertext`, used to open PRs/MRs) are stored **encrypted**; the
-/// domain never sees the plaintext — encryption/decryption is an adapter concern
-/// (see `PLAN.md` §10 "repo-scoped credential").
+/// A git repository an agent can clone and work on. Access credentials are minted
+/// at run time by the JIT credential broker (GitHub App) — no tokens are stored here.
 #[derive(Debug, Clone)]
 pub struct GitRepo {
     pub id: String,
     pub name: String,
     pub url: String,
-    pub token_ciphertext: Option<String>,
-    /// Encrypted write token (opens PRs/MRs against the repo's host).
-    pub write_token_ciphertext: Option<String>,
     pub enabled: bool,
 }
 

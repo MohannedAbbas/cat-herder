@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: PR/MR creation
-description: How the control plane opens a pull/merge request from the harness-reported diff using the repo's encrypted write token.
+description: How the control plane opens a pull/merge request from the harness-reported diff using a broker-minted write credential.
 tags: [git, pull-request, merge-request, github, gitlab, codeberg, workflow]
 status: stable
 generated: { by: agent, at: 2026-10-24T00:00:00Z }
@@ -15,8 +15,8 @@ sources:
 
 When a run finishes **successfully** with a non-empty diff, the **control plane** opens
 a pull request (GitHub/Codeberg) or merge request (GitLab). This happens in the trusted
-control plane, never in the sandbox: the repo's **write token** is decrypted there and
-never injected into the pod.
+control plane, never in the sandbox: the **write credential** is minted there via the
+broker and never injected into the pod.
 
 ## Trigger path
 
@@ -27,9 +27,8 @@ never injected into the pod.
 ## What it does (`maybe_open_pr`)
 
 1. Requires non-empty `changes` and a run `repo`.
-2. Normalizes the URL to a [RepoIdentity](/concepts/git-repo.md) → looks up the
-   registered repo; requires a `write_token_ciphertext`.
-3. Decrypts the write token with the [cipher](/concepts/encryption.md).
+2. Normalizes the URL to a [RepoIdentity](/concepts/git-repo.md).
+3. Mints a short-lived write credential via the broker (`mint(…, "push", "write")`).
 4. Spawns `PrClient::create_pr(host, token, path, spec)` with branch
    `cat-herder/run-{id}`, a title from the task's first line, the agent report as body.
 5. On success, saves the returned URL to `run.pr_url`.
@@ -59,4 +58,4 @@ this from `git diff --cached --name-status` in `/repo` (renames become delete + 
 
 ## Related
 
-- [GitRepo](/concepts/git-repo.md) · [Encryption](/concepts/encryption.md) · [Agent harness](/harness/agent-harness.md)
+- [GitRepo](/concepts/git-repo.md) · [Agent harness](/harness/agent-harness.md)

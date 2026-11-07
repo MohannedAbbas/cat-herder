@@ -136,9 +136,6 @@ pub struct SandboxRuntime {
     pod: SandboxPodConfig,
     /// Provider id → (Secret name, Secret key) — refreshed from the provider registry.
     provider_secrets: Arc<RwLock<HashMap<String, (String, String)>>>,
-    /// Repo id (host/path) → decrypted access token — refreshed by the control plane
-    /// (per-repo scoping; the token is only injected for a run whose repo matches).
-    git_tokens: Arc<RwLock<HashMap<String, String>>>,
     /// Workflow id → resolved steps (agent type, model) — refreshed by the control
     /// plane so a `workflow` run's pod gets its `WORKFLOW_STEPS` without the runtime
     /// resolving the catalog itself (§7).
@@ -195,7 +192,6 @@ impl SandboxRuntime {
             harness_image,
             pod,
             provider_secrets: Arc::new(RwLock::new(HashMap::new())),
-            git_tokens: Arc::new(RwLock::new(HashMap::new())),
             workflow_steps: Arc::new(RwLock::new(HashMap::new())),
             harness_version,
             harness_range,
@@ -216,12 +212,6 @@ impl SandboxRuntime {
         }
     }
 
-    /// Refresh the repo URL → token mapping (tokens already decrypted by the control
-    /// plane). Only enabled repos with a token are kept.
-    pub async fn update_git_tokens(&self, tokens: HashMap<String, String>) {
-        *self.git_tokens.write().await = tokens;
-    }
-
     /// Refresh the workflow id → resolved steps (agent type, model) mapping (§7). The
     /// control plane resolves each step's agent template to its model and pushes the
     /// result here, so `spawn` can inject `WORKFLOW_STEPS` without touching the catalog.
@@ -233,15 +223,6 @@ impl SandboxRuntime {
     /// Used to warn at startup before the first (refused) spawn.
     pub fn harness_is_compatible(&self) -> bool {
         !is_incompatible(self.harness_version, &self.harness_range)
-    }
-
-    /// Resolve the git token scoped to this run's repo, if one is registered. The
-    /// run's `repo` URL is normalized to its canonical identity (host/path), so it
-    /// matches regardless of HTTPS vs SSH or a trailing `.git`.
-    async fn resolve_git_token(&self, run: &Run) -> Option<String> {
-        let repo = run.repo.as_deref()?;
-        let id = repo_identity_from_url(repo).map(|i| i.id())?;
-        self.git_tokens.read().await.get(&id).cloned()
     }
 
     /// Resolve the run's provider and read its API key from the configured Secret.
@@ -521,12 +502,8 @@ impl AgentRuntime for SandboxRuntime {
         }
 
         let api_key = self.resolve_api_key(run).await;
-        // A broker-minted credential (passed in) wins; otherwise fall back to the
-        // registered repo token (legacy long-lived PAT path) for hosts without a broker.
-        let git_token = match git_token.map(str::to_owned) {
-            Some(t) if !t.is_empty() => Some(t),
-            _ => self.resolve_git_token(run).await,
-        };
+        // A broker-minted credential (passed in) is the only clone credential.
+        let git_token = git_token.map(str::to_owned).filter(|t| !t.is_empty());
         // Resolve a workflow run's steps (agent type + model) from the control plane's
         // refresh, keyed by `workflow_ref` (§7).
         let workflow_steps = match run.workflow_ref.as_deref() {

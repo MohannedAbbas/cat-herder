@@ -18,8 +18,8 @@ agents**. You submit a task ("task spec"); the control plane creates a *run*, sp
 ephemeral **sandbox pod** that runs a Python **agent harness**, and tracks the run
 through a lifecycle state machine until it finishes and (optionally) opens a pull
 request from the agent's diff. Credentials (LLM keys, git tokens) are brokered by the
-control plane; sandbox pods run untrusted agent-generated code behind a default-deny
-egress policy.
+control plane (via a GitHub App that mints short-lived installation tokens); sandbox
+pods run untrusted agent-generated code behind a default-deny egress policy.
 
 ## Components
 
@@ -71,4 +71,4 @@ the binary wires concrete types via enum dispatch (`RunRepo::InMemory | Postgres
 ## Related
 
 - [Run lifecycle](/concepts/run-lifecycle.md) · [Sandbox](/concepts/sandbox.md) · [Egress denial](/concepts/egress-policy.md)
-- [Provider/Model/Agent catalog](/concepts/catalog.md) · [Encryption](/concepts/encryption.md)
+- [Provider/Model/Agent catalog](/concepts/catalog.md) · [GitRepo](/concepts/git-repo.md)

@@ -56,8 +56,8 @@ async fn persist_transition<T: TransitionRepository, B: EventBus, N: RunStatusNo
 /// Mint a short-lived, read-only clone credential for `run`'s declared repo via the
 /// broker, returning the materialized secret for out-of-band injection (`PLAN.md`
 /// §11.3 "Clone-scoped credentials"). Returns `None` when the run has no repo or the
-/// mint fails — the runtime then falls back to a registered repo token, or none for
-/// public repos. The mint never fails the run: a repo without a broker is not an error.
+/// mint fails — the run then proceeds without a clone credential (public repo or no
+/// broker). The mint never fails the run: a repo without a broker is not an error.
 async fn mint_clone_token<C: CredentialBroker>(broker: &C, run: &Run) -> Option<String> {
     let repo = run.repo.as_deref()?;
     let identity = repo_identity_from_url(repo)?;

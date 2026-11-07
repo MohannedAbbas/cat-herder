@@ -30,7 +30,6 @@ control plane, UI, bundled Postgres, RBAC, the sandbox egress NetworkPolicy, and
 |---|---|
 | `namespace` | target namespace, default `cat-herder` |
 | `llmApiKeySecret` | fallback Secret `cat-herder-ai-providers-llm` (key `api-key`) only when a run's model has no matching provider |
-| `encryptionKeySecret` / `encryptionKeySecretKey` | `cat-herder-encryption` / `key` (see [encryption](/concepts/encryption.md)) |
 | `agents.models` | per-agent model overrides (JSON → `CAT_HERDER_AGENT_MODELS`) |
 | `admin.username` / `admin.password` | seeded admin (lives only in a Secret) |
 | `controlPlane.image/replicas/port` | API image (:8080) |
@@ -48,7 +47,7 @@ Image refs are single strings so [Tilt](/deploy/tilt.md) can inject locally buil
 ## Templates (`templates/`)
 
 - `api-deployment.yaml` — `cat-herder-api` Deployment; injects all env above (namespace,
-  harness image, agent models JSON, encryption Secret, admin from `cat-herder-admin`,
+  harness image, agent models JSON, admin from `cat-herder-admin`,
   optional `LLM_API_KEY`, optional `CAT_HERDER_DATABASE_URL`, optional OAuth env).
 - `api-service.yaml` — ClusterIP `cat-herder-api`, port 80 → 8080.
 - `api-ingress.yaml` — optional Ingress (`ingress.enabled`).
@@ -67,8 +66,6 @@ Image refs are single strings so [Tilt](/deploy/tilt.md) can inject locally buil
 - `agents.x-k8s.io/sandboxes`: get/list/watch/create/update/patch/delete.
 - `extensions.agents.x-k8s.io/{sandboxtemplates,sandboxclaims}`: get/list/watch.
 - core `secrets`: get/list (to read provider API-key Secrets — namespaced).
-- core `secrets` **resourceNames: [encryptionKeySecret]**: get/patch/create (server-side
-  apply on the encryption Secret only).
 
 ## Related
 
