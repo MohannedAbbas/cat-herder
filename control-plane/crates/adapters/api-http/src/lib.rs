@@ -1441,6 +1441,108 @@ fn pr_title(task_spec: &str) -> String {
     }
 }
 
+/// The PR number when a GitHub webhook delivery is a *merged* pull request
+/// (`x-github-event == "pull_request"`, `action == "closed"`, `pull_request.merged ==
+/// true`). `None` for any other delivery, including a closed-but-unmerged PR.
+fn merged_pull_request_number(event: &str, payload: &serde_json::Value) -> Option<u64> {
+    if event != "pull_request" {
+        return None;
+    }
+    if payload.get("action").and_then(|v| v.as_str()) != Some("closed") {
+        return None;
+    }
+    let pr = payload.get("pull_request")?;
+    if pr.get("merged").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    pr.get("number").and_then(|v| v.as_u64())
+}
+
+/// Parse the numeric run id out of a `cat-herder/run-{id}-{timestamp}` head branch
+/// (see [`maybe_open_pr`]). Returns `None` for a branch that doesn't match the shape.
+fn run_id_from_branch(branch: &str) -> Option<u64> {
+    let rest = branch.strip_prefix("cat-herder/run-")?;
+    let id = rest.split('-').next()?;
+    id.parse::<u64>().ok()
+}
+
+/// Resolve the pending result review of the run a merged PR belongs to, approving it as
+/// `github-merge`. Best-effort and idempotent: a missing run / pending review, or any
+/// repository error, is logged and swallowed so the webhook always returns 200.
+async fn resolve_review_for_merged_pr(
+    state: &AppState,
+    payload: &serde_json::Value,
+    pr_number: u64,
+) {
+    // Map the PR back to its run: the head branch id is authoritative; fall back to a
+    // run whose `pr_url` points at this PR number when the branch name is unparseable.
+    let branch = payload
+        .get("pull_request")
+        .and_then(|pr| pr.get("head"))
+        .and_then(|head| head.get("ref"))
+        .and_then(|r| r.as_str())
+        .unwrap_or("");
+    let run_id = match run_id_from_branch(branch) {
+        Some(id) => RunId(id),
+        None => match find_run_by_pr_number(state, pr_number).await {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "github webhook: merged PR #{pr_number} (branch {branch:?}) maps to no run; ignoring"
+                );
+                return;
+            }
+        },
+    };
+
+    // Find the run's pending review (there is at most one per run in the result-review
+    // loop). No pending review means the PR wasn't review-gated or was already resolved.
+    let pending = match state.reviews.list_pending().await {
+        Ok(reviews) => reviews.into_iter().find(|r| r.run_id == run_id),
+        Err(e) => {
+            eprintln!("github webhook: list pending reviews failed: {e}; ignoring merge");
+            return;
+        }
+    };
+    let Some(review) = pending else {
+        eprintln!(
+            "github webhook: no pending review for run {}; ignoring merge",
+            run_id.0
+        );
+        return;
+    };
+
+    if let Err(e) = decide_review(
+        &review.id,
+        ReviewVerdict::Approved,
+        Some("github-merge".to_string()),
+        None,
+        &state.reviews,
+        &state.events,
+        &state.repo,
+        &state.sessions,
+        &state.transitions,
+        &state.bus,
+        &state.run_status_notifier,
+    )
+    .await
+    {
+        eprintln!(
+            "github webhook: auto-approve of review {} for run {} failed: {e}",
+            review.id, run_id.0
+        );
+    }
+}
+
+/// Fall back to locating a run whose recorded `pr_url` ends with `/pull/{pr_number}`.
+async fn find_run_by_pr_number(state: &AppState, pr_number: u64) -> Option<RunId> {
+    let suffix = format!("/pull/{pr_number}");
+    let runs = state.repo.list_all().await.ok()?;
+    runs.into_iter()
+        .find(|r| r.pr_url.as_deref().is_some_and(|u| u.ends_with(&suffix)))
+        .map(|r| r.id)
+}
+
 /// Enter a `Succeeded` run that produced reviewable changes into the result-review
 /// loop (§10). The deadline is configurable via `CAT_HERDER_REVIEW_DEADLINE_SECS`
 /// (default 72h). Best-effort — a failure here must not fail the already-recorded run.
@@ -1778,6 +1880,15 @@ async fn webhook_github(
         .unwrap_or("");
     let payload: serde_json::Value =
         serde_json::from_slice(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // A merged pull request resolves the run's pending result review (auto-approve)
+    // instead of triggering a new run. Best-effort and idempotent: an unknown/
+    // unparseable PR or a missing pending review is a 200 no-op, never a 500.
+    if let Some(pr_number) = merged_pull_request_number(event, &payload) {
+        resolve_review_for_merged_pr(&state, &payload, pr_number).await;
+        return Ok((StatusCode::OK, Json(webhook_ack())));
+    }
+
     let mut req = normalize_github(event, &payload);
     req.dedup_key = github_delivery_id(
         headers
@@ -1785,6 +1896,36 @@ async fn webhook_github(
             .and_then(|v| v.to_str().ok()),
     );
     execute_source_run(&state, "github", &req.dedup_key.clone(), req, query).await
+}
+
+/// A minimal object-shaped acknowledgement for webhook deliveries that are accepted but
+/// spawn no run (e.g. a merged PR that resolves a review). `id: 0` plus an empty
+/// `task_spec` signal "no run was created" to a caller.
+fn webhook_ack() -> RunResponse {
+    RunResponse {
+        id: 0,
+        kind: RunKind::Agent,
+        state: RunState::Succeeded,
+        trigger: "github".into(),
+        actor: None,
+        model: None,
+        image: None,
+        repo: None,
+        language: None,
+        session_id: None,
+        task_spec: String::new(),
+        workflow_ref: None,
+        runtime_tier: RuntimeTier::Default,
+        created_at: String::new(),
+        started_at: None,
+        finished_at: None,
+        pr_url: None,
+        report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        budget: None,
+        callback_url: None,
+    }
 }
 
 /// GitLab webhook: verify `X-Gitlab-Token`, normalize.
@@ -2174,5 +2315,202 @@ mod mcp_notification_tests {
         // A different run id (unassociated) is a no-op.
         hub.publish(999, "ignored".into());
         assert!(rx.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod merged_pr_tests {
+    use super::*;
+
+    #[test]
+    fn run_id_parsed_from_branch() {
+        assert_eq!(run_id_from_branch("cat-herder/run-42-1794085376"), Some(42));
+        assert_eq!(run_id_from_branch("cat-herder/run-7-0"), Some(7));
+    }
+
+    #[test]
+    fn run_id_parse_rejects_foreign_and_malformed_branches() {
+        assert_eq!(run_id_from_branch("main"), None);
+        assert_eq!(run_id_from_branch("feature/run-42-1"), None);
+        assert_eq!(run_id_from_branch("cat-herder/run-abc-1"), None);
+        assert_eq!(run_id_from_branch("cat-herder/run-"), None);
+    }
+
+    fn payload(action: &str, merged: bool) -> serde_json::Value {
+        serde_json::json!({
+            "action": action,
+            "pull_request": {
+                "number": 12,
+                "merged": merged,
+                "head": { "ref": "cat-herder/run-42-1794085376" }
+            }
+        })
+    }
+
+    #[test]
+    fn merged_pr_detected() {
+        assert_eq!(
+            merged_pull_request_number("pull_request", &payload("closed", true)),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn closed_but_unmerged_pr_ignored() {
+        assert_eq!(
+            merged_pull_request_number("pull_request", &payload("closed", false)),
+            None
+        );
+    }
+
+    #[test]
+    fn open_or_other_action_ignored() {
+        assert_eq!(
+            merged_pull_request_number("pull_request", &payload("opened", false)),
+            None
+        );
+        assert_eq!(
+            merged_pull_request_number("pull_request", &payload("synchronize", false)),
+            None
+        );
+    }
+
+    #[test]
+    fn non_pull_request_event_ignored_even_if_shaped_like_one() {
+        assert_eq!(
+            merged_pull_request_number("issues", &payload("closed", true)),
+            None
+        );
+    }
+
+    // --- resolution against an in-memory store -----------------------------------
+
+    use cat_herder_domain::entities::{Review, ReviewStatus, Run, RunState};
+    use cat_herder_domain::ports::{ReviewRepository, RunRepository};
+    use std::time::SystemTime;
+
+    fn awaiting_run(id: u64, pr_url: Option<&str>) -> Run {
+        Run {
+            id: RunId(id),
+            kind: RunKind::Agent,
+            state: RunState::AwaitingReview,
+            task_spec: "do it".into(),
+            session_id: None,
+            max_concurrency: 1,
+            created_at: SystemTime::now(),
+            trigger: "api".into(),
+            actor: None,
+            model: None,
+            image: None,
+            repo: None,
+            language: None,
+            workflow_ref: None,
+            runtime_tier: Default::default(),
+            started_at: None,
+            finished_at: None,
+            pr_url: pr_url.map(str::to_string),
+            report: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            callback_url: None,
+        }
+    }
+
+    fn pending_review(run_id: u64) -> Review {
+        Review {
+            id: format!("review-{run_id}"),
+            run_id: RunId(run_id),
+            status: ReviewStatus::Pending,
+            verdict: None,
+            reviewer: None,
+            feedback: None,
+            created_at: SystemTime::now(),
+            reviewed_at: None,
+            deadline_at: SystemTime::now(),
+        }
+    }
+
+    fn merged_event(head_ref: &str, number: u64) -> serde_json::Value {
+        serde_json::json!({
+            "action": "closed",
+            "pull_request": {
+                "number": number,
+                "merged": true,
+                "head": { "ref": head_ref }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn merged_pr_approves_pending_review_via_branch_id() {
+        let state = AppState::default();
+        state.repo.save(&awaiting_run(42, None)).await.unwrap();
+        state.reviews.create(&pending_review(42)).await.unwrap();
+
+        let payload = merged_event("cat-herder/run-42-1794085376", 12);
+        resolve_review_for_merged_pr(&state, &payload, 12).await;
+
+        let run = state.repo.get(RunId(42)).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::Reviewed);
+        let review = state.reviews.get("review-42").await.unwrap().unwrap();
+        assert_eq!(review.status, ReviewStatus::Decided);
+        assert_eq!(review.verdict, Some(ReviewVerdict::Approved));
+        assert_eq!(review.reviewer.as_deref(), Some("github-merge"));
+    }
+
+    #[tokio::test]
+    async fn merged_pr_falls_back_to_pr_url_suffix() {
+        let state = AppState::default();
+        // Branch name is unrecognisable, so resolution must use the PR number via pr_url.
+        state
+            .repo
+            .save(&awaiting_run(7, Some("https://github.com/o/r/pull/99")))
+            .await
+            .unwrap();
+        state.reviews.create(&pending_review(7)).await.unwrap();
+
+        let payload = merged_event("some-renamed-branch", 99);
+        resolve_review_for_merged_pr(&state, &payload, 99).await;
+
+        let run = state.repo.get(RunId(7)).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::Reviewed);
+        let review = state.reviews.get("review-7").await.unwrap().unwrap();
+        assert_eq!(review.verdict, Some(ReviewVerdict::Approved));
+    }
+
+    #[tokio::test]
+    async fn merged_pr_with_no_matching_run_is_a_noop() {
+        let state = AppState::default();
+        // No runs, no reviews: must not panic and must leave the store empty.
+        let payload = merged_event("cat-herder/run-999-1", 1);
+        resolve_review_for_merged_pr(&state, &payload, 1).await;
+        assert!(state.repo.list_all().await.unwrap().is_empty());
+        assert!(state.reviews.list_pending().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn merged_pr_without_pending_review_leaves_run_untouched() {
+        let state = AppState::default();
+        state.repo.save(&awaiting_run(5, None)).await.unwrap();
+        // No review created for the run.
+        let payload = merged_event("cat-herder/run-5-1", 3);
+        resolve_review_for_merged_pr(&state, &payload, 3).await;
+        let run = state.repo.get(RunId(5)).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::AwaitingReview);
+    }
+
+    #[tokio::test]
+    async fn merged_pr_is_idempotent() {
+        let state = AppState::default();
+        state.repo.save(&awaiting_run(8, None)).await.unwrap();
+        state.reviews.create(&pending_review(8)).await.unwrap();
+
+        let payload = merged_event("cat-herder/run-8-1", 4);
+        resolve_review_for_merged_pr(&state, &payload, 4).await;
+        // A replayed delivery finds no pending review and is a harmless no-op.
+        resolve_review_for_merged_pr(&state, &payload, 4).await;
+
+        let run = state.repo.get(RunId(8)).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::Reviewed);
     }
 }
